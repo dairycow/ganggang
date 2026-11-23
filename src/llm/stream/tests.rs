@@ -4,6 +4,7 @@
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::atomic::AtomicBool;
 
 use serde_json::{Value, json};
 
@@ -189,6 +190,8 @@ fn continuation_fragments_carry_id_and_name_semantics() {
     assert_eq!(call.function.arguments, r#"{"command":"echo"}"#);
 }
 
+mod abort;
+
 // ------------------------------------------------- end-to-end over a socket
 
 /// Serve one SSE body per connection, in several small writes so reads
@@ -231,6 +234,12 @@ fn read_request_head(stream: &mut std::net::TcpStream) {
     }
 }
 
+/// The flag for a run nobody stopped: a stream read polls it, so every
+/// script that is not about aborting hands it a flag that stays clear.
+fn never_abort() -> AtomicBool {
+    AtomicBool::new(false)
+}
+
 fn sse_body(events: &[Value]) -> String {
     let mut out = String::from(": keep-alive\n\n");
     for event in events {
@@ -257,7 +266,7 @@ async fn send_stream_assembles_and_delivers_deltas_in_order() {
     let deltas = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = deltas.clone();
     let response = client
-        .send_stream("m", &[], 64, &[], move |delta| {
+        .send_stream("m", &[], 64, &[], &never_abort(), move |delta| {
             let sink = sink.clone();
             Box::pin(async move {
                 sink.lock().unwrap().push(delta);
@@ -268,6 +277,7 @@ async fn send_stream_assembles_and_delivers_deltas_in_order() {
 
     use super::Delta;
     assert!(response.complete, "[DONE] was seen");
+    assert!(!response.aborted, "nobody stopped this stream");
     let response = response.response;
     assert_eq!(
         *deltas.lock().unwrap(),
@@ -298,10 +308,11 @@ async fn a_cut_stream_keeps_its_partial_answer_and_says_it_is_incomplete() {
 
     let client = LlmClient::new(&server.base_url).unwrap();
     let outcome = client
-        .send_stream("m", &[], 64, &[], |_| Box::pin(async {}))
+        .send_stream("m", &[], 64, &[], &never_abort(), |_| Box::pin(async {}))
         .await
         .unwrap();
     assert!(!outcome.complete, "no [DONE], so not complete");
+    assert!(!outcome.aborted, "the wire cut it, the user did not");
     assert_eq!(
         outcome.response.choices[0].message.content.as_deref(),
         Some("partial"),
@@ -326,7 +337,7 @@ async fn a_cut_stream_that_assembled_nothing_is_an_error() {
 
     let client = LlmClient::new(&server.base_url).unwrap();
     let err = client
-        .send_stream("m", &[], 64, &[], |_| Box::pin(async {}))
+        .send_stream("m", &[], 64, &[], &never_abort(), |_| Box::pin(async {}))
         .await
         .unwrap_err();
     let rendered = format!("{err:#}");
@@ -351,7 +362,7 @@ async fn malformed_data_chunk_mid_stream_aborts_with_context() {
 
     let client = LlmClient::new(&server.base_url).unwrap();
     let err = client
-        .send_stream("m", &[], 64, &[], |_| Box::pin(async {}))
+        .send_stream("m", &[], 64, &[], &never_abort(), |_| Box::pin(async {}))
         .await
         .unwrap_err();
     let rendered = format!("{err:#}");

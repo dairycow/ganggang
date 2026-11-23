@@ -6,6 +6,7 @@
 
 mod cancel;
 mod continuation;
+mod stream_abort;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;

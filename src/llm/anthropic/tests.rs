@@ -1,5 +1,8 @@
+mod abort;
+
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -217,7 +220,9 @@ async fn anthropic_client_sends_headers_and_handles_sse_errors() {
         .with_api_key(Some("secret-k".into()));
 
     let outcome = client
-        .send_stream("claude-haiku-5-5", &[], 64, &[], |_| Box::pin(async {}))
+        .send_stream("claude-haiku-5-5", &[], 64, &[], &never_abort(), |_| {
+            Box::pin(async {})
+        })
         .await
         .unwrap();
     assert!(outcome.complete, "message_stop was seen");
@@ -234,7 +239,9 @@ async fn anthropic_client_sends_headers_and_handles_sse_errors() {
     );
 
     let err_eof = client
-        .send_stream("claude-haiku-5-5", &[], 64, &[], |_| Box::pin(async {}))
+        .send_stream("claude-haiku-5-5", &[], 64, &[], &never_abort(), |_| {
+            Box::pin(async {})
+        })
         .await
         .unwrap_err();
     assert!(
@@ -243,7 +250,9 @@ async fn anthropic_client_sends_headers_and_handles_sse_errors() {
     );
 
     let err_ev = client
-        .send_stream("claude-haiku-5-5", &[], 64, &[], |_| Box::pin(async {}))
+        .send_stream("claude-haiku-5-5", &[], 64, &[], &never_abort(), |_| {
+            Box::pin(async {})
+        })
         .await
         .unwrap_err();
     assert!(err_ev.to_string().contains("slow down"), "{err_ev:#}");
@@ -273,10 +282,13 @@ async fn an_anthropic_stream_cut_mid_text_is_salvaged() {
         .with_api(ApiKind::AnthropicMessages);
 
     let outcome = client
-        .send_stream("claude-haiku-5-5", &[], 64, &[], |_| Box::pin(async {}))
+        .send_stream("claude-haiku-5-5", &[], 64, &[], &never_abort(), |_| {
+            Box::pin(async {})
+        })
         .await
         .unwrap();
     assert!(!outcome.complete, "no message_stop, so not complete");
+    assert!(!outcome.aborted, "the wire cut it, the user did not");
     assert_eq!(
         outcome.response.choices[0].message.content.as_deref(),
         Some("half answer"),
@@ -289,7 +301,9 @@ async fn an_anthropic_stream_cut_mid_text_is_salvaged() {
     );
 
     let err = client
-        .send_stream("claude-haiku-5-5", &[], 64, &[], |_| Box::pin(async {}))
+        .send_stream("claude-haiku-5-5", &[], 64, &[], &never_abort(), |_| {
+            Box::pin(async {})
+        })
         .await
         .unwrap_err();
     let rendered = format!("{err:#}");
@@ -335,4 +349,10 @@ fn read_anthropic_request_head(stream: &mut std::net::TcpStream) {
         assert!(n > 0, "connection closed before headers finished");
         buf.extend_from_slice(&chunk[..n]);
     }
+}
+
+/// The flag for a run nobody stopped: a stream read polls it, so every
+/// script that is not about aborting hands it a flag that stays clear.
+fn never_abort() -> AtomicBool {
+    AtomicBool::new(false)
 }

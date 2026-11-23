@@ -6,7 +6,7 @@
 use super::*;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// A scripted server that answers one raw response per connection and
@@ -57,6 +57,13 @@ pub(super) fn read_request_head(stream: &mut std::net::TcpStream) {
         assert!(n > 0, "connection closed before headers finished");
         buf.extend_from_slice(&chunk[..n]);
     }
+}
+
+/// The flag for a call nobody stopped. `send_stream` takes the run's stop
+/// request, so every script that is not about aborting hands it a flag
+/// that stays clear.
+pub(super) fn never_abort() -> AtomicBool {
+    AtomicBool::new(false)
 }
 
 pub(super) fn http(status: &str, extra_headers: &str, body: &str) -> String {

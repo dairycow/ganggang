@@ -33,8 +33,12 @@ curl -s 127.0.0.1:8080/health
   until answered. Sequential tool execution, streaming responses. No turn cap
   — you are the runaway check; a truncated answer is the one exception,
   continued at most 3 times. A cut stream keeps its partial answer. Esc
-  aborts the run: a running `bash` command loses its whole process group, a
-  `grep`/`find` walk stops, and the next tool call never starts.
+  (or Ctrl+C) aborts the run: the in-flight request or stream is cut within
+  ~100 ms — the connection closes instead of waiting out the generation — a
+  running `bash` command loses its whole process group, a `grep`/`find` walk
+  stops, and the next tool call never starts. What the stopped stream had
+  already streamed in is kept as the answer, never replayed and never
+  continued: you asked it to stop.
 - **Tools** (§10): `read`, `bash`, `edit`, `write` — plus `grep`, `find`,
   `ls` for search. Plain values in and out; every truncation is visible in
   the output; tool failures are values the model reacts to, never crashes.
@@ -102,8 +106,11 @@ Ctrl+N walk it whatever the composer holds. The first ↑ saves what you were
 typing, and ↓ past the newest gives it back, so a recall never costs a
 draft. Recalled text is ordinary composer text: edit it and send it again.
 A run stopped by Ctrl+C shows `● stopping…` in the footer while it winds
-down; a second Ctrl+C ends the session, which is safe mid-run because the
-session file flushes per append.
+down, and it winds down promptly: a generation still streaming is cut at
+the same moment, not left to finish. A second Ctrl+C ends the session,
+which is safe mid-run because the session file flushes per append. The
+half-finished answer stays in the transcript and in the session file —
+it is what you asked for, so nothing asks the model to continue it.
 
 **External editor** (Ctrl+G): your draft opens in `$VISUAL`, else
 `$EDITOR`, else `nano` — arguments are fine (`code --wait`, for editors

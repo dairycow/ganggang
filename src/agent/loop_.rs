@@ -11,7 +11,6 @@ use std::sync::atomic::Ordering;
 use tokio::sync::mpsc::Sender;
 
 use crate::events::AgentEvent;
-use crate::llm::stream::StreamOutcome;
 use crate::llm::types::ChatMessage;
 
 use super::Agent;
@@ -20,6 +19,7 @@ use super::hooks::PreOutcome;
 use super::session::{self, Role};
 use super::tools::{Cancel, ToolResult};
 
+mod ask;
 mod cut;
 mod record;
 
@@ -76,52 +76,7 @@ impl Agent {
                 ..ChatMessage::default()
             }];
             messages.extend(session::to_wire_with(&self.entries, self.replay_reasoning));
-            let outcome = if self.stream {
-                // Deltas ride the stream read: `AssistantText` events land
-                // as tokens arrive, with the callback's boxed future giving
-                // the event channel real backpressure. A closed consumer
-                // resurfaces at the next required send below, which the
-                // run propagates with `?` — deltas themselves are
-                // best-effort by design.
-                let event_tx = events.clone();
-                self.client
-                    .send_stream(
-                        &self.model,
-                        &messages,
-                        self.max_tokens,
-                        &self.tools.declarations(),
-                        |delta| {
-                            let tx = event_tx.clone();
-                            Box::pin(async move {
-                                let event = match delta {
-                                    crate::llm::stream::Delta::Text(t) => {
-                                        AgentEvent::AssistantText { delta: t }
-                                    }
-                                    crate::llm::stream::Delta::Thinking(t) => {
-                                        AgentEvent::Thinking { delta: t }
-                                    }
-                                };
-                                let _ = tx.send(event).await;
-                            })
-                        },
-                    )
-                    .await?
-            } else {
-                // The non-streaming path is complete by construction: the
-                // whole body arrived in one parse.
-                StreamOutcome {
-                    response: self
-                        .client
-                        .send(
-                            &self.model,
-                            &messages,
-                            self.max_tokens,
-                            &self.tools.declarations(),
-                        )
-                        .await?,
-                    complete: true,
-                }
-            };
+            let outcome = self.ask(&messages, events).await?;
             // Read before `from_response` consumes the response: the wire
             // type stays the single place finish reasons exist.
             let truncated = outcome
@@ -130,13 +85,17 @@ impl Agent {
                 .first()
                 .and_then(|c| c.finish_reason.as_deref())
                 == Some("length");
-            // A `length` finish explains itself even when the stream ended
-            // cleanly, so it outranks the cut; either way the answer is a
-            // prefix and the turn is short.
-            let short = if truncated {
+            // A stop request outranks every other reason a turn fell short:
+            // the user has already disowned the next request, so the
+            // partial stays and nothing is asked for. Otherwise a `length`
+            // finish explains itself even when the stream ended cleanly, and
+            // either way the answer is a prefix and the turn is short.
+            let short = if outcome.aborted {
+                Some(cut::Cut::Aborted)
+            } else if truncated {
                 Some(cut::Cut::MaxTokens)
             } else if !outcome.complete {
-                Some(cut::Cut::StreamCut)
+                Some(cut::Cut::StreamEnded)
             } else {
                 None
             };
@@ -144,7 +103,12 @@ impl Agent {
             for warning in warnings {
                 events.send(AgentEvent::Warned { message: warning }).await?;
             }
-            self.push_entry(message.clone())?;
+            // A stopped stream that produced nothing leaves a blank
+            // assistant message: recording it would put an empty turn in the
+            // session and the transcript for news nobody asked for.
+            if !outcome.aborted || !cut::is_blank(&message) {
+                self.push_entry(message.clone())?;
+            }
 
             // Non-streaming: the whole text arrives at once, so one chunk.
             // (The streaming path emitted its deltas during the read.)

@@ -18,10 +18,15 @@
 //! user has already watched most of an answer stream in, so
 //! [`drain_sse`] reports what assembled plus `complete: false` and lets
 //! the loop continue the answer instead of throwing the turn away.
+//! A stop request is a different animal (GAP 3's in-flight half): nobody waits for
+//! it, so both drains watch the run's abort flag while they read and come
+//! back with the partial and `aborted: true`.
 
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use anyhow::Context;
 use serde::Deserialize;
@@ -198,10 +203,43 @@ impl Assembler {
 /// already watched stream in is the wrong trade (GAP 2) — and the loop
 /// uses the flag to ask for the rest. A cut that assembled *nothing* is
 /// an error: there is nothing to salvage and nothing to continue from.
+///
+/// `aborted` says who stopped it: the user, not the wire. A user
+/// abort always comes back `Ok` — empty partial included — and the loop
+/// must read it as "the run is over", never as "this answer is short, ask
+/// for the rest".
 #[derive(Debug, PartialEq)]
 pub struct StreamOutcome {
     pub response: ChatResponse,
     pub complete: bool,
+    /// The run's stop request ended the read.
+    pub aborted: bool,
+}
+
+/// How often a stream read looks at the abort flag: responsive enough
+/// that a stop request feels immediate, cheap enough to be noise. The
+/// request timeout is minutes, so this is the only thing between the user
+/// and a generation that has another ten minutes to run.
+pub(super) const ABORT_POLL: Duration = Duration::from_millis(100);
+
+/// Await a future, giving up when the run's stop request says so.
+///
+/// Dropping the future mid-way drops the `&mut Response` it borrowed, and
+/// with it the connection: the read is really over, not merely abandoned.
+pub(super) async fn until_abort<T>(abort: &AtomicBool, fut: impl Future<Output = T>) -> Option<T> {
+    tokio::select! {
+        value = fut => Some(value),
+        _ = wait_for_abort(abort) => None,
+    }
+}
+
+/// Resolve once the run's stop request is set — polled, not signalled:
+/// the flag is a plain `AtomicBool` every layer already holds, and making
+/// it wake anyone would mean a channel on the hot path of every run.
+async fn wait_for_abort(abort: &AtomicBool) {
+    while !abort.load(Ordering::Relaxed) {
+        tokio::time::sleep(ABORT_POLL).await;
+    }
 }
 
 /// Byte-level line splitter. Network chunks do not respect line (or UTF-8
@@ -248,15 +286,25 @@ impl LineBuffer {
 /// text, thinking or tool-call shaped — is an error worth failing the run
 /// for. (An `Err` also stays the verdict for malformed chunks: a provider
 /// whose JSON does not parse is not a salvageable truncation.)
+///
+/// A stop request cuts the read short by the same route and is
+/// never an error: what assembled so far comes back with `aborted: true`,
+/// and an empty partial is fine — the user asked for nothing more.
 pub(super) async fn drain_sse(
     mut response: reqwest::Response,
+    abort: &AtomicBool,
     mut on_delta: impl FnMut(Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
 ) -> anyhow::Result<StreamOutcome> {
     let mut lines = LineBuffer::new();
     let mut assembler = Assembler::default();
     let mut done = false;
+    let mut aborted = false;
     while !done {
-        let Some(bytes) = response.chunk().await.context("reading SSE stream")? else {
+        let Some(bytes) = until_abort(abort, response.chunk()).await else {
+            aborted = true;
+            break;
+        };
+        let Some(bytes) = bytes.context("reading SSE stream")? else {
             break;
         };
         for line in lines.feed(&bytes) {
@@ -280,7 +328,7 @@ pub(super) async fn drain_sse(
         }
     }
     let response = assembler.finish();
-    if !done {
+    if !(done || aborted) {
         anyhow::ensure!(
             salvageable(&response),
             "SSE stream ended without [DONE] and assembled nothing — the connection was \
@@ -290,6 +338,7 @@ pub(super) async fn drain_sse(
     Ok(StreamOutcome {
         response,
         complete: done,
+        aborted,
     })
 }
 

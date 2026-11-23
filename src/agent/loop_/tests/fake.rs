@@ -86,8 +86,9 @@ fn serve_hooked(
     }
 }
 
-/// Reads one HTTP request and returns just its body.
-fn read_request_body(stream: &mut TcpStream) -> String {
+/// Reads one HTTP request and returns just its body. Shared with the
+/// abort scripts, which need to see the request a stalled stream is answering.
+pub(super) fn read_request_body(stream: &mut TcpStream) -> String {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     let header_end = loop {

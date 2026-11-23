@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -221,17 +222,25 @@ impl LlmClient {
     /// shape. The whole-response timeout applies here too, now spanning the
     /// whole streamed body (§17: everything that can hang has a number).
     ///
+    /// `abort` is the running agent's stop request: the stream
+    /// read polls it, so Esc does not have to wait for a generation to
+    /// finish. An aborted read returns what assembled so far with
+    /// `aborted: true` — never an error, never a retry.
+    ///
     /// Retrying follows the same rules as [`LlmClient::send`] for the
     /// request itself: a 500 before a single byte of SSE is worth another
     /// attempt. Once the response head is in, the error is returned as it
     /// is — replaying a stream that already delivered a delta would show
     /// the user the same text twice (§17: never silently duplicate output).
+    /// A stop request ends the retry loop outright: the user asked for no
+    /// more requests, and none is made.
     pub async fn send_stream(
         &self,
         model: &str,
         messages: &[ChatMessage],
         max_tokens: u32,
         tools: &[Value],
+        abort: &AtomicBool,
         on_delta: impl FnMut(stream::Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
     ) -> anyhow::Result<StreamOutcome> {
         let (url, request) = match self.api {
@@ -269,10 +278,14 @@ impl LlmClient {
                 )?
             }
         };
-        let response = self.post(&url, request).await?;
+        // The stop request is part of the send: it ends the wait for the
+        // response head and rules out a retry.
+        let response = self.attempts(&url, request, Some(abort)).await?;
         match self.api {
-            ApiKind::OpenAiCompletions => stream::drain_sse(response, on_delta).await,
-            ApiKind::AnthropicMessages => anthropic::stream::drain_sse(response, on_delta).await,
+            ApiKind::OpenAiCompletions => stream::drain_sse(response, abort, on_delta).await,
+            ApiKind::AnthropicMessages => {
+                anthropic::stream::drain_sse(response, abort, on_delta).await
+            }
         }
     }
 
@@ -284,9 +297,40 @@ impl LlmClient {
         url: &str,
         request: reqwest::Request,
     ) -> anyhow::Result<reqwest::Response> {
+        self.attempts(url, request, None).await
+    }
+
+    /// The retry loop both call paths share. `abort` is the streaming
+    /// path's stop request: it ends the wait for the response head with
+    /// [`ABORTED`] and rules out another attempt. `None` is the
+    /// non-streaming path, which has no way to observe one mid-flight.
+    async fn attempts(
+        &self,
+        url: &str,
+        request: reqwest::Request,
+        abort: Option<&AtomicBool>,
+    ) -> anyhow::Result<reqwest::Response> {
         let mut nth = 0u32;
         loop {
-            match self.attempt(url, replay(&request)?).await {
+            let outcome = match abort {
+                // A stop request is honoured before the attempt: a request
+                // the user has already disowned is not sent again.
+                Some(flag) if flag.load(Ordering::Relaxed) => {
+                    return Err(anyhow::anyhow!(ABORTED));
+                }
+                // Otherwise wait for the head — but not past the stop
+                // request. Dropping the future cancels the in-flight
+                // request, so the connection closes and the wait ends.
+                Some(flag) => {
+                    let attempt = self.attempt(url, replay(&request)?);
+                    match stream::until_abort(flag, attempt).await {
+                        Some(outcome) => outcome,
+                        None => return Err(anyhow::anyhow!(ABORTED)),
+                    }
+                }
+                None => self.attempt(url, replay(&request)?).await,
+            };
+            match outcome {
                 Ok(response) => return Ok(response),
                 Err(failure) => {
                     let Some(wait) = self.retry_in(&failure, nth, url) else {
@@ -373,6 +417,12 @@ struct Failure {
 
 /// The whole-response timeout used when config says nothing.
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// What a streaming call reports when the run's stop request ended it
+/// before a response head arrived. It names itself as the user's stop, so
+/// the error and the `[aborted by user]` entry the loop records for a
+/// stopped run read as one event. Never retried.
+const ABORTED: &str = "aborted by user";
 
 /// Finish a request once, so every attempt replays the identical bytes.
 /// `RequestBuilder::send` consumes the builder, and a retry has to be the
