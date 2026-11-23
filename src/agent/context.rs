@@ -161,7 +161,7 @@ fn working_dir_section(cwd: &Path) -> String {
 /// files that exist but cannot be read produce a warning string (they are
 /// advisory — never fatal, but §17 says never silently dropped either).
 pub fn discover_agents_md(cwd: &Path) -> (Vec<AgentsFile>, Vec<String>) {
-    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let home = crate::home::dir();
     discover_with_home(cwd, home.as_deref())
 }
 

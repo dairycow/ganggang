@@ -142,9 +142,7 @@ pub fn load_skill(path: &Path) -> Result<Skill, String> {
 /// collisions; every skip and collision is reported as a warning string,
 /// never an error.
 pub fn discover(cwd: &Path) -> (Vec<Skill>, Vec<String>) {
-    let home = std::env::var("HOME")
-        .ok()
-        .map(|h| Path::new(&h).join(".agents").join("skills"));
+    let home = crate::home::dir().map(|h| h.join(".agents").join("skills"));
     discover_with_roots(home.as_deref(), cwd)
 }
 

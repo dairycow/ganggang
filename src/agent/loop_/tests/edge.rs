@@ -210,6 +210,7 @@ async fn advertised_skills_ride_in_the_outgoing_system_prompt() {
         None,
         false,
         131_072,
+        Default::default(),
     );
     agent.skills = vec![Skill {
         name: "pdf-tools".into(),
@@ -272,6 +273,7 @@ async fn a_persisted_session_resumes_with_its_history() {
         Some(store2),
         false,
         131_072,
+        Default::default(),
     );
     let (_, entries, _) = load(&path).unwrap();
     let entry_count = entries.len();

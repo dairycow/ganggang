@@ -32,6 +32,8 @@ pub enum Command {
     Context,
     /// List prompt templates (M7.4), mirroring `/skills`.
     Prompts,
+    /// List loaded user-level hooks (§22), or say why there are none.
+    Hooks,
     Skill {
         name: String,
         args: String,
@@ -84,6 +86,7 @@ pub fn classify_submission(text: &str) -> Submission {
             "context" => Command::Context,
             "prompts" => Command::Prompts,
             "model" => Command::Model(Some(arg)).filter_arg(),
+            "hooks" => Command::Hooks,
             "quit" | "exit" => Command::Quit,
             _ if head.starts_with("skill:") => Command::Skill {
                 name: head["skill:".len()..].trim().to_string(),
@@ -113,7 +116,7 @@ impl Command {
 
 /// The valid commands, for unknown-command feedback.
 pub fn known_commands() -> &'static str {
-    "/new /resume [n|prefix] /compact [instructions] /skills /session /context /prompts /skill:<name> [args] /model [provider/model] /quit"
+    "/new /resume [n|prefix] /compact [instructions] /skills /session /context /prompts /hooks /skill:<name> [args] /model [provider/model] /quit"
 }
 
 /// Everything a command needs to act: view state, the agent channels, the
@@ -126,6 +129,7 @@ pub(super) struct CmdCtx<'a> {
     pub ui_tx: &'a tokio::sync::mpsc::Sender<super::agent_task::UiEvent>,
     pub skills: &'a [crate::agent::skills::Skill],
     pub prompts: &'a [crate::prompts::PromptTemplate],
+    pub hooks: &'a crate::agent::hooks::Hooks,
     pub cwd: &'a std::path::Path,
     pub abort: &'a std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub config: &'a crate::config::Config,
@@ -141,6 +145,7 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
         ui_tx,
         skills,
         prompts,
+        hooks,
         cwd,
         abort,
         config,
@@ -180,6 +185,28 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
                     },
                     template.path.display(),
                 ));
+            }
+        }
+        Command::Hooks => {
+            if hooks.disabled() {
+                state.push_info("hooks disabled by --no-hooks");
+            } else if hooks.is_empty() {
+                state.push_info("no hooks configured (~/.gg/hooks.toml)");
+            } else {
+                state.push_info(&format!("hooks ({}):", hooks.specs().len()));
+                for hook in hooks.specs() {
+                    let tools = hook
+                        .tools
+                        .as_ref()
+                        .map_or_else(|| "*".to_string(), |tools| tools.join(","));
+                    state.push_info(&format!(
+                        "  {:<9} [{}] {}s  {}",
+                        hook.event.as_str(),
+                        tools,
+                        hook.timeout_secs,
+                        hook.command
+                    ));
+                }
             }
         }
         Command::Session => {
@@ -417,6 +444,10 @@ mod tests {
             Submission::Command(Command::Quit)
         );
         assert_eq!(
+            classify_submission("/hooks"),
+            Submission::Command(Command::Hooks)
+        );
+        assert_eq!(
             classify_submission("/skills"),
             Submission::Command(Command::Skills)
         );
@@ -557,6 +588,7 @@ mod tests {
             body: "Review this diff line by line.".into(),
         }];
         let skills: Vec<crate::agent::skills::Skill> = Vec::new();
+        let hooks = crate::agent::hooks::Hooks::default();
         let abort = Arc::new(AtomicBool::new(false));
         let cwd = std::path::PathBuf::from("/tmp/x");
 
@@ -567,6 +599,7 @@ mod tests {
             ui_tx: &ui_tx,
             skills: &skills,
             prompts: &prompts,
+            hooks: &hooks,
             cwd: &cwd,
             abort: &abort,
             config: &config,
@@ -605,6 +638,7 @@ mod tests {
             ui_tx: &ui_tx,
             skills: &skills,
             prompts: &prompts,
+            hooks: &hooks,
             cwd: &cwd,
             abort: &abort,
             config: &config,
@@ -655,6 +689,7 @@ mod tests {
                 ui_tx: &ui_tx,
                 skills: &skills,
                 prompts: &prompts,
+                hooks: &crate::agent::hooks::Hooks::default(),
                 cwd: &cwd,
                 abort: &abort,
                 config: &config,
@@ -674,6 +709,7 @@ mod tests {
                 ui_tx: &ui_tx,
                 skills: &skills,
                 prompts: &prompts,
+                hooks: &crate::agent::hooks::Hooks::default(),
                 cwd: &cwd,
                 abort: &abort,
                 config: &config,
@@ -687,5 +723,85 @@ mod tests {
             input_rx.try_recv().unwrap(),
             super::super::AgentInput::SwitchEndpoint(_)
         ));
+    }
+
+    /// `/hooks` surfaces the loaded set and `--no-hooks` without reaching
+    /// the agent.
+    #[tokio::test]
+    async fn hooks_lists_loaded_or_disabled() {
+        use crate::agent::hooks::{Hook, HookEvent, Hooks, load_from};
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+
+        let mut state = super::super::view::State::new(
+            std::path::Path::new("/tmp/x"),
+            "m",
+            131_072,
+            Arc::new(vec![]),
+            Arc::new(vec![]),
+        );
+        let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
+        let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
+        let factory: super::super::Factory =
+            Arc::new(|_, _, _| unreachable!("no /new on this path"));
+        let abort = Arc::new(AtomicBool::new(false));
+        let cwd = std::path::PathBuf::from("/tmp/x");
+        let config = crate::config::Config::default();
+        let mut active_endpoint = config.active_endpoint();
+        let hooks = Hooks::new(vec![Hook {
+            event: HookEvent::PreTool,
+            tools: Some(vec!["bash".into()]),
+            command: "guard.sh".into(),
+            timeout_secs: 5,
+        }]);
+
+        handle_command(
+            Command::Hooks,
+            CmdCtx {
+                state: &mut state,
+                factory: &factory,
+                input_tx: &mut input_tx,
+                ui_tx: &ui_tx,
+                skills: &[],
+                prompts: &[],
+                hooks: &hooks,
+                cwd: &cwd,
+                abort: &abort,
+                config: &config,
+                active_endpoint: &mut active_endpoint,
+            },
+        )
+        .await
+        .unwrap();
+        let lines = state.line_texts_for_test();
+        assert!(lines.iter().any(|l| l == "hooks (1):"), "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("pre_tool") && l.contains("guard.sh")),
+            "{lines:?}"
+        );
+
+        let (disabled, _) = load_from(None, &cwd, true).unwrap();
+        handle_command(
+            Command::Hooks,
+            CmdCtx {
+                state: &mut state,
+                factory: &factory,
+                input_tx: &mut input_tx,
+                ui_tx: &ui_tx,
+                skills: &[],
+                prompts: &[],
+                hooks: &disabled,
+                cwd: &cwd,
+                abort: &abort,
+                config: &config,
+                active_endpoint: &mut active_endpoint,
+            },
+        )
+        .await
+        .unwrap();
+        let lines = state.line_texts_for_test();
+        assert!(lines.iter().any(|l| l.contains("disabled by --no-hooks")));
     }
 }

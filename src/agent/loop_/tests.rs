@@ -4,6 +4,7 @@
 mod compact;
 mod edge;
 mod fake;
+mod hooks;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -113,6 +114,26 @@ pub(super) async fn drive(
         Arc::new(AtomicBool::new(false)),
         None,
         false,
+        Default::default(),
+    )
+    .await
+}
+
+/// Same as [`drive`], with a loaded hook set for §22 scripts.
+pub(super) async fn drive_hooks(
+    base_url: &str,
+    registry: Registry,
+    input: &str,
+    hooks: crate::agent::hooks::Hooks,
+) -> (anyhow::Result<()>, Vec<Entry>, Vec<AgentEvent>) {
+    drive_full(
+        base_url,
+        registry,
+        input,
+        Arc::new(AtomicBool::new(false)),
+        None,
+        false,
+        hooks,
     )
     .await
 }
@@ -123,7 +144,16 @@ pub(super) async fn drive_with_abort(
     input: &str,
     abort: Arc<AtomicBool>,
 ) -> (anyhow::Result<()>, Vec<Entry>, Vec<AgentEvent>) {
-    drive_full(base_url, registry, input, abort, None, false).await
+    drive_full(
+        base_url,
+        registry,
+        input,
+        abort,
+        None,
+        false,
+        Default::default(),
+    )
+    .await
 }
 
 /// Same as [`drive_with_abort`], but persisting into `store` so the
@@ -135,7 +165,16 @@ pub(super) async fn drive_with_store(
     abort: Arc<AtomicBool>,
     store: Option<crate::agent::session::io::SessionStore>,
 ) -> (anyhow::Result<()>, Vec<Entry>, Vec<AgentEvent>) {
-    drive_full(base_url, registry, input, abort, store, false).await
+    drive_full(
+        base_url,
+        registry,
+        input,
+        abort,
+        store,
+        false,
+        Default::default(),
+    )
+    .await
 }
 
 /// The streaming-path variant (M5): the agent requests SSE chunks.
@@ -152,6 +191,7 @@ pub(super) async fn drive_streaming(
         Arc::new(AtomicBool::new(false)),
         None,
         stream,
+        Default::default(),
     )
     .await
 }
@@ -168,6 +208,7 @@ pub(super) async fn drive_full(
     abort: Arc<AtomicBool>,
     store: Option<crate::agent::session::io::SessionStore>,
     stream: bool,
+    hooks: crate::agent::hooks::Hooks,
 ) -> (anyhow::Result<()>, Vec<Entry>, Vec<AgentEvent>) {
     let client = LlmClient::new(base_url).unwrap();
     let mut agent = Agent::new(
@@ -180,6 +221,7 @@ pub(super) async fn drive_full(
         store,
         stream,
         131_072,
+        hooks,
     );
     let input = input.to_string();
     let (mut tx, mut rx) = tokio::sync::mpsc::channel(128);

@@ -236,7 +236,7 @@ fn suggestion_popup_tracks_the_composer() {
     assert!(!state.suggest_open(), "plain composer: no popup");
     state.editor.insert_char('/');
     assert!(state.suggest_open(), "a bare slash opens the catalog");
-    assert_eq!(state.suggestions().len(), 10, "the built-in set");
+    assert_eq!(state.suggestions().len(), 11, "the built-in set");
 
     // Filtering: two down and one up leaves the highlight on /compact.
     state.suggest_next();
@@ -692,6 +692,7 @@ async fn compact_input_reports_through_the_ui_channel() {
         None,
         false,
         131_072,
+        Default::default(),
     );
     let (tx, rx) = tokio::sync::mpsc::channel(8);
     let (ui_tx, mut ui_rx) = tokio::sync::mpsc::channel(8);

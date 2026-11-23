@@ -6,6 +6,7 @@ mod agent;
 mod config;
 mod events;
 mod export;
+mod home;
 mod json_mode;
 mod llm;
 mod printers;
@@ -92,6 +93,11 @@ struct Cli {
         conflicts_with_all = ["prompt", "prompt_positional", "export", "watch"]
     )]
     list_models: bool,
+
+    /// Skip user hooks for this run (§22), including the hooks file and the
+    /// project-file warning.
+    #[arg(long)]
+    no_hooks: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -187,6 +193,12 @@ async fn main() -> anyhow::Result<()> {
         let mut cfg = config::load()?;
         cfg.apply_cli(cli.provider.as_deref(), cli.model.as_deref())?;
         cfg.active_endpoint().require_auth()?;
+        // Hooks are user-level policy (§22), loaded once and shared by the
+        // TUI factory. A project hooks file only produces a warning.
+        let (hooks, hook_warnings) = agent::hooks::load(&cwd, cli.no_hooks)?;
+        for warning in &hook_warnings {
+            eprintln!("warning: {warning}");
+        }
         // Resolve the watch target before the boot: a failure here is a
         // startup message on stderr, not a warning behind the alternate
         // screen.
@@ -201,7 +213,7 @@ async fn main() -> anyhow::Result<()> {
         } else {
             None
         };
-        let (boot, factory) = boot_and_factory(&cli, &cfg, &cwd, abort.clone())?;
+        let (boot, factory) = boot_and_factory(&cli, &cfg, &cwd, abort.clone(), hooks.clone())?;
         if let Some(path) = &boot.session_path {
             eprintln!("session: {}", path.display());
         }
@@ -222,6 +234,7 @@ async fn main() -> anyhow::Result<()> {
         let discovered = tui::Discovered {
             skills: std::sync::Arc::new(skills),
             prompts: std::sync::Arc::new(prompts),
+            hooks: std::sync::Arc::new(hooks),
         };
         let exit = tui::run(boot, factory, discovered, cwd, cfg, abort, watch_cfg, draft).await?;
         return match exit {
@@ -352,8 +365,12 @@ fn open_agent(cli: &Cli, abort: Arc<AtomicBool>) -> anyhow::Result<Agent> {
     let endpoint = cfg.active_endpoint();
     endpoint.require_auth()?;
     let cwd = std::env::current_dir()?;
+    let (hooks, hook_warnings) = agent::hooks::load(&cwd, cli.no_hooks)?;
+    for warning in &hook_warnings {
+        eprintln!("warning: {warning}");
+    }
     let pick = pick_of(cli);
-    let boot = assemble_boot(&cfg, &endpoint, &cwd, abort, cli, pick)?;
+    let boot = assemble_boot(&cfg, &endpoint, &cwd, abort, cli, pick, &hooks)?;
     if let Some(path) = &boot.session_path {
         eprintln!("session: {}", path.display());
     }
@@ -367,16 +384,19 @@ fn boot_and_factory(
     cfg: &config::Config,
     cwd: &std::path::Path,
     abort: Arc<AtomicBool>,
+    hooks: agent::hooks::Hooks,
 ) -> anyhow::Result<(tui::Boot, tui::Factory)> {
     let pick = pick_of(cli);
     let endpoint = cfg.active_endpoint();
-    let boot = assemble_boot(cfg, &endpoint, cwd, abort, cli, pick)?;
+    let boot = assemble_boot(cfg, &endpoint, cwd, abort, cli, pick, &hooks)?;
 
     let cfg = cfg.clone();
     let cwd = cwd.to_path_buf();
     let cli_tools = cli.tools.clone();
     let no_session = cli.no_session;
     let watch = cli.watch;
+    let no_hooks = cli.no_hooks;
+    let hooks = hooks.clone();
     let factory: tui::Factory = Arc::new(move |pick, endpoint, abort| {
         let cli = Cli {
             prompt: None,
@@ -391,8 +411,9 @@ fn boot_and_factory(
             provider: None,
             model: None,
             list_models: false,
+            no_hooks,
         };
-        assemble_boot(&cfg, endpoint, &cwd, abort, &cli, pick)
+        assemble_boot(&cfg, endpoint, &cwd, abort, &cli, pick, &hooks)
     });
     Ok((boot, factory))
 }
@@ -415,9 +436,10 @@ fn assemble_boot(
     abort: Arc<AtomicBool>,
     cli: &Cli,
     pick: tui::SessionPick,
+    hooks: &agent::hooks::Hooks,
 ) -> anyhow::Result<tui::Boot> {
     let (store, entries, session_path) = open_session_for(cli, cwd, &endpoint.label(), pick)?;
-    let mut agent = build_agent(cfg, endpoint, cwd, abort, cli, store)?;
+    let mut agent = build_agent(cfg, endpoint, cwd, abort, cli, store, hooks)?;
     if let Some(entries) = entries {
         agent.load_entries(entries);
     }
@@ -442,6 +464,7 @@ fn build_agent(
     abort: Arc<AtomicBool>,
     cli: &Cli,
     store: Option<agent::session::io::SessionStore>,
+    hooks: &agent::hooks::Hooks,
 ) -> anyhow::Result<Agent> {
     let client = LlmClient::from_endpoint(endpoint)?;
     let mut registry = default_registry(cwd.to_path_buf(), cfg.bash_timeout_secs);
@@ -468,6 +491,7 @@ fn build_agent(
         // the loop's scripted tests drive the non-streaming path.
         true,
         endpoint.context_window,
+        hooks.clone(),
     )
     .with_replay_reasoning(endpoint.replay_reasoning))
 }

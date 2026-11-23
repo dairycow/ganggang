@@ -13,6 +13,7 @@ use crate::llm::types::ChatMessage;
 
 use super::Agent;
 use super::compaction;
+use super::hooks::PreOutcome;
 use super::session::{self, Entry, Message, Role, last_entry_id};
 use super::tools::ToolResult;
 
@@ -33,6 +34,9 @@ impl Agent {
         // "past the line, no cut point" warning fires once, not per batch.
         let mut noop_compaction_warned = false;
         self.push_message(Role::User, Some(input))?;
+        // One session id for every hook payload this run emits; `None` is
+        // `--no-session` (§22).
+        let session_id = self.store.as_ref().map(|s| s.id().to_string());
         events.send(AgentEvent::RunStarted).await?;
         for warning in std::mem::take(&mut self.skill_warnings)
             .into_iter()
@@ -195,7 +199,41 @@ impl Agent {
                         args: call.args.clone(),
                     })
                     .await?;
-                let result = self.tools.dispatch(call).await;
+                // §22: pre_tool hooks sit between Started and dispatch. A
+                // call whose provider arguments failed to parse skips them:
+                // dispatch's args error is the answer, not a policy call.
+                let pre = if call.args_error.is_none() {
+                    self.hooks
+                        .pre_tool(call, session_id.as_deref(), &self.cwd, &self.abort)
+                        .await
+                } else {
+                    PreOutcome::Allow {
+                        warnings: Vec::new(),
+                    }
+                };
+                let (result, executed) = match pre {
+                    PreOutcome::Allow { warnings } => {
+                        for warning in warnings {
+                            events.send(AgentEvent::Warned { message: warning }).await?;
+                        }
+                        // Invalid provider arguments are never an execution:
+                        // dispatch records the parse error and post hooks stay
+                        // away, like both tool events (§22).
+                        (self.tools.dispatch(call).await, call.args_error.is_none())
+                    }
+                    PreOutcome::Deny { reason, warnings } => {
+                        for warning in warnings {
+                            events.send(AgentEvent::Warned { message: warning }).await?;
+                        }
+                        (
+                            ToolResult::err(format!("denied by pre_tool hook: {reason}")),
+                            false,
+                        )
+                    }
+                    PreOutcome::Interrupted => {
+                        (ToolResult::err("aborted before execution".into()), false)
+                    }
+                };
                 self.push_tool_result(&call.id, &result)?;
                 events
                     .send(AgentEvent::ToolCallFinished {
@@ -205,6 +243,17 @@ impl Agent {
                         is_error: result.is_error,
                     })
                     .await?;
+                // The result is recorded before post hooks run, so a slow
+                // formatter cannot change what the model was told.
+                if executed {
+                    for warning in self
+                        .hooks
+                        .post_tool(call, &result, session_id.as_deref(), &self.cwd, &self.abort)
+                        .await
+                    {
+                        events.send(AgentEvent::Warned { message: warning }).await?;
+                    }
+                }
             }
 
             // The batch finished with the user asking to stop: every call
@@ -241,6 +290,16 @@ impl Agent {
             }
         }
 
+        // §22: run_end hooks observe a clean finish only — the abort paths
+        // above returned without reaching here. Warnings precede RunEnded
+        // so every interface sees them inside the run.
+        for warning in self
+            .hooks
+            .run_end(turns, session_id.as_deref(), &self.cwd, &self.abort)
+            .await
+        {
+            events.send(AgentEvent::Warned { message: warning }).await?;
+        }
         events.send(AgentEvent::RunEnded { turns }).await?;
         Ok(())
     }
