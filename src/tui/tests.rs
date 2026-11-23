@@ -6,9 +6,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifi
 
 use super::agent_task::usage_totals;
 use super::footer::Footer;
+use super::history::{Arrow, History};
 use super::keys::{KeyAction, classify};
 use super::transcript::LineKind;
-use super::view::State;
+use super::view::{Cancel, State};
 use crate::agent::session::{Entry, Message, Role};
 use crate::events::AgentEvent;
 
@@ -90,10 +91,11 @@ fn readline_keys_edit_the_composer_and_arrows_move_the_cursor() {
 }
 
 #[test]
-fn ctrl_c_quits_ctrl_o_expands_ctrl_t_thinks_esc_aborts_pages_scroll() {
+fn ctrl_c_interrupts_ctrl_o_expands_ctrl_t_thinks_esc_aborts_pages_scroll() {
     assert_eq!(
         classify(key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-        KeyAction::Quit
+        KeyAction::Interrupt,
+        "Ctrl+C is muscle memory: it cancels, it does not quit"
     );
     assert_eq!(
         classify(key(KeyCode::Char('o'), KeyModifiers::CONTROL)),
@@ -141,6 +143,37 @@ fn ctrl_r_requests_a_watch_rebuild_and_plain_r_is_text() {
     );
 }
 
+/// Ctrl+P / Ctrl+N: history recall that does not care what the composer
+/// holds (arrows do — a multi-line composer keeps its line cursor).
+#[test]
+fn ctrl_p_and_ctrl_n_recall_history_and_plain_letters_type() {
+    let ctrl = KeyModifiers::CONTROL;
+    assert_eq!(
+        classify(key(KeyCode::Char('p'), ctrl)),
+        KeyAction::HistoryPrev
+    );
+    assert_eq!(
+        classify(key(KeyCode::Char('n'), ctrl)),
+        KeyAction::HistoryNext
+    );
+    // tmux and terminals that report Meta dress these up; the control
+    // modifier is what counts.
+    assert_eq!(
+        classify(key(KeyCode::Char('p'), ctrl | KeyModifiers::SHIFT)),
+        KeyAction::HistoryPrev
+    );
+    assert_eq!(
+        classify(key(KeyCode::Char('p'), KeyModifiers::NONE)),
+        KeyAction::Insert('p'),
+        "plain letters stay text"
+    );
+    assert_eq!(
+        classify(key(KeyCode::Char('n'), KeyModifiers::ALT)),
+        KeyAction::Ignore,
+        "Alt+letter is not a history key"
+    );
+}
+
 #[test]
 fn plain_chars_insert_and_controlled_or_alt_chars_do_not() {
     assert_eq!(
@@ -153,7 +186,7 @@ fn plain_chars_insert_and_controlled_or_alt_chars_do_not() {
         KeyAction::Insert('A')
     );
     assert_eq!(
-        classify(key(KeyCode::Char('n'), KeyModifiers::CONTROL)),
+        classify(key(KeyCode::Char('f'), KeyModifiers::CONTROL)),
         KeyAction::Ignore,
         "Ctrl+<letter> shortcuts are actions, never text"
     );
@@ -231,6 +264,7 @@ fn suggestion_popup_tracks_the_composer() {
         131_072,
         Arc::new(skills),
         Arc::new(prompts),
+        History::default(),
     );
 
     assert!(!state.suggest_open(), "plain composer: no popup");
@@ -305,6 +339,7 @@ fn the_selection_stops_at_the_last_drawn_row_on_short_terminals() {
         131_072,
         std::sync::Arc::new(vec![]),
         std::sync::Arc::new(vec![]),
+        History::default(),
     );
     state.editor.insert_char('/');
 
@@ -380,6 +415,7 @@ fn view_folds_the_event_stream_into_lines() {
         131_072,
         std::sync::Arc::new(vec![]),
         std::sync::Arc::new(vec![]),
+        History::default(),
     );
     state.push_user("question");
     state.apply(&AgentEvent::RunStarted);
@@ -429,6 +465,7 @@ fn split_deltas_fold_into_the_same_block_as_one_shot_text() {
             131_072,
             std::sync::Arc::new(vec![]),
             std::sync::Arc::new(vec![]),
+            History::default(),
         );
         state.push_user("q");
         state.apply(&AgentEvent::TurnStarted);
@@ -449,6 +486,7 @@ fn split_deltas_fold_into_the_same_block_as_one_shot_text() {
             131_072,
             std::sync::Arc::new(vec![]),
             std::sync::Arc::new(vec![]),
+            History::default(),
         );
         state.push_user("q");
         state.apply(&AgentEvent::TurnStarted);
@@ -482,6 +520,7 @@ fn scrolling_stays_within_the_transcript() {
         131_072,
         std::sync::Arc::new(vec![]),
         std::sync::Arc::new(vec![]),
+        History::default(),
     );
     for i in 0..100 {
         // One text per turn: TurnStarted closes the previous assistant
@@ -507,6 +546,169 @@ fn footer_start_values_render_sensibly() {
     let f = Footer::new(std::path::Path::new("/tmp/x"), "m");
     assert!(f.render().contains("↑0 ↓0"));
     assert!(f.render().contains("○ ready"));
+}
+
+// ------------------------------------------------------- recall & Ctrl+C --
+
+/// A view with a submitted history behind it — the state the loop drives
+/// when an arrow or Ctrl+P/N is pressed.
+fn state_with_history(prompts: &[&str]) -> State {
+    let mut history = History::default();
+    for prompt in prompts {
+        history.record(prompt);
+    }
+    State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        std::sync::Arc::new(vec![]),
+        std::sync::Arc::new(vec![]),
+        history,
+    )
+}
+
+/// The arrows of an empty or single-line composer recall; the popup keeps
+/// them while it is open; a multi-line composer keeps its line cursor.
+#[test]
+fn arrows_recall_history_from_an_empty_or_single_line_composer() {
+    let mut state = state_with_history(&["first prompt", "second prompt"]);
+    assert_eq!(state.arrow(true), Arrow::Prev);
+    assert_eq!(
+        state.arrow(false),
+        Arrow::Nothing,
+        "↓ has nothing to walk before a browse starts"
+    );
+
+    state.recall_prev();
+    assert_eq!(state.editor.text(), "second prompt");
+    state.recall_prev();
+    assert_eq!(state.editor.text(), "first prompt");
+    state.recall_prev();
+    assert_eq!(
+        state.editor.text(),
+        "first prompt",
+        "the oldest is where it stops"
+    );
+
+    // Down walks forward, and past the newest comes back what the composer
+    // held when browsing began — here, nothing.
+    state.recall_next();
+    assert_eq!(state.editor.text(), "second prompt");
+    state.recall_next();
+    assert_eq!(state.editor.text(), "", "the draft, and browsing is over");
+    assert_eq!(state.arrow(true), Arrow::Prev, "a fresh ↑ starts over");
+}
+
+/// A non-empty draft is not lost to a recall: the first ↑ saves it, ↓ past
+/// the newest gives it back.
+#[test]
+fn a_half_typed_draft_survives_a_recall() {
+    let mut state = state_with_history(&["older prompt"]);
+    state.editor.set_text("half a thought");
+    assert_eq!(state.arrow(true), Arrow::Prev);
+    state.recall_prev();
+    assert_eq!(state.editor.text(), "older prompt");
+    // Recalled text is ordinary composer text: editable.
+    state.editor.insert_char('?');
+    assert_eq!(state.editor.text(), "older prompt?");
+    state.recall_next();
+    assert_eq!(state.editor.text(), "half a thought", "the draft came back");
+}
+
+#[test]
+fn a_multiline_composer_keeps_its_line_cursor_until_a_browse_starts() {
+    let mut state = state_with_history(&["one", "two"]);
+    state.editor.set_text("first\nsecond\nthird");
+    assert_eq!(state.arrow(true), Arrow::LineUp);
+    assert_eq!(state.arrow(false), Arrow::LineDown);
+    state.editor.move_up();
+    assert_eq!(
+        state.editor.cursor_row_col(),
+        (1, 5),
+        "not history, just the cursor (the column of the line it left)"
+    );
+
+    // Ctrl+P recalls whatever the composer holds, and once a browse is
+    // running the arrows follow it — even showing a multi-line prompt.
+    state.recall_prev();
+    assert_eq!(state.editor.text(), "two");
+    assert_eq!(state.arrow(true), Arrow::Prev);
+    assert_eq!(state.arrow(false), Arrow::Next);
+    state.recall_prev();
+    assert_eq!(state.editor.text(), "one");
+    state.recall_next();
+    assert_eq!(state.editor.text(), "two");
+}
+
+/// While the popup is open the arrows are its, history and all.
+#[test]
+fn the_open_popup_outranks_history_for_the_arrows() {
+    let mut state = state_with_history(&["prompt"]);
+    state.editor.insert_char('/');
+    assert!(state.suggest_open());
+    assert_eq!(state.arrow(true), Arrow::SuggestPrev);
+    assert_eq!(state.arrow(false), Arrow::SuggestNext);
+}
+
+/// Ctrl+C: cancel a live run, clear a draft, and only then quit.
+#[test]
+fn ctrl_c_cancels_a_run_clears_a_draft_and_only_then_quits() {
+    let mut state = state_with_history(&[]);
+    // Idle with nothing typed: there is nothing left to cancel.
+    assert_eq!(state.interrupt(), Cancel::Quit);
+
+    // Idle with a draft: the first press clears it, the next quits.
+    state.editor.set_text("typed but unsent");
+    assert_eq!(state.interrupt(), Cancel::DraftCleared);
+    assert_eq!(state.editor.text(), "");
+    assert_eq!(state.interrupt(), Cancel::Quit);
+
+    // Busy: the first press asks the run to stop and the footer says so;
+    // a second, while it is still busy, ends the TUI.
+    state.begin_run();
+    assert_eq!(state.interrupt(), Cancel::Stopping);
+    assert!(state.stopping());
+    assert!(state.footer.render().contains("● stopping…"));
+    assert_eq!(state.interrupt(), Cancel::ForceQuit);
+    assert!(state.busy, "the run is still winding down until it reports");
+
+    // Esc stops a run too, but it does not arm an exit: the Ctrl+C that
+    // follows still just confirms the stop, and only the next one leaves.
+    state.run_finished();
+    state.begin_run();
+    state.set_stopping(true); // what the loop's Esc arm does
+    assert_eq!(state.interrupt(), Cancel::Stopping);
+    assert_eq!(state.interrupt(), Cancel::ForceQuit);
+
+    // Any run ending clears the mark — completed, failed, or aborted.
+    state.run_finished();
+    assert!(!state.stopping());
+    assert!(state.footer.render().contains("○ ready"));
+    // And a new run does not inherit one.
+    state.begin_run();
+    state.set_stopping(true);
+    assert!(state.stopping());
+    state.begin_run();
+    assert!(!state.stopping(), "begin_run clears it");
+}
+
+/// The stopping mark belongs to a live run: idle, asking for it does
+/// nothing (Esc on an idle view leaves no mark, and Ctrl+C's own idle path
+/// is the draft/quit pair instead).
+#[test]
+fn stopping_only_means_something_while_busy() {
+    let mut state = state_with_history(&[]);
+    state.set_stopping(true);
+    assert!(!state.stopping());
+    assert!(state.footer.render().contains("○ ready"));
+    state.begin_run();
+    state.set_stopping(true);
+    assert!(state.stopping());
+    // `/new` ends it too: the mark is about a run, and a new session has
+    // none in flight.
+    state.new_session(None, false);
+    assert!(!state.stopping());
+    assert!(!state.history.browsing(), "/new ends a recall as well");
 }
 
 #[tokio::test]
@@ -656,6 +858,7 @@ fn seed_from_entries_rebuilds_the_blocks_the_event_stream_would() {
         131_072,
         std::sync::Arc::new(vec![]),
         std::sync::Arc::new(vec![]),
+        History::default(),
     );
     state.seed_from_entries(&entries);
 
@@ -735,6 +938,7 @@ async fn task_events_fold_into_the_view() {
             131_072,
             Arc::new(vec![]),
             Arc::new(vec![]),
+            History::default(),
         )
     };
     let mut state = fresh();

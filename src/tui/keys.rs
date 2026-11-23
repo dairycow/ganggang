@@ -11,7 +11,11 @@ pub enum KeyAction {
     Newline,
     Send,
     Abort,
-    Quit,
+    /// Ctrl+C: cancel what is happening — the run when one is in flight,
+    /// the draft when one is typed — and quit only when there is nothing
+    /// left to cancel. Never an unconditional quit (gap §5). The way out
+    /// on one's own terms stays `/quit`, a command rather than a key.
+    Interrupt,
     ToggleExpand,
     ToggleThinking,
     CopyAnswer,
@@ -28,10 +32,17 @@ pub enum KeyAction {
     KillToStart,
     CursorLeft,
     CursorRight,
-    /// ↓: suggestion next while the popup is open; cursor down otherwise.
-    SuggestNext,
-    /// ↑: suggestion previous while the popup is open; cursor up otherwise.
+    /// ↑: suggestion previous while the popup is open; history recall or
+    /// cursor up otherwise (the loop decides — see
+    /// [`history_for`](super::history::history_for)).
     SuggestPrev,
+    /// ↓: suggestion next while the popup is open; history recall, cursor
+    /// down, or nothing (same rule).
+    SuggestNext,
+    /// Ctrl+P / Ctrl+N: history recall whatever the composer holds, arrows
+    /// aside (readline's muscle memory, gap §4).
+    HistoryPrev,
+    HistoryNext,
     /// Tab while the suggestion popup is open.
     SuggestComplete,
     /// Ctrl+G: edit the draft in the external editor, which takes the
@@ -60,7 +71,7 @@ pub fn classify(key: KeyEvent) -> KeyAction {
         // rather than 'j'. Both mean the same key.
         KeyCode::Char('\n') if ctrl => KeyAction::Newline,
         KeyCode::Char('j') if ctrl => KeyAction::Newline,
-        KeyCode::Char('c') if ctrl => KeyAction::Quit,
+        KeyCode::Char('c') if ctrl => KeyAction::Interrupt,
         KeyCode::Char('o') if ctrl => KeyAction::ToggleExpand,
         KeyCode::Char('t') if ctrl => KeyAction::ToggleThinking,
         KeyCode::Char('x') if ctrl => KeyAction::CopyAnswer,
@@ -71,6 +82,10 @@ pub fn classify(key: KeyEvent) -> KeyAction {
         KeyCode::Char('e') if ctrl => KeyAction::LineEnd,
         KeyCode::Char('k') if ctrl => KeyAction::KillToEnd,
         KeyCode::Char('u') if ctrl => KeyAction::KillToStart,
+        // Readline's history, kept beside readline's line editing. Ctrl+P
+        // was unassigned; Ctrl+N was ignored.
+        KeyCode::Char('p') if ctrl => KeyAction::HistoryPrev,
+        KeyCode::Char('n') if ctrl => KeyAction::HistoryNext,
         KeyCode::Esc => KeyAction::Abort,
         KeyCode::Backspace => KeyAction::Backspace,
         KeyCode::Home => KeyAction::LineStart,

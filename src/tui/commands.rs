@@ -418,6 +418,7 @@ fn swap_agent(
 
 #[cfg(test)]
 mod tests {
+    use super::super::history::History;
     use super::*;
 
     #[test]
@@ -574,6 +575,7 @@ mod tests {
             131_072,
             std::sync::Arc::new(vec![]),
             std::sync::Arc::new(vec![]),
+            History::default(),
         );
         let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
         let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
@@ -629,6 +631,7 @@ mod tests {
             131_072,
             std::sync::Arc::new(vec![]),
             std::sync::Arc::new(vec![]),
+            History::default(),
         );
         let (mut input_tx2, _rx2) = tokio::sync::mpsc::channel(4);
         let ctx = CmdCtx {
@@ -667,6 +670,7 @@ mod tests {
             131_072,
             Arc::new(vec![]),
             Arc::new(vec![]),
+            History::default(),
         );
         let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
         let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
@@ -739,6 +743,7 @@ mod tests {
             131_072,
             Arc::new(vec![]),
             Arc::new(vec![]),
+            History::default(),
         );
         let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
         let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);

@@ -70,12 +70,17 @@ curl -s 127.0.0.1:8080/health
 
 Enter send · Alt+Enter / Ctrl+J newline (Shift+Enter too, where the
 terminal reports modified keys) · Ctrl+A / Ctrl+E line start/end · Ctrl+K
-/ Ctrl+U kill to line end/start · ←/→ move the cursor, ↑/↓ move between
-lines (and drive the `/` suggestion list while it is open) · Home/End
+/ Ctrl+U kill to line end/start · ←/→ move the cursor · ↑/↓ recall a prompt
+you already submitted, whenever the composer is empty or holds a single
+line (while the `/` suggestion list is open they drive it instead, and in a
+multi-line composer they move between lines) · Ctrl+P / Ctrl+N recall
+history whatever the composer holds · Home/End
 line start/end · Esc abort run · Ctrl+O expand
 tool calls · Ctrl+X copy last answer · Ctrl+T toggle thinking display ·
 Ctrl+G edit the draft in your external editor · Ctrl+R rebuild and restart
-(`--watch`) · PageUp/Down scroll · Ctrl+C quit.
+(`--watch`) · PageUp/Down scroll · Ctrl+C cancel — the run while one is in
+flight, the draft when one is typed, and the session only when there is
+nothing left to cancel; a second Ctrl+C in a row forces it out.
 
 **tmux:** Alt+Enter and Ctrl+J work as they are. Shift+Enter needs tmux's
 extended keys and a terminal that reports modified keys: add
@@ -88,6 +93,17 @@ Typing a `/` command opens a suggestion list above the editor (the
 built-ins, your `~/.gg/prompts/*.md` templates, and one row per skill
 once `/skill:` is typed): ↑/↓ move the highlight, Tab completes it,
 Enter still sends what you typed.
+
+**Prompt history:** everything you submit — a prompt, a `!`/`!!` shell line,
+a slash command except `/quit` — is remembered, newest last, in
+`~/.gg/history.jsonl` (one JSON string per line, `0600`, the newest 500
+kept). ↑/↓ walk it while the composer is empty or single-line; Ctrl+P /
+Ctrl+N walk it whatever the composer holds. The first ↑ saves what you were
+typing, and ↓ past the newest gives it back, so a recall never costs a
+draft. Recalled text is ordinary composer text: edit it and send it again.
+A run stopped by Ctrl+C shows `● stopping…` in the footer while it winds
+down; a second Ctrl+C ends the session, which is safe mid-run because the
+session file flushes per append.
 
 **External editor** (Ctrl+G): your draft opens in `$VISUAL`, else
 `$EDITOR`, else `nano` — arguments are fine (`code --wait`, for editors

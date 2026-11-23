@@ -169,6 +169,26 @@ impl Editor {
         self.text.split('\n').collect()
     }
 
+    /// The composer's logical lines. An empty composer counts as ZERO, so
+    /// a caller can tell "nothing typed" from "one line typed" without a
+    /// second look — the history keys are exactly that caller (see
+    /// [`history_for`](super::history::history_for)).
+    pub fn line_count(&self) -> usize {
+        if self.text.is_empty() {
+            0
+        } else {
+            self.text.split('\n').count()
+        }
+    }
+
+    /// Empty the composer — Ctrl+C at rest, when the draft is what stands
+    /// between the user and the shell. The text goes; nothing about it is
+    /// remembered here (submitting is what records history).
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.cursor = 0;
+    }
+
     /// The whole text — suggestion filtering reads the composer.
     pub fn text(&self) -> &str {
         &self.text
@@ -368,6 +388,24 @@ mod tests {
         // is untouched.
         ed.kill_to_start();
         assert_eq!(ed.lines(), vec!["one", "wo"]);
+    }
+
+    #[test]
+    fn clearing_empties_the_composer_and_the_line_count_counts() {
+        let mut ed = Editor::default();
+        assert_eq!(ed.line_count(), 0, "nothing typed");
+        ed.insert_str("one line");
+        assert_eq!(ed.line_count(), 1);
+        ed.insert_str("\nand another");
+        assert_eq!(ed.line_count(), 2);
+        ed.clear();
+        assert_eq!(ed.text(), "");
+        assert_eq!(ed.lines(), vec![""]);
+        assert_eq!(ed.line_count(), 0);
+        assert_eq!(ed.cursor_row_col(), (0, 0), "the cursor goes with it");
+        // And typing after a clear is ordinary typing.
+        ed.insert_str("again");
+        assert_eq!(ed.lines(), vec!["again"]);
     }
 
     #[test]

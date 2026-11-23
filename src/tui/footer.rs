@@ -13,6 +13,9 @@ pub struct Footer {
     /// `--watch` state, absent when not watching (dev mode only).
     watch: Option<String>,
     busy: bool,
+    /// Ctrl+C asked a running task to stop: still busy, but on the way out
+    /// (gap §5). The footer says so instead of the plain working mark.
+    stopping: bool,
 }
 
 impl Footer {
@@ -25,6 +28,7 @@ impl Footer {
             context_pct: None,
             watch: None,
             busy: false,
+            stopping: false,
         }
     }
 
@@ -54,14 +58,56 @@ impl Footer {
 
     pub fn set_busy(&mut self, busy: bool) {
         self.busy = busy;
+        // The stopping mark belongs to one run: it goes whenever the busy
+        // mark moves, in either direction, and a run asked to stop is
+        // marked again with [`set_stopping`](Self::set_stopping).
+        self.stopping = false;
+    }
+
+    /// The stopping mark goes with a busy run and nowhere else: a run that
+    /// ends (completed, failed, or aborted) clears it here as well.
+    pub fn set_stopping(&mut self, stopping: bool) {
+        self.stopping = stopping && self.busy;
+    }
+
+    /// The footer's last segment, separately: the renderer gives the
+    /// stopping mark its own colour, and asks for it rather than searching
+    /// a rendered string for it.
+    pub fn status_text(&self) -> &'static str {
+        if !self.busy {
+            return "○ ready";
+        }
+        if self.stopping {
+            "● stopping…"
+        } else {
+            "● working"
+        }
+    }
+
+    /// Whether the footer is showing the stopping mark.
+    pub fn stopping(&self) -> bool {
+        self.stopping
     }
 
     pub fn set_model(&mut self, model: &str) {
         self.model = model.to_string();
     }
 
-    /// e.g. `…/projects/ganggang │ qwen3.8 │ ↑305 ↓81 │ ctx 4% │ ● working`
+    /// The whole line at once: the assertion shape of the footer's tests.
+    /// The renderer wants [`render_split`](Self::render_split), which keeps
+    /// the status mark apart to style it.
+    #[cfg(test)]
     pub fn render(&self) -> String {
+        let (body, status) = self.render_split();
+        format!("{body}{status}")
+    }
+
+    /// e.g. `…/projects/ganggang │ qwen3.8 │ ↑305 ↓81 │ ctx 4% │ ● working`
+    ///
+    /// The footer in the two pieces the renderer needs: everything up to
+    /// the status mark, and the mark itself. The mark gets its own style
+    /// while a run is stopping; the rest of the line is one colour.
+    pub fn render_split(&self) -> (String, &'static str) {
         let context = self
             .context_pct
             .map(|pct| format!("│ ctx {pct}% "))
@@ -71,20 +117,11 @@ impl Footer {
             .as_deref()
             .map(|watch| format!("│ {watch} "))
             .unwrap_or_default();
-        format!(
-            "{} │ {} │ ↑{} ↓{} {}{}│ {}",
-            self.cwd_short,
-            self.model,
-            self.tokens_in,
-            self.tokens_out,
-            context,
-            watch,
-            if self.busy {
-                "● working"
-            } else {
-                "○ ready"
-            }
-        )
+        let body = format!(
+            "{} │ {} │ ↑{} ↓{} {}{}│ ",
+            self.cwd_short, self.model, self.tokens_in, self.tokens_out, context, watch,
+        );
+        (body, self.status_text())
     }
 }
 
@@ -117,6 +154,24 @@ mod tests {
         assert!(rendered.contains("● working"));
         f.set_busy(false);
         assert!(f.render().contains("○ ready"));
+    }
+
+    #[test]
+    fn a_run_asked_to_stop_says_so_in_the_footer() {
+        let mut f = Footer::new(Path::new("/home/user/Projects/ganggang"), "qwen3.8");
+        f.set_busy(true);
+        assert!(f.render().contains("● working"));
+        f.set_stopping(true);
+        let rendered = f.render();
+        assert!(rendered.contains("● stopping…"), "{rendered}");
+        assert!(!rendered.contains("● working"), "{rendered}");
+        // Stopping is a state of a live run: it does not outlive it.
+        f.set_busy(false);
+        let ready = f.render();
+        assert!(ready.contains("○ ready"), "{ready}");
+        assert!(!ready.contains("stopping"), "{ready}");
+        f.set_busy(true);
+        assert!(f.render().contains("● working"), "and it is off after that");
     }
 
     #[test]

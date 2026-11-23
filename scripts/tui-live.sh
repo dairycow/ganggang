@@ -108,10 +108,18 @@ gg_pid() { # this session's gg — a match on the binary alone would be any gg o
 
 # What the pane's terminal looks like once gg has quit. This is where an
 # editor that never put the terminal back would show: gg has to leave the
-# shell a cooked tty with no modes left on, whatever the editor did.
+# shell a cooked tty with no alternate screen and no modes left on,
+# whatever the editor did.
 quit_and_check() { # quit_and_check <label>
   local label=$1 deadline
+  # Ctrl+C cancels rather than quits: with a draft it clears it, with a run
+  # in flight it stops the run, and the SECOND press ends gg. Press once,
+  # and again only if the run is still there — one press is enough when the
+  # composer was already empty.
   keys C-c
+  deadline=$((SECONDS + 4))
+  while ((SECONDS < deadline)); do grep -q '^gg-exit=' "$WORK/gg-exit.log" 2>/dev/null && break; sleep 0.1; done
+  if ! grep -q '^gg-exit=' "$WORK/gg-exit.log" 2>/dev/null; then keys C-c; fi
   deadline=$((SECONDS + 10))
   while ((SECONDS < deadline)); do grep -q '^gg-exit=' "$WORK/gg-exit.log" 2>/dev/null && break; sleep 0.1; done
   if grep -q '^gg-exit=0$' "$WORK/gg-exit.log" 2>/dev/null; then ok "$label.1" "gg exited cleanly"
@@ -361,7 +369,7 @@ killed_nvim_case() { # killed_nvim_case <label> <extended-keys: off|on>
   [[ "$(line)" == "before7" ]] && ok "$L.3" "a numpad key types its digit" || bad "$L.3" "composer" "$(composer)"
   keys -l 'Q'; wait_for 'before7Q' 3 || true
   [[ "$(line)" == "before7Q" ]] && ok "$L.4" "typing works" || bad "$L.4" "composer" "$(composer)"
-  finish "$L.5"                                    # .1: Ctrl+C still quits gg
+  finish "$L.5"                                    # .1: Ctrl+C twice still quits gg
   EXT_KEYS=off
 }
 if command -v nvim >/dev/null; then
