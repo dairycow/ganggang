@@ -1,6 +1,10 @@
 //! Degradation-path scripts: malformed arguments, abort mid-batch,
 //! truncation and empty-content warnings — where the loop must degrade
-//! visibly and keep running (§9, §17).
+//! visibly and keep running (§9, §17). The truncated-turn scripts (a
+//! `length` finish, a cut stream, the continuation budget) are in
+//! [`continuation`], same contract, its own file, per the module budget.
+
+mod continuation;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -132,36 +136,6 @@ async fn abort_mid_batch_stops_before_next_dispatch() {
     assert_eq!(
         aborted_result.content.as_deref(),
         Some("aborted before execution")
-    );
-}
-
-#[tokio::test]
-async fn length_finish_reason_emits_a_truncation_warning() {
-    let body = json!({
-        "choices": [{
-            "message": {"role": "assistant", "content": "partial answ"},
-            "finish_reason": "length",
-        }],
-        "usage": null,
-    })
-    .to_string();
-    let server = FakeServer::spawn(vec![body]);
-
-    let (result, _, events) = drive(&server.base_url, Registry::new(), "hi").await;
-
-    assert!(result.is_ok());
-    let values = event_values(&events);
-    assert!(
-        values.iter().any(|e| e["type"] == "warned"
-            && e["message"]
-                .as_str()
-                .unwrap()
-                .contains("truncated by max_tokens")),
-        "§17: truncation must be visible, got {values:?}"
-    );
-    assert_eq!(
-        values.last().unwrap(),
-        &json!({"type": "run_ended", "turns": 1})
     );
 }
 

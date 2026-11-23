@@ -1,4 +1,7 @@
-//! SSE decoding for Anthropic `/v1/messages` streaming responses.
+//! SSE decoding for Anthropic Messages (`/v1/messages`) streaming responses
+//! — the same salvage contract as [`crate::llm::stream`]: a body that ends
+//! before `message_stop` comes back with what assembled and
+//! `complete: false`, and only an empty partial is an error.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -8,7 +11,7 @@ use anyhow::Context;
 use serde_json::Value;
 
 use super::map_stop_reason;
-use crate::llm::stream::{Delta, LineBuffer};
+use crate::llm::stream::{Delta, LineBuffer, StreamOutcome, salvageable};
 use crate::llm::types::{ChatMessage, ChatResponse, Choice, ToolCall, Usage};
 
 #[derive(Default)]
@@ -227,7 +230,7 @@ impl AnthropicAssembler {
 pub(crate) async fn drain_sse(
     mut response: reqwest::Response,
     mut on_delta: impl FnMut(Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
-) -> anyhow::Result<ChatResponse> {
+) -> anyhow::Result<StreamOutcome> {
     let mut lines = LineBuffer::new();
     let mut assembler = AnthropicAssembler::default();
     let mut current_event: Option<String> = None;
@@ -274,11 +277,17 @@ pub(crate) async fn drain_sse(
         }
     }
 
+    let assembled = assembler.finish();
     if !done {
-        anyhow::bail!(
-            "Anthropic SSE stream ended without message_stop — the connection was cut mid-generation \
-             (partial output discarded; retry the run)"
+        anyhow::ensure!(
+            salvageable(&assembled),
+            "Anthropic SSE stream ended without message_stop and assembled nothing — the \
+             connection was cut before the model produced anything (nothing to salvage; \
+             retry the run)"
         );
     }
-    Ok(assembler.finish())
+    Ok(StreamOutcome {
+        response: assembled,
+        complete: done,
+    })
 }

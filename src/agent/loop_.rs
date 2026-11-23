@@ -2,20 +2,26 @@
 //!
 //! Straight-line async on purpose. Tool failures are values the model can
 //! read; only transport and session errors propagate. There is no turn cap
-//! — a runaway loop is stopped by the user via the abort flag.
+//! — a runaway loop is stopped by the user via the abort flag. The one
+//! exception is the continuation budget ([`cut`]): a truncated answer earns
+//! a bounded number of "keep going" turns, then the run ends cleanly.
 
 use std::sync::atomic::Ordering;
 
 use tokio::sync::mpsc::Sender;
 
 use crate::events::AgentEvent;
+use crate::llm::stream::StreamOutcome;
 use crate::llm::types::ChatMessage;
 
 use super::Agent;
 use super::compaction;
 use super::hooks::PreOutcome;
-use super::session::{self, Entry, Message, Role, last_entry_id};
+use super::session::{self, Role};
 use super::tools::ToolResult;
+
+mod cut;
+mod record;
 
 impl Agent {
     /// Run one user input to completion: turn 1 asks the model, tool calls
@@ -46,6 +52,8 @@ impl Agent {
         }
 
         let mut turns = 0u32;
+        // Continuations this run has spent on a truncated answer (§ cut).
+        let mut continuations = 0u32;
         loop {
             turns += 1;
             events.send(AgentEvent::TurnStarted).await?;
@@ -64,7 +72,7 @@ impl Agent {
                 ..ChatMessage::default()
             }];
             messages.extend(session::to_wire_with(&self.entries, self.replay_reasoning));
-            let response = if self.stream {
+            let outcome = if self.stream {
                 // Deltas ride the stream read: `AssistantText` events land
                 // as tokens arrive, with the callback's boxed future giving
                 // the event channel real backpressure. A closed consumer
@@ -95,31 +103,40 @@ impl Agent {
                     )
                     .await?
             } else {
-                self.client
-                    .send(
-                        &self.model,
-                        &messages,
-                        self.max_tokens,
-                        &self.tools.declarations(),
-                    )
-                    .await?
+                // The non-streaming path is complete by construction: the
+                // whole body arrived in one parse.
+                StreamOutcome {
+                    response: self
+                        .client
+                        .send(
+                            &self.model,
+                            &messages,
+                            self.max_tokens,
+                            &self.tools.declarations(),
+                        )
+                        .await?,
+                    complete: true,
+                }
             };
             // Read before `from_response` consumes the response: the wire
             // type stays the single place finish reasons exist.
-            let truncated = response
+            let truncated = outcome
+                .response
                 .choices
                 .first()
                 .and_then(|c| c.finish_reason.as_deref())
                 == Some("length");
-            let (message, warnings) = session::from_response(response)?;
-            // §17: a length finish is a truncation — visible, never silent.
-            if truncated {
-                events
-                    .send(AgentEvent::Warned {
-                        message: format!("response truncated by max_tokens={}", self.max_tokens),
-                    })
-                    .await?;
-            }
+            // A `length` finish explains itself even when the stream ended
+            // cleanly, so it outranks the cut; either way the answer is a
+            // prefix and the turn is short.
+            let short = if truncated {
+                Some(cut::Cut::MaxTokens)
+            } else if !outcome.complete {
+                Some(cut::Cut::StreamCut)
+            } else {
+                None
+            };
+            let (message, warnings) = session::from_response(outcome.response)?;
             for warning in warnings {
                 events.send(AgentEvent::Warned { message: warning }).await?;
             }
@@ -143,6 +160,47 @@ impl Agent {
                             delta: text.clone(),
                         })
                         .await?;
+                }
+            }
+
+            // GAP 2 + GAP 11: a stream cut or a `length` finish means what
+            // arrived is a PREFIX of an answer, not an answer. Keep it (it
+            // is already persisted and, on the streaming path, already on
+            // the user's screen) and ask for the rest — bounded, visible,
+            // and never by replaying the partial's tool calls.
+            if let Some(cut) = short {
+                match self
+                    .handle_cut(
+                        cut,
+                        &message
+                            .tool_calls
+                            .iter()
+                            .map(|c| c.id.clone())
+                            .collect::<Vec<_>>(),
+                        &mut continuations,
+                        &messages,
+                        events,
+                        &mut noop_compaction_warned,
+                    )
+                    .await?
+                {
+                    // `handle_cut` already sent the TurnEnded carrying the
+                    // stop reason that names the truncation.
+                    cut::After::Continue => continue,
+                    cut::After::EndRun => break,
+                    cut::After::Aborted => {
+                        // The continuation was a request the user had
+                        // already disowned; the loop's abort shape finishes
+                        // the run with every entry it has.
+                        self.push_message(Role::User, Some("[aborted by user]".into()))?;
+                        events
+                            .send(AgentEvent::Warned {
+                                message: "run aborted".into(),
+                            })
+                            .await?;
+                        events.send(AgentEvent::RunAborted).await?;
+                        return Ok(());
+                    }
                 }
             }
 
@@ -302,53 +360,6 @@ impl Agent {
         }
         events.send(AgentEvent::RunEnded { turns }).await?;
         Ok(())
-    }
-}
-
-impl Agent {
-    /// Entries form a linear chain: each new one names the previous as
-    /// parent. The entry is persisted BEFORE it joins the in-memory log —
-    /// flush-per-append is the crash-safety contract (§13) — and session
-    /// I/O errors abort the run (§17).
-    fn push_entry(&mut self, message: Message) -> anyhow::Result<()> {
-        let parent = self.entries.last().map(last_entry_id);
-        let entry = Entry::Message {
-            id: session::new_entry_id(),
-            parent_id: parent,
-            timestamp: session::now_iso(),
-            message,
-        };
-        if let Some(store) = &mut self.store {
-            store.append(&entry)?;
-        }
-        self.entries.push(entry);
-        Ok(())
-    }
-
-    fn push_message(&mut self, role: Role, content: Option<String>) -> anyhow::Result<()> {
-        self.push_entry(Message {
-            role,
-            content,
-            tool_calls: Vec::new(),
-            tool_call_id: None,
-            usage: None,
-            is_error: false,
-            reasoning: None,
-        })
-    }
-}
-
-impl Agent {
-    fn push_tool_result(&mut self, call_id: &str, result: &ToolResult) -> anyhow::Result<()> {
-        self.push_entry(Message {
-            role: Role::ToolResult,
-            content: Some(result.output.clone()),
-            tool_calls: Vec::new(),
-            tool_call_id: Some(call_id.to_string()),
-            usage: None,
-            is_error: result.is_error,
-            reasoning: None,
-        })
     }
 }
 

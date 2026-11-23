@@ -31,7 +31,8 @@ curl -s 127.0.0.1:8080/health
 
 - **Agent loop** (§09 of the design): request → tool calls → results → repeat
   until answered. Sequential tool execution, streaming responses, abort with
-  Esc. No turn cap — you are the runaway check.
+  Esc. No turn cap — you are the runaway check; a truncated answer is the one
+  exception, continued at most 3 times. A cut stream keeps its partial answer.
 - **Tools** (§10): `read`, `bash`, `edit`, `write` — plus `grep`, `find`,
   `ls` for search. Plain values in and out; every truncation is visible in
   the output; tool failures are values the model reacts to, never crashes.
@@ -103,7 +104,8 @@ context (`!!` doesn't).
 
 Precedence: CLI flags (`-P`/`--provider`, `-m`/`--model`, `--tools`) > environment
 (`GG_PROVIDER`, `GG_BASE_URL`, `GG_MODEL`, `GG_MAX_TOKENS`, `GG_API_KEY`,
-`GG_CONTEXT_WINDOW`, `GG_BASH_TIMEOUT`, `GG_MAX_RETRIES`, `GG_DEBUG_PROMPT=1` to dump the
+`GG_CONTEXT_WINDOW`, `GG_BASH_TIMEOUT`, `GG_MAX_RETRIES`, `GG_REQUEST_TIMEOUT`,
+`GG_DEBUG_PROMPT=1` to dump the
 assembled system prompt to stderr, plus provider env vars `ZHIPU_API_KEY`,
 `OPENCODE_API_KEY`, `DEEPSEEK_API_KEY`) > `.gg/config.toml` >
 `~/.gg/config.toml` > defaults.
@@ -113,9 +115,23 @@ timeouts, and HTTP 408/429/5xx earn up to `max_retries` extra attempts
 (default 3) with exponential backoff from 500 ms and a little jitter, and a
 provider's `Retry-After` (seconds, capped at 30 s) wins over the backoff.
 Any other 4xx fails at once, and a stream that already delivered a delta is
-never replayed — a cut mid-answer stays a cut, never a duplicated answer.
+never replayed — a cut mid-answer never becomes a duplicated answer.
 Each retry prints a `warning:` line to stderr; nothing above the HTTP client
 has to know retries happened. `max_retries = 0` turns retrying off.
+
+One LLM request gets `request_timeout_secs` (default 600) for its whole
+response — head and body, so a stream too — and connecting stays a fixed
+10 s. A stream whose body ends before the protocol says it is done, and an
+answer that hits `max_tokens` (`finish_reason: length`), are both kept and
+continued: the partial answer stays on screen and in the session, the loop
+appends "continue exactly where you stopped", and the run asks again — at
+most 3 times per run. Tool calls from a truncated turn are never executed;
+each gets an `is_error` result ("not executed: response was truncated") so
+the replayed session stays valid. A continued turn's `turn_ended` event
+carries `stop_reason: "length"` or `"stream_cut"` instead of `"stop"`, and
+print mode prints the pieces as one answer. Every case warns and the turn
+ends cleanly once the budget is spent — never a hang, never an unbounded
+loop.
 
 Built-in providers: `strata` (local default), `glm-coding-plan` (Z.AI,
 alias `zai-coding-plan`), `opencode-go` (routes OpenAI Completions and
@@ -135,6 +151,7 @@ max_tokens = 4096
 context_window = 131072   # match `strata launch --context`
 bash_timeout_secs = 30
 max_retries = 3           # extra attempts on a transient transport failure
+request_timeout_secs = 600  # whole-response timeout (a stream included)
 tools = ["read", "bash", "edit", "write", "grep", "find", "ls"]
 
 [providers.strata]

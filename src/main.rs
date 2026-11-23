@@ -466,7 +466,9 @@ fn build_agent(
     store: Option<agent::session::io::SessionStore>,
     hooks: &agent::hooks::Hooks,
 ) -> anyhow::Result<Agent> {
-    let client = LlmClient::from_endpoint(endpoint)?.with_retry(cfg.max_retries);
+    let client = LlmClient::from_endpoint(endpoint)?
+        .with_retry(cfg.max_retries)
+        .with_request_timeout(cfg.request_timeout_secs);
     let mut registry = default_registry(cwd.to_path_buf(), cfg.bash_timeout_secs);
     let allowlist = config::resolve_tools(
         cli.tools.clone(),

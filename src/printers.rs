@@ -39,6 +39,10 @@ pub struct Printer {
     /// terminal, not in a redirected/piped stderr. Off ⇒ deltas render
     /// nothing (well-behaved-CLI rule; other progress lines stay).
     spin: bool,
+    /// The last turn ended short (cut stream or `length`) and the loop is
+    /// continuing it, so the next turn's deltas finish THIS answer —
+    /// print mode's stdout must show one answer, not just the tail.
+    continued: bool,
 }
 
 impl Default for Printer {
@@ -56,6 +60,7 @@ impl Printer {
             spinner: 0,
             spinner_open: false,
             spin: true,
+            continued: false,
         }
     }
 
@@ -97,7 +102,16 @@ impl Printer {
                 self.turn += 1;
                 vec![format!("── turn {} ──", self.turn)]
             }
-            AgentEvent::TurnEnded { .. } => Vec::new(),
+            AgentEvent::TurnEnded { stop_reason } => {
+                // Stop reasons that mean "this answer was cut" (see
+                // `events::STOP_*`): the loop is continuing it, so the text
+                // accumulated so far must survive the turn boundary.
+                self.continued = matches!(
+                    stop_reason.as_str(),
+                    crate::events::STOP_LENGTH | crate::events::STOP_STREAM_CUT
+                );
+                Vec::new()
+            }
             // §15, M7.3: print mode never shows thinking — not even a
             // marker; stdout stays the answer, stderr stays progress.
             AgentEvent::Thinking { .. } => Vec::new(),
@@ -157,6 +171,13 @@ impl Printer {
     }
 
     fn close_turn(&mut self) {
+        if self.continued {
+            // A continuation: this turn's deltas finish the previous
+            // answer, so `current` stays where it is and the pieces
+            // accumulate into one answer.
+            self.continued = false;
+            return;
+        }
         if !self.current.is_empty() {
             self.answer = std::mem::take(&mut self.current);
         }
@@ -345,6 +366,38 @@ mod tests {
             }],
         );
         assert_eq!(lines, vec!["warning: response truncated"]);
+    }
+
+    /// A continued answer (cut stream or `length`, then the loop asks for
+    /// the rest) prints as ONE answer: the pieces accumulate instead of
+    /// the last turn replacing the earlier one.
+    #[test]
+    fn a_continued_answer_is_printed_as_one_answer() {
+        let mut p = Printer::new();
+        render(
+            &mut p,
+            vec![
+                AgentEvent::TurnStarted,
+                AgentEvent::AssistantText {
+                    delta: "half an".into(),
+                },
+                AgentEvent::Warned {
+                    message: "stream ended early; continuing from the partial answer (1/3)".into(),
+                },
+                AgentEvent::TurnEnded {
+                    stop_reason: "stream_cut".into(),
+                },
+                AgentEvent::TurnStarted,
+                AgentEvent::AssistantText {
+                    delta: "swer".into(),
+                },
+                AgentEvent::TurnEnded {
+                    stop_reason: "stop".into(),
+                },
+                AgentEvent::RunEnded { turns: 2 },
+            ],
+        );
+        assert_eq!(p.answer(), "half answer");
     }
 
     #[test]

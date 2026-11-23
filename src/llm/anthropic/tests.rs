@@ -196,7 +196,7 @@ async fn anthropic_client_sends_headers_and_handles_sse_errors() {
         s.write_all(resp.as_bytes()).unwrap();
         drop(s);
 
-        // 2. Truncated stream (no message_stop)
+        // 2. Truncated stream (no message_stop, nothing assembled)
         let (mut s, _) = listener.accept().unwrap();
         let _ = s.read(&mut buf);
         let resp = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"type\":\"ping\"}\n\n";
@@ -216,11 +216,15 @@ async fn anthropic_client_sends_headers_and_handles_sse_errors() {
         .with_auth(AuthStyle::Auto)
         .with_api_key(Some("secret-k".into()));
 
-    let resp = client
+    let outcome = client
         .send_stream("claude-haiku-5-5", &[], 64, &[], |_| Box::pin(async {}))
         .await
         .unwrap();
-    assert_eq!(resp.choices[0].message.content.as_deref(), Some("ok"));
+    assert!(outcome.complete, "message_stop was seen");
+    assert_eq!(
+        outcome.response.choices[0].message.content.as_deref(),
+        Some("ok")
+    );
     let raw_req = seen_headers.lock().unwrap().to_ascii_lowercase();
     assert!(raw_req.contains("post /v1/messages "), "{raw_req}");
     assert!(raw_req.contains("x-api-key: secret-k"), "{raw_req}");
@@ -243,4 +247,92 @@ async fn anthropic_client_sends_headers_and_handles_sse_errors() {
         .await
         .unwrap_err();
     assert!(err_ev.to_string().contains("slow down"), "{err_ev:#}");
+}
+
+/// The same salvage rule as the OpenAI stream (GAP 2): a body cut before
+/// `message_stop` keeps what it assembled and reports `complete: false`
+/// with the usage seen so far; a cut that assembled nothing still errors.
+#[tokio::test]
+async fn an_anthropic_stream_cut_mid_text_is_salvaged() {
+    let body = concat!(
+        "event: message_start\n",
+        "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":4,\"output_tokens\":0}}}\n\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"half an\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"swer\"}}\n\n",
+    );
+    let server = CutServer::spawn(vec![
+        body.to_string(),
+        "data: {\"type\":\"ping\"}\n\n".to_string(),
+    ]);
+    let client = LlmClient::new(&server.base_url)
+        .unwrap()
+        .with_api(ApiKind::AnthropicMessages);
+
+    let outcome = client
+        .send_stream("claude-haiku-5-5", &[], 64, &[], |_| Box::pin(async {}))
+        .await
+        .unwrap();
+    assert!(!outcome.complete, "no message_stop, so not complete");
+    assert_eq!(
+        outcome.response.choices[0].message.content.as_deref(),
+        Some("half answer"),
+        "the text assembled before the cut survives"
+    );
+    assert_eq!(
+        outcome.response.usage.unwrap().prompt_tokens,
+        4,
+        "usage seen before the cut is kept"
+    );
+
+    let err = client
+        .send_stream("claude-haiku-5-5", &[], 64, &[], |_| Box::pin(async {}))
+        .await
+        .unwrap_err();
+    let rendered = format!("{err:#}");
+    assert!(
+        rendered.contains("without message_stop") && rendered.contains("assembled nothing"),
+        "unexpected error: {rendered}"
+    );
+}
+
+/// Serves one SSE body per connection, then closes — a clean EOF standing
+/// in for a server that died mid-generation.
+struct CutServer {
+    base_url: String,
+}
+
+impl CutServer {
+    fn spawn(bodies: Vec<String>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for body in bodies {
+                let (mut stream, _) = listener.accept().unwrap();
+                read_anthropic_request_head(&mut stream);
+                let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+                stream.write_all(head.as_bytes()).unwrap();
+                for piece in body.as_bytes().chunks(7) {
+                    stream.write_all(piece).unwrap();
+                }
+                drop(stream);
+            }
+        });
+        Self {
+            base_url: format!("http://{addr}"),
+        }
+    }
+}
+
+fn read_anthropic_request_head(stream: &mut std::net::TcpStream) {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+        let n = stream.read(&mut chunk).unwrap();
+        assert!(n > 0, "connection closed before headers finished");
+        buf.extend_from_slice(&chunk[..n]);
+    }
 }

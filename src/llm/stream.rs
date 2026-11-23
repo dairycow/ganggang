@@ -13,6 +13,11 @@
 //! (verified live) also emits `: keep-alive` comment lines, a final
 //! `choices: []` chunk carrying `usage`, and non-standard `timings`
 //! objects the permissive wire types ignore.
+//!
+//! A body that ends before its sentinel is salvage, not loss (GAP 2): the
+//! user has already watched most of an answer stream in, so
+//! [`drain_sse`] reports what assembled plus `complete: false` and lets
+//! the loop continue the answer instead of throwing the turn away.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -184,6 +189,21 @@ impl Assembler {
     }
 }
 
+/// What a finished stream produced: the assembled response, and whether
+/// the wire said so.
+///
+/// `complete` is true only when the protocol's sentinel (`[DONE]`,
+/// `message_stop`) arrived. A cut body that assembled text, thinking or
+/// tool calls still comes back `Ok` — discarding an answer the user has
+/// already watched stream in is the wrong trade (GAP 2) — and the loop
+/// uses the flag to ask for the rest. A cut that assembled *nothing* is
+/// an error: there is nothing to salvage and nothing to continue from.
+#[derive(Debug, PartialEq)]
+pub struct StreamOutcome {
+    pub response: ChatResponse,
+    pub complete: bool,
+}
+
 /// Byte-level line splitter. Network chunks do not respect line (or UTF-8
 /// character) boundaries, so partial bytes are held back until their line
 /// completes; decoding happens per complete line only, which is what keeps
@@ -220,15 +240,18 @@ impl LineBuffer {
 /// through `on_delta` as they arrive, and assemble the final
 /// `ChatResponse`.
 ///
-/// A stream that ends without the `[DONE]` sentinel is a transport
-/// error (§17: every truncation is visible, never silently accepted):
-/// Strata serves SSE with `Connection: close` and no framing checksum,
-/// so a mid-generation server death arrives as a clean EOF that would
-/// otherwise pass for a complete answer.
+/// A stream that ends without the `[DONE]` sentinel is reported, never
+/// silently accepted (§17) and never thrown away (GAP 2): Strata serves
+/// SSE with `Connection: close` and no framing checksum, so a
+/// mid-generation server death arrives as a clean EOF. What assembled so
+/// far comes back with `complete: false`; only an empty partial — nothing
+/// text, thinking or tool-call shaped — is an error worth failing the run
+/// for. (An `Err` also stays the verdict for malformed chunks: a provider
+/// whose JSON does not parse is not a salvageable truncation.)
 pub(super) async fn drain_sse(
     mut response: reqwest::Response,
     mut on_delta: impl FnMut(Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
-) -> anyhow::Result<ChatResponse> {
+) -> anyhow::Result<StreamOutcome> {
     let mut lines = LineBuffer::new();
     let mut assembler = Assembler::default();
     let mut done = false;
@@ -256,13 +279,41 @@ pub(super) async fn drain_sse(
             }
         }
     }
+    let response = assembler.finish();
     if !done {
-        anyhow::bail!(
-            "SSE stream ended without [DONE] — the connection was cut mid-generation \
-             (partial output discarded; retry the run)"
+        anyhow::ensure!(
+            salvageable(&response),
+            "SSE stream ended without [DONE] and assembled nothing — the connection was \
+             cut before the model produced anything (nothing to salvage; retry the run)"
         );
     }
-    Ok(assembler.finish())
+    Ok(StreamOutcome {
+        response,
+        complete: done,
+    })
+}
+
+/// Whether an assembled response is worth keeping when its stream was
+/// cut: any visible text, thinking, or tool call counts.
+pub(super) fn salvageable(response: &ChatResponse) -> bool {
+    response.choices.iter().any(|choice| {
+        choice
+            .message
+            .content
+            .as_deref()
+            .is_some_and(|text| !text.is_empty())
+            || choice
+                .message
+                .reasoning_content
+                .as_deref()
+                .is_some_and(|text| !text.is_empty())
+            || choice
+                .message
+                .reasoning
+                .as_deref()
+                .is_some_and(|text| !text.is_empty())
+            || !choice.message.tool_calls.is_empty()
+    })
 }
 
 #[cfg(test)]

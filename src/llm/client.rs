@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::anthropic;
 use super::retry::{self, Backoff, Verdict};
-use super::stream;
+use super::stream::{self, StreamOutcome};
 use super::types::{ChatMessage, ChatRequest, ChatResponse, StreamOptions};
 use super::{ApiKind, AuthStyle};
 
@@ -25,6 +25,10 @@ pub struct LlmClient {
     session_header: Option<String>,
     /// The retry budget for transient transport failures (§ client docs).
     retry: Backoff,
+    /// The whole-response timeout carried on every request — response head
+    /// AND body, so it bounds a stream too. Generations longer than a few
+    /// minutes are the reason it is a setting (GAP 2), not a constant.
+    request_timeout: Duration,
 }
 
 impl LlmClient {
@@ -35,9 +39,10 @@ impl LlmClient {
             http: reqwest::Client::builder()
                 // reqwest has NO timeout by default: a wedged model server would
                 // hang gg forever. Two separate ones matter — connecting is a
-                // different failure from a slow response.
+                // different failure from a slow response. The whole-response
+                // timeout is set per request instead (see `request_timeout`),
+                // so it can be re-derived per attempt and configured.
                 .connect_timeout(Duration::from_secs(10))
-                .timeout(Duration::from_secs(300))
                 .user_agent(concat!("ganggang/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .context("building http client")?,
@@ -50,6 +55,7 @@ impl LlmClient {
             session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
             session_header,
             retry: Backoff::default(),
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
         })
     }
 
@@ -97,6 +103,20 @@ impl LlmClient {
     /// endpoint switch rebuilds it.
     pub fn max_retries(&self) -> u32 {
         self.retry.max_retries
+    }
+
+    /// Set the whole-response timeout (config `request_timeout_secs` /
+    /// `GG_REQUEST_TIMEOUT`). It replaces the old fixed 300 s, which
+    /// guillotined long generations mid-stream.
+    pub fn with_request_timeout(mut self, secs: u64) -> Self {
+        self.request_timeout = Duration::from_secs(secs.max(1));
+        self
+    }
+
+    /// The whole-response timeout this client was built with — carried over
+    /// when an endpoint switch rebuilds it, like the retry budget.
+    pub fn request_timeout_secs(&self) -> u64 {
+        self.request_timeout.as_secs()
     }
 
     /// Test seam: decide like production, never sleep.
@@ -164,6 +184,7 @@ impl LlmClient {
                             .post(format!("{}/chat/completions", self.base_url))
                             .json(&body),
                     ),
+                    self.request_timeout,
                 )?;
                 let resp = self.post(&url, request).await?;
                 resp.json()
@@ -179,6 +200,7 @@ impl LlmClient {
                             .header("anthropic-version", anthropic::ANTHROPIC_VERSION),
                     )
                     .json(&body),
+                    self.request_timeout,
                 )?;
                 let resp = self.post(&url, request).await?;
                 let raw: Value = resp
@@ -193,11 +215,11 @@ impl LlmClient {
     /// Streaming variant of [`LlmClient::send`] (spec §15, M5): the request
     /// carries `stream: true`, deltas (text and thinking, M7.3) are
     /// delivered through `on_delta` as they arrive, and the return value
-    /// is the response the chunks assembled into — identical to what
+    /// is the response the chunks assembled plus whether the wire said the
+    /// stream finished ([`StreamOutcome`], GAP 2) — the response is what
     /// [`LlmClient::send`] would have returned, so callers do not change
-    /// shape. The client's 300 s request timeout still applies, now
-    /// spanning the whole streamed body (§17: everything that can hang
-    /// has a number).
+    /// shape. The whole-response timeout applies here too, now spanning the
+    /// whole streamed body (§17: everything that can hang has a number).
     ///
     /// Retrying follows the same rules as [`LlmClient::send`] for the
     /// request itself: a 500 before a single byte of SSE is worth another
@@ -211,7 +233,7 @@ impl LlmClient {
         max_tokens: u32,
         tools: &[Value],
         on_delta: impl FnMut(stream::Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
-    ) -> anyhow::Result<ChatResponse> {
+    ) -> anyhow::Result<StreamOutcome> {
         let (url, request) = match self.api {
             ApiKind::OpenAiCompletions => {
                 let body = ChatRequest {
@@ -231,6 +253,7 @@ impl LlmClient {
                             .post(format!("{}/chat/completions", self.base_url))
                             .json(&body),
                     ),
+                    self.request_timeout,
                 )?
             }
             ApiKind::AnthropicMessages => {
@@ -242,6 +265,7 @@ impl LlmClient {
                             .header("anthropic-version", anthropic::ANTHROPIC_VERSION),
                     )
                     .json(&body),
+                    self.request_timeout,
                 )?
             }
         };
@@ -347,11 +371,22 @@ struct Failure {
     error: anyhow::Error,
 }
 
+/// The whole-response timeout used when config says nothing.
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// Finish a request once, so every attempt replays the identical bytes.
 /// `RequestBuilder::send` consumes the builder, and a retry has to be the
 /// same request — same body, same headers — not a re-derivation of it.
-fn build_request(builder: reqwest::RequestBuilder) -> anyhow::Result<(String, reqwest::Request)> {
-    let request = builder.build().context("building request")?;
+/// The timeout rides the request (not the client) so the setting is a
+/// number this function can be tested on.
+fn build_request(
+    builder: reqwest::RequestBuilder,
+    timeout: Duration,
+) -> anyhow::Result<(String, reqwest::Request)> {
+    let request = builder
+        .timeout(timeout)
+        .build()
+        .context("building request")?;
     let url = request.url().to_string();
     Ok((url, request))
 }
@@ -388,235 +423,10 @@ fn is_opencode_url(base_url: &str) -> bool {
     host == "opencode.ai" || host.ends_with(".opencode.ai")
 }
 
+/// Streaming retry tests: the request half retries, the body half never
+/// does, and a cut body is salvage rather than loss (GAP 2).
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+mod stream_tests;
 
-    /// A scripted server that answers one raw response per connection and
-    /// counts the connections it accepted — the attempt count, asserted
-    /// rather than assumed. `Connection: close` on every response keeps
-    /// connections and responses in step, retries included.
-    struct Scripted {
-        base_url: String,
-        attempts: Arc<AtomicUsize>,
-    }
-
-    impl Scripted {
-        fn spawn(responses: Vec<String>) -> Self {
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let addr = listener.local_addr().unwrap();
-            let attempts = Arc::new(AtomicUsize::new(0));
-            let counted = attempts.clone();
-            std::thread::spawn(move || {
-                for response in responses {
-                    let (mut stream, _) = listener.accept().unwrap();
-                    counted.fetch_add(1, Ordering::SeqCst);
-                    read_request_head(&mut stream);
-                    stream.write_all(response.as_bytes()).unwrap();
-                    drop(stream);
-                }
-            });
-            Self {
-                base_url: format!("http://{addr}"),
-                attempts,
-            }
-        }
-
-        /// A client that decides exactly like production but never sleeps,
-        /// so retry tests stay instant.
-        fn client(&self) -> LlmClient {
-            LlmClient::new(&self.base_url)
-                .unwrap()
-                .with_retry_delay(Duration::ZERO)
-        }
-    }
-
-    fn read_request_head(stream: &mut std::net::TcpStream) {
-        let mut buf = Vec::new();
-        let mut chunk = [0u8; 4096];
-        while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
-            let n = stream.read(&mut chunk).unwrap();
-            assert!(n > 0, "connection closed before headers finished");
-            buf.extend_from_slice(&chunk[..n]);
-        }
-    }
-
-    fn http(status: &str, extra_headers: &str, body: &str) -> String {
-        format!(
-            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        )
-    }
-
-    fn ok_body(text: &str) -> String {
-        format!(
-            r##"{{"choices":[{{"message":{{"role":"assistant","content":"{text}"}},"finish_reason":"stop"}}]}}"##
-        )
-    }
-
-    fn sse(text: &str) -> String {
-        format!(
-            "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{text}\"}}}}]}}\n\ndata: [DONE]\n\n"
-        )
-    }
-
-    #[test]
-    fn opencode_url_detection() {
-        assert!(is_opencode_url(
-            "https://opencode.ai/inference/go/openai/v1"
-        ));
-        assert!(is_opencode_url(
-            "https://opencode.ai/inference/go/anthropic"
-        ));
-        assert!(!is_opencode_url("https://api.deepseek.com"));
-        assert!(!is_opencode_url("http://127.0.0.1:8080/v1"));
-        assert!(!is_opencode_url("https://notopencode.ai/v1"));
-    }
-
-    #[tokio::test]
-    async fn session_header_is_sent_when_configured() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let seen = Arc::new(Mutex::new(String::new()));
-        let seen_clone = seen.clone();
-
-        std::thread::spawn(move || {
-            let (mut s, _) = listener.accept().unwrap();
-            let mut buf = [0u8; 4096];
-            let n = s.read(&mut buf).unwrap();
-            *seen_clone.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).to_string();
-            let body = r#"{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#;
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            s.write_all(resp.as_bytes()).unwrap();
-        });
-
-        let client = LlmClient::new(&format!("http://{addr}"))
-            .unwrap()
-            .with_session_header(Some("x-opencode-session".into()))
-            .with_session_id("sess-123".into());
-        let _ = client.send("m", &[], 16, &[]).await.unwrap();
-        let raw = seen.lock().unwrap().to_ascii_lowercase();
-        assert!(raw.contains("x-opencode-session: sess-123"), "{raw}");
-        assert!(raw.contains("x-opencode-client: ganggang"), "{raw}");
-        assert!(raw.contains("user-agent: ganggang/"), "{raw}");
-    }
-
-    /// A provider having a bad minute (500) is retried, and the retry
-    /// succeeds: two connections, one answer.
-    #[tokio::test]
-    async fn a_500_is_retried_and_the_retry_succeeds() {
-        let server = Scripted::spawn(vec![
-            http("500 Internal Server Error", "", "upstream exploded"),
-            http("200 OK", "", &ok_body("gg")),
-        ]);
-        let resp = server.client().send("m", &[], 16, &[]).await.unwrap();
-        assert_eq!(resp.choices[0].message.content.as_deref(), Some("gg"));
-        assert_eq!(server.attempts.load(Ordering::SeqCst), 2);
-    }
-
-    /// A 400 is the request's own fault: exactly one attempt, and the
-    /// provider's body is what the caller reads.
-    #[tokio::test]
-    async fn a_400_is_not_retried() {
-        let server = Scripted::spawn(vec![http("400 Bad Request", "", "bad model name")]);
-        let err = server.client().send("m", &[], 16, &[]).await.unwrap_err();
-        let rendered = format!("{err:#}");
-        assert!(
-            rendered.contains("400") && rendered.contains("bad model name"),
-            "{rendered}"
-        );
-        assert_eq!(server.attempts.load(Ordering::SeqCst), 1);
-    }
-
-    /// 429 with a `Retry-After` is retried; the header (0 s here) decides
-    /// the wait instead of the doubling base.
-    #[tokio::test]
-    async fn a_429_with_retry_after_is_retried() {
-        let server = Scripted::spawn(vec![
-            http(
-                "429 Too Many Requests",
-                "Retry-After: 0\r\n",
-                "rate limit exceeded",
-            ),
-            http("200 OK", "", &ok_body("later")),
-        ]);
-        let resp = server.client().send("m", &[], 16, &[]).await.unwrap();
-        assert_eq!(resp.choices[0].message.content.as_deref(), Some("later"));
-        assert_eq!(server.attempts.load(Ordering::SeqCst), 2);
-    }
-
-    /// The budget is bounded: retries stop at `max_retries`, and the error
-    /// the caller gets is the last attempt's — status and body included.
-    #[tokio::test]
-    async fn retries_stop_at_the_budget_and_keep_the_last_error() {
-        let server = Scripted::spawn(vec![
-            http("503 Service Unavailable", "", "one"),
-            http("503 Service Unavailable", "", "last"),
-        ]);
-        let client = server.client().with_retry(1);
-        let err = client.send("m", &[], 16, &[]).await.unwrap_err();
-        let rendered = format!("{err:#}");
-        assert!(
-            rendered.contains("503") && rendered.contains("last"),
-            "{rendered}"
-        );
-        assert!(
-            !rendered.contains("one"),
-            "the first failure leaked in: {rendered}"
-        );
-        assert_eq!(server.attempts.load(Ordering::SeqCst), 2);
-    }
-
-    /// Streaming retries the initial request too: a 500 before any SSE is
-    /// the same transient failure it always was.
-    #[tokio::test]
-    async fn a_stream_that_starts_with_500_is_retried() {
-        let server = Scripted::spawn(vec![
-            http("500 Internal Server Error", "", "nope"),
-            format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{}",
-                sse("streamed")
-            ),
-        ]);
-        let resp = server
-            .client()
-            .send_stream("m", &[], 64, &[], |_| Box::pin(async {}))
-            .await
-            .unwrap();
-        assert_eq!(resp.choices[0].message.content.as_deref(), Some("streamed"));
-        assert_eq!(server.attempts.load(Ordering::SeqCst), 2);
-    }
-
-    /// A stream cut after it delivered a delta is not retried: the caller
-    /// has already shown that text, so a second attempt would show it
-    /// twice. The error stays the stream's own.
-    #[tokio::test]
-    async fn a_stream_cut_after_a_delta_is_not_retried() {
-        let cut = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"half\"}}]}\n\n";
-        let server = Scripted::spawn(vec![cut.to_string(), cut.to_string()]);
-        let deltas = Arc::new(Mutex::new(Vec::new()));
-        let sink = deltas.clone();
-        let err = server
-            .client()
-            .send_stream("m", &[], 64, &[], move |delta| {
-                let sink = sink.clone();
-                Box::pin(async move { sink.lock().unwrap().push(delta) })
-            })
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("without [DONE]"), "{err:#}");
-        assert_eq!(
-            *deltas.lock().unwrap(),
-            vec![stream::Delta::Text("half".into())],
-            "the delta reached the caller exactly once"
-        );
-        assert_eq!(server.attempts.load(Ordering::SeqCst), 1);
-    }
-}
+#[cfg(test)]
+mod tests;

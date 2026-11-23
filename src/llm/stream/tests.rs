@@ -267,6 +267,8 @@ async fn send_stream_assembles_and_delivers_deltas_in_order() {
         .unwrap();
 
     use super::Delta;
+    assert!(response.complete, "[DONE] was seen");
+    let response = response.response;
     assert_eq!(
         *deltas.lock().unwrap(),
         vec![Delta::Text("g".into()), Delta::Text("g!".into())]
@@ -276,17 +278,48 @@ async fn send_stream_assembles_and_delivers_deltas_in_order() {
     assert_eq!(response.usage.unwrap().total_tokens, 12);
 }
 
-/// A stream that ends without `[DONE]` is a transport error, never a
-/// silently-accepted partial answer (§17) — Strata's SSE arrives
-/// connection-close framed, so a mid-generation death is a clean EOF.
+/// A stream that ends without `[DONE]` is reported as incomplete and its
+/// partial answer is kept (GAP 2): the user has already watched it stream
+/// in, and the loop's job is to ask for the rest. §17 still holds —
+/// incomplete is visible through `complete: false`, never passed off as a
+/// finished answer.
 #[tokio::test]
-async fn truncated_stream_without_done_is_an_error() {
+async fn a_cut_stream_keeps_its_partial_answer_and_says_it_is_incomplete() {
     // Same body as the happy path, minus the `[DONE]` terminator; the
     // server closing the connection plays the part of a dead upstream.
     let mut body = sse_body(&[
-        json!({"choices":[{"index":0,"delta":{"content":"par"},"finish_reason":null}]}),
-        json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
+        json!({"choices":[{"index":0,"delta":{"content":"par"}}]}),
+        json!({"choices":[{"index":0,"delta":{"content":"tial"}}]}),
+        json!({"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":3,"total_tokens":12}}),
     ]);
+    assert!(body.ends_with("data: [DONE]\n\n"));
+    body.truncate(body.len() - "data: [DONE]\n\n".len());
+    let server = SseServer::spawn(vec![body]);
+
+    let client = LlmClient::new(&server.base_url).unwrap();
+    let outcome = client
+        .send_stream("m", &[], 64, &[], |_| Box::pin(async {}))
+        .await
+        .unwrap();
+    assert!(!outcome.complete, "no [DONE], so not complete");
+    assert_eq!(
+        outcome.response.choices[0].message.content.as_deref(),
+        Some("partial"),
+        "the text assembled so far survives"
+    );
+    assert_eq!(
+        outcome.response.usage.unwrap().total_tokens,
+        12,
+        "usage seen before the cut is kept"
+    );
+}
+
+/// A cut with nothing assembled is still an error: there is no partial
+/// answer to salvage and nothing for the loop to continue from.
+#[tokio::test]
+async fn a_cut_stream_that_assembled_nothing_is_an_error() {
+    let mut body =
+        sse_body(&[json!({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})]);
     assert!(body.ends_with("data: [DONE]\n\n"));
     body.truncate(body.len() - "data: [DONE]\n\n".len());
     let server = SseServer::spawn(vec![body]);
@@ -296,9 +329,10 @@ async fn truncated_stream_without_done_is_an_error() {
         .send_stream("m", &[], 64, &[], |_| Box::pin(async {}))
         .await
         .unwrap_err();
+    let rendered = format!("{err:#}");
     assert!(
-        err.to_string().contains("without [DONE]"),
-        "unexpected error: {err:#}"
+        rendered.contains("without [DONE]") && rendered.contains("assembled nothing"),
+        "unexpected error: {rendered}"
     );
 }
 
