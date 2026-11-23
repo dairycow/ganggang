@@ -97,7 +97,7 @@
 
 <header class="doc">
   <h1>ganggang — a minimal Rust coding harness</h1>
-  <div class="sub">Design v2.1 (v1 review feedback incorporated) &middot; modelled on <a href="https://github.com/earendil-works/pi" style="color:var(--accent)">pi</a> &middot; binary <code>gg</code> &middot; backend: <a href="https://github.com/Niko1221/Strata" style="color:var(--accent)">Strata</a> at <code>127.0.0.1:8080/v1</code> &middot; status: M2 in progress</div>
+  <div class="sub">Design v2.2 (hooks amendment) &middot; modelled on <a href="https://github.com/earendil-works/pi" style="color:var(--accent)">pi</a> &middot; binary <code>gg</code> &middot; backend: <a href="https://github.com/Niko1221/Strata" style="color:var(--accent)">Strata</a> at <code>127.0.0.1:8080/v1</code> &middot; status: M2–M7 built &middot; M8 (hooks) specified</div>
   <div class="howto">
     <b>How to review:</b> every section below has a feedback box — pick a verdict (<i>approve / needs changes / question</i>) and write comments.
     Feedback is saved in your browser as you type. When done, click <b>Export feedback</b> and hand me the resulting Markdown file (or just paste it back into chat).
@@ -105,6 +105,7 @@
   </div>
   <div class="note"><b>v1 → v2 changelog (from your feedback):</b> comments trimmed to standard OSS-Rust docs (§01, §18) · thinking levels <i>skip→later</i> (§02) · extensions researched — jcode / opencode&nbsp;2 / pi-durable — new §03 with seam-keeping decision · turn limit removed, abort is the guard (§09, §21) · settings → TOML, defaults raised: max_tokens 4096, context 131072 (§06, §16) · backend renamed llama.cpp → Strata everywhere (§16, §19) · all eight open questions resolved (§21) · print-mode sessions persist by default (§13, §15).</div>
   <div class="note"><b>v2 → v2.1 amendments (from building M2):</b> domain <code>ToolCall</code> gains <code>args_error</code> — arguments parse once at the <code>from_response</code> boundary; dispatch checks it first and returns the §10 error result without invoking the tool (§08, §10) · a call with unparseable args replays with <code>{}</code> and is never dropped (§08) · <code>Message.ts_unix</code> dropped — dead weight, timestamps live on <code>Entry</code> (§08) · session files write <code>is_error</code> only when true — minimal-write, consistent with omitting empty <code>tool_calls</code>/<code>usage</code>; §13 example updated (§13) · abort synthesizes tool_results for unanswered calls and emits a terminal <code>RunAborted</code> event (§08, §09) · a final turn with no content emits a <code>Warned</code> (§17 made explicit) · skill <code>name</code> is authoritative from frontmatter and validated leniently (non-empty only — no charset/length/dir-match rule; collisions are case-sensitive, first-wins) — deliberate divergence from agentskills.io, recorded here per §0 (§11) · a BOM ahead of the fences makes a SKILL.md fence-less → skipped (§11) · quoted frontmatter values lose their surrounding quotes (§11) · M4 amendments: collapsed tool lines show args + ✓/✗ status (§15) · Ctrl+C is a single-press quit in the TUI (session flush-per-append makes mid-run exit safe; print mode keeps two-press) · extra keys beyond §15's list: Ctrl+J (portable newline), PageUp/Down, bracketed paste, Backspace, <code>/exit</code> alias, <code>!!</code> · session filenames stamp <code>YYYYMMDD-HHMMSS</code> (§13) · the footer shows busy state and context % (§15) · <code>/context</code> added to the command set (§12/§15) · §18's Arc/channel budget relaxed for the TUI agent-task factory and channels · M5 amendments: a stream that ends without <code>[DONE]</code> is a transport error — abort with context, never a silently-accepted partial answer (§17; Strata serves SSE connection-close framed, so a mid-generation death is a clean EOF) · the streamed path records assistant <code>content: null</code> on pure tool-call turns — the role-echo chunk's <code>content: ""</code> is not content, so streamed session files match non-streamed shapes byte-for-byte (§08) · print-mode spinner redraws gate on <code>stderr</code> being a terminal and are closed when the event channel ends, so failed runs leave no residue (§15) · M7 amendments: the default <code>tools</code> allowlist is now <code>["read","bash","edit","write","grep","find","ls"]</code> (§16 table updated — the polish tools ship enabled; §02's "bash covers them" stance ends when they exist) · <code>grep</code> is fixed-substring, not regex — no new dependency (§10); regex wants the bash tool · compaction visibility: successful compactions report as <code>Warned</code> events (§08's enum has no dedicated variant; §17's visibility rule applied) · JSON mode lives in <code>src/json_mode.rs</code>, session header via the store's <code>header_record</code>, omitted for <code>--no-session</code> (§15) · M6 review amendments: <code>/compact</code> while a run is in flight is ignored (the busy gate — commands land between runs); a session-I/O failure during manual <code>/compact</code> degrades to a reported failure instead of aborting, since there is no run to kill (the loop's auto-compaction keeps §17's abort) · a closed stdout pipe ends JSON/print runs quietly — an early-closing consumer is a normal producer end, not an error · trigger-true-with-no-cut-point warns once per run instead of silently requesting past the window (§17) · M7.3 amendment: `AgentEvent` grows `Thinking { delta }` — streamed reasoning fragments, serialized `{"type":"thinking"}`; JSON mode passes them through, print mode omits them (§08, §15). Assistant `Message.reasoning` is persisted when non-empty but never replayed to the model (§08, §13) · M7.4/M7.5 amendments: `/prompts` joins §15's command set; prompt templates load from `~/.gg/prompts/*.md` (frontmatter `name`/`description`; no-fences files valid with the stem as name; built-in command names win collisions; first-name-wins between files; `/<name> [args]` INSERTS the draft into the editor rather than submitting); `@path` mentions expand at TUI submission into visible attachment blocks (50 KB cap, binary/missing/cap markers per §17; a token mentions a file only when its text after `@` contains `/` or `.` — emails and lone `@` stay literal);  print-mode prompts stay literal — mentions are editor behavior (§15). · post-build amendment (2026-11-23, daily-driver feedback): typing a <code>/</code> command in the composer shows a live suggestion list floating above the editor — the built-in set, the discovered prompt templates, and (once <code>/skill:</code> is typed) one row per skill; <code>↑</code>/<code>↓</code> move the highlight, Tab completes the highlighted row into the composer (trailing space, ready for args), Enter keeps §15's send semantics; the list shows only while the composer is a bare command word (leading <code>/</code>, no whitespace) and caps at nine rows (§15). Refinements from review: the generic <code>/skill:</code> row completes to the bare colon — no trailing space, which would close the popup before the skill name is typed; <code>/exit</code> remains a hidden alias, never advertised in the popup; the selection clamps to the rows the terminal actually drew, so the highlight cannot walk off a short screen; known corner, accepted: on terminals too short to draw the popup at all (≤ 7 rows) the popup keys stay live against an invisible list (§15). · post-build amendment (2026-11-23, daily-driver feedback): <code>Ctrl+G</code> opens the composer's text in an external editor — <code>$VISUAL</code>, else <code>$EDITOR</code>, else <code>nano</code>, pi's order and fallback; the value may carry arguments (<code>code --wait</code>). The draft is a user-only file in the temp dir; what the editor saves replaces the composer once the editor exits with status 0, normalized like a paste (line endings, the trailing newline editors add), and nothing is sent until Enter. A non-zero exit leaves the composer alone and keeps an edited draft where the warning names it; a cancel with no edits leaves nothing behind. The loop keeps folding agent events while the editor owns the screen, so a run in flight neither stalls nor bursts on return. No config key, no new dependency. What testing settled, kept as the rule: the key reader parks on delivering Ctrl+G — a blocking read cannot be interrupted from outside, and two readers on one tty race for every byte; the repaint on return is a resize to the current size, not <code>Terminal::clear</code> — that asks the terminal for the cursor position and blocks until it answers, and on a terminal that does not (a raw pty) the timeout ended the session; and no input is flushed on return — the parting query nvim makes for the terminal's attributes is answered in a form crossterm consumes itself, so a flush only dropped keys typed as the editor closed. Refinements from its fresh review: on return the tty goes back to the mode the shell left (recorded once, before gg first goes raw, with <code>stty -g</code>) before gg re-enters — crossterm keeps a single mode-before-raw and would otherwise remember a killed editor's raw mode, so that quitting gg left the shell a raw terminal — and the modes an editor switches on and a killed one never switches off (mouse reporting, focus events, keyboard-enhancement flags at every level, synchronized output, application cursor keys and keypad, key modification) are reset — in tmux, with keypad mode left on the numpad typed nothing, and with key modification left on (tmux's <code>extended-keys</code> on, which is off by default, or outside tmux a terminal that honours modifyOtherKeys) Ctrl+C itself arrived in a form gg never saw, so a killed nvim left gg running with no way to quit it from the keyboard; keys that shared Ctrl+G's tty read are dropped, since gg read them first and they could never reach the editor (an Enter among them sent the draft sight unseen); the loop ends the editor before restoring the terminal if it exits with one open, puts the tty and the modes back there too, and tells the user where the editor's draft was kept; exactly the final newline of a saved draft is dropped, and a byte-order mark with it; a draft gg cannot read as text is kept and said to be kept, whatever the editor's exit; an editor that returns in under half a second with nothing saved leaves a hint about wait flags (<code>EDITOR=code</code> opens a window and returns at once; a slower-starting one takes longer than that and then stays silent); drafts sit in one private directory per gg run (<code>gg-draft-&lt;pid&gt;</code> in the temp dir — a name taken only if it is the user's own to take, else a fresh one — removed when gg exits normally and holds no kept draft), so an editor with persistent undo keeps one history per run. Known corner, recorded: crossterm consumes cursor-position, device-attribute and keyboard-flag reports itself — the kind nvim asks for as it exits — but a reply in another form (a mode report, an OSC or DCS string) arriving after the editor is gone arrives as typed keys, a mode report holds the parser until a <code>c</code> or <code>u</code> is typed, and an OSC reply ended with BEL parses as Ctrl+G and reopens the editor; no editor measured (nvim, vim, nano, micro) sends such a query on exit, and flushing input on return was rejected because it drops the keys a fast hand types as the editor closes. Verified live by <code>scripts/tui-live.sh</code>: driven through tmux, each case on a tmux server of its own (tmux options are server-wide, so the user's is never touched) — the hand-off, the editor's failure modes, and what the pane's terminal looks like after gg quits, including a killed nvim with tmux's <code>extended-keys</code> off and on (§15). · post-build amendment (2026-11-23, daily-driver feedback): the composer gains readline editing and portable newline keys — Alt+Enter and Ctrl+J insert a newline (Shift+Enter stays, for terminals that report modified keys), Ctrl+A/Ctrl+E jump to the current line's start/end, Ctrl+K/Ctrl+U kill to the line's end/start (kill-line joins the next line on at EOL), and ←/→/↑/↓ move the cursor (Home/End jump to the line's bounds); gg asks for modified keys on entering — under tmux the xterm modifyOtherKeys request, which tmux honours only with <code>extended-keys on</code> and answers in CSI-u form that crossterm parses, otherwise crossterm's kitty flags — and both are popped by <code>restore</code> so the shell gets a plain terminal back. · post-build amendment (2026-11-23, daily-driver feedback): <code>gg --watch</code> — the jcode-style self-dev loop (§03's seam). Watch <code>src/</code> plus <code>Cargo.toml</code>/<code>Cargo.lock</code> by mtime+len snapshot (no new dependency), debounce 600 ms, run <code>cargo build</code> as a tokio task, then re-exec the rebuilt binary on the same session (<code>--resume &lt;8-hex&gt;</code>): the TUI returns <code>Exit::Restart</code> and <code>main</code> execs only after the terminal guard has put the tty back. The profile is inferred from the running exe (<code>target/debug</code> vs <code>target/release</code>) so a restart never silently changes build type; <code>cargo metadata --no-deps</code> refuses any workspace without a <code>gg</code> bin target, so <code>--watch</code> cannot exec another project's binary. A restart waits for idle and an empty composer; with unsent text the footer holds at <code>rebuild ready · Ctrl+R</code> (Ctrl+R rebuilds and restarts on demand), and the draft is written beside the session (<code>&lt;session&gt;.watch-draft</code>, 0600) and restored by the new process. A fresh watch session materializes its file at boot — restart continuity needs an id to resume — while ordinary runs stay lazy (§13). Build failures render the tail of cargo's output as a <code>Warned</code> and leave the old binary running; the next edit (or Ctrl+R) retries. Verified live by <code>scripts/watch-live.sh</code> through tmux with a temp HOME: boot, automatic restart into a new executable inode, the same session resumed by id, and the draft hold + carry — with no model calls (§15). Review fixes, kept as rules: a build whose inputs changed while cargo ran is discarded and rebuilt, so a restart never lands an older binary than the newest save (a Ctrl+R request survives that chain); the snapshot covers <code>*.rs</code> under <code>src/</code> only and skips symlinks, so editor swap/autosave files cannot trigger builds; cargo is spawned with <code>kill_on_drop</code>, so quitting gg mid-build cannot leave a child holding the package lock; a multi-line warning renders line by line (the cargo tail keeps rustc's alignment); header-only watch sessions sort below real conversations in <code>-c</code>/<code>/resume</code> yet stay resolvable by id; the draft is chmod 0600 even when a stale file exists; discovery requires the <code>ganggang</code> package, not merely some <code>gg</code> bin target. · post-build amendment (2026-11-23, multi-provider support): <code>[providers.&lt;name&gt;]</code> presets for <code>strata</code> (default), <code>glm-coding-plan</code> (alias <code>zai-coding-plan</code>), <code>opencode-go</code>, and <code>deepseek</code>; <code>openai-completions</code> and <code>anthropic-messages</code> wire adapters (with per-model routing, <code>x-opencode-session</code> routing header for OpenCode Go, and <code>replay_reasoning</code> for interleaved thinking models); CLI flags <code>-P</code>/<code>--provider</code>, <code>-m</code>/<code>--model</code>, and <code>--list-models</code>; and TUI <code>/model</code> mid-session switching (§08, §15, §16).</div>
+    <div class="note"><b>v2.1 → v2.2 amendment (2026-11-23): hooks (§22).</b> User-level shell hooks at three loop points — <code>pre_tool</code> (allow or deny; no rewrite), <code>post_tool</code> (observe), <code>run_end</code> (observe) — declared in <code>~/.gg/hooks.toml</code>, one process per invocation, one JSON object on stdin, an optional <code>{"decision":"deny","reason":"…"}</code> on stdout. A denial becomes a normal <code>is_error</code> tool result the model reads; a hook that crashes, times out, or prints garbage is a <code>Warned</code> and never aborts the run. No project-level hooks (a cloned repo adds no executable behavior), no embedded runtime, no arg rewriting or output injection, no approval prompt. <code>--no-hooks</code> bypasses; <code>/hooks</code> lists. §02–§04, §07, §09, §10, §13, §15–§17, §19–§21 updated; M8 added to TASKS.md.</div>
   <div class="toolbar">
     <button class="btn primary" id="export-btn">⬇ Export feedback (.md)</button>
     <button class="btn" id="clear-btn">Clear all feedback</button>
@@ -121,7 +122,7 @@
     <li><b>Documentation is standard OSS Rust, not a tutorial.</b> <code>//!</code> module docs and <code>///</code> on public items explain <i>why</i>; inline comments cover non-obvious decisions only. (v1 over-did this in <code>src/llm/types.rs</code> — v2 trims it back.)</li>
     <li><b>Pi is the reference, not the requirement.</b> Adopt the parts of pi's design that teach something; simplify where pi is product-scale (providers catalog, OAuth, packages).</li>
     <li><b>The data model is the design.</b> Sessions and events are plain JSONL you can <code>cat</code>, <code>grep</code>, and replay. Anything important is a serde type.</li>
-    <li><b>Small surface.</b> One binary, one provider protocol (OpenAI-compatible), one trait (<code>Tool</code>), no plugin code execution. Deep trait hierarchies, macros, and <code>unsafe</code> are banned.</li>
+    <li><b>Small surface.</b> One binary, one provider protocol (OpenAI-compatible), one trait (<code>Tool</code>); no plugin code is loaded into the process — hooks (§22) are separate user-level processes. Deep trait hierarchies, macros, and <code>unsafe</code> are banned.</li>
     <li><b>Budgets keep it honest:</b> ~150–300 lines per module; split when exceeded. Every commit keeps <code>cargo test</code> and <code>cargo clippy</code> clean (the existing review culture).</li>
     <li><b>Be permissive on the wire, strict internally.</b> Providers are parsed loosely (unknown fields ignored); internal state is typed enums, not strings.</li>
   </ol>
@@ -147,12 +148,12 @@
     <tr><td>Slash commands</td><td><span class="chip simp">simplify</span></td><td>Small fixed set: <code>/new /resume /compact /skills /quit</code> + <code>/skill:&lt;name&gt;</code> + <code>!</code> shell prefix.</td></tr>
     <tr><td>Prompt templates</td><td><span class="chip later">later</span></td><td>Easy once slash-command plumbing exists; not core.</td></tr>
     <tr><td>Steering / queued messages mid-run</td><td><span class="chip later">later</span></td><td>v1 has abort only; steering queue is a small extension of the loop's input side.</td></tr>
-    <tr><td>Extensions (in-process TS modules)</td><td><span class="chip later">later</span></td><td>Researched per review (§03: pi, opencode&nbsp;2, jcode, pi-durable). No plugin runtime in scope — but the architecture keeps four seams so a plugin system, or jcode-style self-dev, can be added without rework.</td></tr>
+    <tr><td>Extensions (in-process TS modules)</td><td><span class="chip simp">simplify</span></td><td>Hooks only (§22): user-level one-shot shell commands at <code>pre_tool</code>/<code>post_tool</code>/<code>run_end</code>, JSON in and out. No plugin runtime — no code loaded into the process, no custom tools or commands. The four seams (§03) stay.</td></tr>
     <tr><td>MCP servers</td><td><span class="chip skip">skip</span></td><td>Out of scope; would reintroduce process/protocol management.</td></tr>
     <tr><td>Multi-provider catalog, OAuth, API-key store</td><td><span class="chip skip">skip</span></td><td>One OpenAI-compatible endpoint via env/config (Strata default). The <code>llm</code> layer keeps the seam clean if this ever changes.</td></tr>
     <tr><td>RPC mode + SDK</td><td><span class="chip skip">skip</span></td><td>JSON mode is the automation surface.</td></tr>
     <tr><td>Themes, keybindings config, packages, sharing, bug reports</td><td><span class="chip skip">skip</span></td><td>Product polish; not learning goals.</td></tr>
-    <tr><td>Project trust</td><td><span class="chip simp">simplify</span></td><td>No project-executable resources are loaded (no plugin runtime — §03), so there is nothing to gate. The <i>bash tool</i> is the trust boundary — documented, not enforced (see §10).</td></tr>
+    <tr><td>Project trust</td><td><span class="chip simp">simplify</span></td><td>Nothing to gate: hooks are user-level only (§22), so a project cannot add executable behavior at startup. The <i>bash tool</i> is the model-driven trust boundary — documented, not enforced (see §10).</td></tr>
     <tr><td>Thinking levels, cache warming, image content</td><td><span class="chip later">later</span></td><td>Thinking <i>is</i> wanted (v2 decision): Strata's Qwen3.8 emits <code>reasoning_content</code>; wire parsing is already permissive, so capturing/displaying it is additive (M7). Cache warming and image content stay skipped.</td></tr>
   </table>
   <div class="note ask">If you'd re-classify any row, say so in the feedback box — each decision is a bet that it never blocks daily use.</div>
@@ -170,13 +171,14 @@
   </table>
   <h3>Decision (v2)</h3>
   <ul>
-    <li><b>No plugin runtime now</b> — but the architecture keeps <b>four seams</b> so any of the above can be added later without rework:
+    <li><b>No plugin runtime</b> — one-shot hooks only (§22). The architecture keeps <b>four seams</b> so any of the above can be added later without rework:
       <ol>
-        <li><b>One event stream.</b> Everything observable already flows through <code>AgentEvent</code>; a hook system is “subscribe + intercept” on that channel (pi/opencode shape).</li>
+        <li><b>One event stream.</b> Everything observable already flows through <code>AgentEvent</code>; a future plugin system could subscribe to it (and intercept before dispatch) — the pi/opencode shape. The shipped hooks (§22) are a separate, one-shot mechanism, not event subscribers.</li>
         <li><b>Tool trait + registry.</b> Future dynamic tools (plugins, MCP) slot in as another <code>Box&lt;dyn Tool&gt;</code> source; the loop never changes.</li>
         <li><b>Append-only JSONL sessions.</b> The durable base pi-durable builds on; checkpoint/resume is a storage upgrade, not a redesign.</li>
         <li><b>Self-dev falls out for free.</b> Small Rust codebase + fast <code>cargo build</code> + persisted sessions = the model can evolve gg with its own tools today (jcode's bet, zero infra).</li>
       </ol></li>
+    <li><b>Hooks are the first shipped extension seam (v2.2, §22).</b> User-level, one-shot shell commands at the loop's interception points, JSON in and out — no embedded runtime, no project-level declarations. It covers the stateless cases (guard, format, notify) without committing to a plugin API; the long-lived JSONL-over-stdio candidate above remains the path to custom tools and commands.</li>
     <li><b>Candidate mechanism when needed:</b> out-of-process plugins speaking JSONL over stdio — reuses the <code>--mode json</code> protocol verbatim, needs no embedded runtime, and isolates plugin crashes. Not decided; revisit deliberately.</li>
   </ul>
 </section>
@@ -185,8 +187,9 @@
   <h2><span class="num">04</span> Non-goals (explicit)</h2>
   <p class="lead">Written down so “not yet” never becomes “accidentally half-built”.</p>
   <ul>
-    <li>No plugin/extension <i>runtime</i> in v2 — seams kept (§03). Adding behavior means editing Rust and rebuilding, which the agent itself can do.</li>
-    <li>No sandboxing or permission system. <code>gg</code> runs with the user's permissions; safety comes from where you run it (pi's stance, stated in our docs).</li>
+    <li>No plugin/extension <i>runtime</i> — hooks (§22) are one-shot shell commands, not an in-process API; no code is loaded into <code>gg</code>. Adding tools or commands still means editing Rust and rebuilding, which the agent itself can do.</li>
+    <li>No sandboxing or permission system. <code>gg</code> runs with the user's permissions; safety comes from where you run it (pi's stance, stated in our docs). A hook may deny a tool call, but that is user-authored workflow policy, not a sandbox.</li>
+    <li>No project-level executable resources: hooks are user-level only, so a cloned repository cannot add behavior before the model runs (§22).</li>
     <li>No sub-agents, plan modes, or orchestration on top of the loop.</li>
     <li>No cross-provider abstraction beyond the OpenAI-compatible wire types.</li>
     <li>No Windows-specific tooling (POSIX <code>bash</code> assumed).</li>
@@ -267,6 +270,7 @@
 │   ├── context.rs  ~160  system-prompt assembly (§12)
 │   ├── session.rs  ~220  entry types, JSONL append/load/replay (§13)
 │   ├── skills.rs   ~180  discovery + frontmatter (§11)
+│   ├── hooks.rs    ~220  user-level hook config + one-shot runner (§22)
 │   ├── compaction.rs ~150  summary generation + rebuild (M6)
 │   └── tools/
 │       ├── mod.rs  ~140  Tool trait, registry, dispatch, arg parsing
@@ -374,6 +378,7 @@ pub enum AgentEvent {
     <li><b>No turn cap</b> (review decision — pi has none either): a runaway loop is stopped by the <b>user</b> (Esc / Ctrl-C abort), not by a counter. The <code>turns</code> counter exists only for the <code>RunEnded</code> event and the footer.</li>
     <li><b>Abort:</b> a <code>tokio_util::sync::CancellationToken</code> (or plain <code>Arc&lt;AtomicBool&gt;</code>) checked between tool calls; on abort, synthesize <code>is_error</code> tool_results for the batch's unanswered calls (replay must never carry a dangling tool_call), append a marker, emit <code>RunAborted</code>, and return <code>Ok</code>. Esc in the TUI sets it.</li>
     <li><b>Steering (later):</b> the input side grows a queue; user messages submitted mid-run are appended after the current tool batch — pi's “steering” semantics. The loop shape above already has the seam (end of tool batch).</li>
+    <li><b>Hooks (§22):</b> matching <code>pre_tool</code> hooks run after <code>ToolCallStarted</code> and before dispatch; a deny synthesizes an <code>is_error</code> result instead of running the tool. Matching <code>post_tool</code> hooks run after <code>ToolCallFinished</code> (the result is already recorded). <code>run_end</code> hooks run once before <code>RunEnded</code>, on a clean final answer only. Hook failures are <code>Warned</code> events and never abort a run; a deny is a normal tool error value. The runner polls the abort flag, so Esc also kills a running hook.</li>
   </ul>
 </section>
 
@@ -394,6 +399,7 @@ pub trait Tool: Send + Sync {
 
 pub struct Registry(Vec&lt;Box&lt;dyn Tool&gt;&gt;);</pre>
   <p><b>Dispatch</b> never touches JSON-in-a-string: <code>from_response</code> parses <code>call.function.arguments</code> once at the boundary (empty string ⇒ empty object) and records parse failures as <code>args_error</code> on the domain call. Dispatch checks <code>args_error</code> first and returns an <code>is_error</code> tool result (“arguments were not valid JSON: …”) without invoking the tool — never a run failure, so the model retries correctly. Each tool then deserializes the parsed <code>Value</code> into its own args struct (<code>serde</code>, permissive defaults), reporting field errors the same way.</p>
+  <p><b><code>pre_tool</code> hooks (§22)</b> sit between <code>ToolCallStarted</code> and dispatch. A deny returns an <code>is_error</code> result exactly like a tool failure — the model reads it and adapts; the tool never ran. Hooks cannot rewrite arguments or invent results, so the assistant's recorded call and the tool result stay truthful. A hook runs with the same permissions and in the same cwd as <code>bash</code>; it is user-level policy, not a sandbox.</p>
   <h3>The four tools (pi semantics)</h3>
   <table class="tbl">
     <tr><th>tool</th><th>behavior</th><th>guardrails</th></tr>
@@ -459,6 +465,7 @@ Run scripts relative to this skill directory…</pre>
     <li><b>Replay</b> = read the file into <code>Vec&lt;Entry&gt;</code>, rebuild the request via <code>to_wire</code>. Compaction entries are honored during rebuild (§14).</li>
     <li><b>Resume:</b> <code>gg -c</code> picks the newest session file for the cwd; <code>gg --resume</code> opens a picker (TUI) or takes an id/prefix. <b>Every mode persists by default</b>, print included (review decision — pi parity; one mechanism, no mode-specific rules); <code>--no-session</code> opts out.</li>
     <li>Usage totals (tokens in/out) accumulate from assistant entries; the footer and <code>/session</code> display them. Costs are skipped (local model).</li>
+    <li><b>Hooks never change the format.</b> A <code>pre_tool</code> denial is a normal <code>tool_result</code> with <code>is_error</code>; hook failures are <code>Warned</code> events, not persisted (§22). The session header id is what the hook payload calls <code>session_id</code>.</li>
   </ul>
 </section>
 
@@ -483,7 +490,7 @@ Run scripts relative to this skill directory…</pre>
     <li>Fullscreen layout like pi: scrolling transcript / editor / one-line footer (dir, model, tokens, context %).</li>
     <li>Transcript renders: user text, assistant text (markdown later), tool calls as collapsed <code>▸ bash git status</code> lines expandable with Ctrl+O, warnings dimmed.</li>
     <li>Keys (fixed, no config): Enter send · Alt+Enter / Ctrl+J newline (Shift+Enter where the terminal reports modified keys) · Ctrl+A/E line start/end · Ctrl+K/U kill to line end/start · arrows move the composer cursor · Esc abort run · Ctrl+O expand · Ctrl+X copy last answer · <code>/</code> commands · <code>!cmd</code> shell prefix (output enters context, like pi).</li>
-    <li>Commands: <code>/new /resume /compact /skills /session /quit /skill:&lt;name&gt;</code>. <code>/skills</code> lists discovered skills with paths — cheap, great for debugging discovery.</li>
+    <li>Commands: <code>/new /resume /compact /skills /session /context /prompts /hooks /quit /skill:&lt;name&gt;</code>. <code>/skills</code> lists discovered skills with paths — cheap, great for debugging discovery; <code>/hooks</code> lists loaded hooks (event, tools, timeout, command) or says hooks are disabled. A <code>pre_tool</code> denial renders as a failed tool line, like any other tool error.</li>
   </ul>
   <h3>Print mode (M2)</h3>
   <ul>
@@ -491,7 +498,7 @@ Run scripts relative to this skill directory…</pre>
   </ul>
   <h3>JSON mode (M6)</h3>
   <ul>
-    <li><code>gg --mode json "…"</code> — session header then <code>AgentEvent</code>s, one JSON object per line; same enum the TUI consumes, so the two can't drift. No RPC, no SDK.</li>
+    <li><code>gg --mode json "…"</code> — session header then <code>AgentEvent</code>s, one JSON object per line; same enum the TUI consumes, so the two can't drift. No RPC, no SDK. Hooks add no event variants: a denial is an ordinary <code>ToolCallFinished</code> with <code>is_error</code>, a hook failure a <code>Warned</code> (§22).</li>
   </ul>
 </section>
 
@@ -509,6 +516,7 @@ Run scripts relative to this skill directory…</pre>
     <tr><td><code>tools</code></td><td>—</td><td><code>["read", "bash", "edit", "write", "grep", "find", "ls"]</code></td><td>allowlist (M7: search tools ship enabled)</td></tr>
   </table>
   <p><code>max_turns</code> is gone — no turn cap (review + §09). File merging is shallow (project keys override user keys) — no deep-merge magic. Invalid values are errors, not silent defaults (existing <code>config.rs</code> philosophy). <code>~/.gg/</code> also holds <code>AGENTS.md</code> and <code>sessions/</code>.</p>
+  <p><b>Hooks are outside this precedence.</b> They live in <code>~/.gg/hooks.toml</code> — user-level policy, loaded once at startup, never read from a project (<code>.gg/hooks.toml</code> is ignored with a startup warning, so a cloned repository cannot add executable behavior). <code>--no-hooks</code> skips loading and the warning entirely. The file format and protocol are §22.</p>
 </section>
 
 <section id="errors" data-title="Error handling">
@@ -518,6 +526,7 @@ Run scripts relative to this skill directory…</pre>
     <li><b>Three failure classes, three policies:</b> transport/IO ⇒ abort run with context (user retries); <b>tool failure ⇒ value fed back to model</b>; provider-shape oddities (no choices, empty content) ⇒ warn event + best effort (existing patterns in <code>main.rs</code> keep their comments).</li>
     <li>Timeouts: existing client values (10 s connect / 300 s request) plus per-tool bash timeout. Everything that can hang has a number.</li>
     <li>Every truncation or dropped call is visible: a <code>Warned</code> event, never a silent <code>.unwrap_or_default()</code> at the boundary.</li>
+    <li><b>Hooks degrade to warnings.</b> A hook that crashes, times out, cannot spawn, or prints malformed output is a <code>Warned</code> event and the run continues (a <code>pre_tool</code> hook then allows the call — deliberate fail-open, since a broken guard must not wedge the agent). A deliberate <code>deny</code> is not an error: it is a normal <code>is_error</code> tool result. Hook processes get the <code>bash</code> timeout/group-kill discipline, and an abort kills a running hook (§22).</li>
     <li>No retries in v1 — the local server is either up or it isn't. Revisit with streaming.</li>
   </ul>
 </section>
@@ -543,6 +552,7 @@ Run scripts relative to this skill directory…</pre>
     <li><b>Tools:</b> tempdir round-trips for read/edit/write; bash tests use trivial commands (<code>echo</code>, <code>false</code>) + one timeout case.</li>
     <li><b>Skills:</b> fixture skill dirs — discovery order, collision rule, frontmatter edge cases (empty description, unknown keys, no frontmatter).</li>
     <li><b>Sessions:</b> golden JSONL files; load-replay equality (<code>to_wire(load(fixtures/golden.jsonl))</code> snapshot), corrupt-trailing-line tolerance.</li>
+    <li><b>Hooks:</b> golden stdin payloads per event; a temp-HOME <code>hooks.toml</code> fixture; config validation and the project-file warning; scripted deny leaves no side effect and reaches the model as an error result; post/run_end marker files; malformed output, non-zero exit and timeout warn without aborting; abort kills the process group; <code>/hooks</code> listing and <code>--no-hooks</code>. Live gate: <code>scripts/hooks-live.sh</code> (§22).</li>
     <li><b>Smoke:</b> <code>scripts/smoke.sh</code> against a live <b>Strata</b> server (per review) — <code>strata launch</code>, then <code>curl 127.0.0.1:8080/health</code>; run it manually before each milestone. Strata speaks the same OpenAI-compatible chat-completions protocol, so nothing else in the stack changes.</li>
   </ul>
 </section>
@@ -558,6 +568,7 @@ Run scripts relative to this skill directory…</pre>
     <tr><td><b>M5</b> — streaming</td><td>SSE parsing in <code>llm</code>, delta events, live rendering in TUI + stderr progress in print</td><td>tokens appear as generated; non-streaming path retained for tests</td></tr>
     <tr><td><b>M6</b> — compaction + JSON mode</td><td>§14 in full; <code>--mode json</code>; usage footer totals</td><td>long scripted run compacts and continues correctly; json mode drives an external consumer</td></tr>
     <tr><td><b>M7</b> — polish</td><td>grep/find/ls tools, prompt templates, <code>@file</code> mentions, markdown rendering, thinking display (<code>reasoning_content</code>, hidden behind Ctrl+T like pi), export session → HTML (like this doc)</td><td>“a good afternoon of use” — daily-driver check</td></tr>
+    <tr><td><b>M8</b> — hooks (§22)</td><td><code>~/.gg/hooks.toml</code> + validation, one-shot runner (JSON stdin/out, timeout, group kill, abort), loop integration at pre/post tool and run end, <code>/hooks</code>, <code>--no-hooks</code>, project-hook warning, README</td><td>a <code>pre_tool</code> deny stops a tool call and the model sees why; post/run_end hooks cannot break a run; a project cannot enable hooks</td></tr>
   </table>
   <p>M2 explicitly includes the <b>M1→M2 refactor</b>: moving message ownership out of <code>main.rs</code> into the session/domain types. The uncommitted two-turn smoke test in <code>main.rs</code> is the bridge — its manual history-push becomes <code>session.append</code>.</p>
 </section>
@@ -576,11 +587,115 @@ Run scripts relative to this skill directory…</pre>
     <tr><td>7</td><td>Turn-limit default</td><td><b>No turn limit</b> — pi has none; abort (Esc) is the guard. Config <code>max_turns</code> removed entirely. (§09)</td><td>review</td></tr>
     <tr><td>8</td><td>Milestone order (TUI before streaming?)</td><td><b>Keep proposed order</b> — demoable early beats pretty-to-build later. (§20)</td><td>review</td></tr>
   </table>
-  <div class="note ask">Still open for a future review (not blocking M2): the plugin mechanism when extensions are wanted — out-of-process JSONL-over-stdio is the current candidate (§03).</div>
+  <div class="note ask">Resolved after the build: hooks are specified as §22 — one-shot, user-level shell commands. Still open: a long-lived plugin runtime with custom tools/commands/TUI (out-of-process JSONL-over-stdio remains the candidate, §03) and project-scoped hooks, which need a trust story.</div>
+</section>
+
+<section id="hooks" data-title="Hooks">
+  <h2><span class="num">22</span> Hooks</h2>
+  <p class="lead">User-defined shell commands at the loop's interception points — the first shipped extension seam (§03). One process per event, JSON on stdin, an optional decision on stdout. No runtime, no project-level code.</p>
+
+  <h3>What a hook is</h3>
+  <ul>
+    <li><b>A one-shot command.</b> <code>gg</code> runs <code>bash -c &lt;command&gt;</code> in the session cwd, writes one JSON object to stdin, closes it, and reads stdout/stderr to completion (bounded). Hooks live in the agent layer, so every interface gets them; no state survives between invocations.</li>
+    <li><b>Not a plugin runtime.</b> No code is loaded into the process, no custom tools or commands, no TUI components. Custom tools still mean editing Rust (§03, §04).</li>
+    <li><b>Not a sandbox or an approval prompt.</b> A hook runs with the user's permissions — the same trust boundary as the <code>bash</code> tool (§10). A <code>pre_tool</code> deny is user-authored policy, not a security boundary: the model already has <code>bash</code>, and the user can edit the file.</li>
+    <li><b>User-level only.</b> Hooks are declared in <code>~/.gg/hooks.toml</code>. A project <code>.gg/hooks.toml</code> is ignored with a startup warning, so cloning a repository cannot add executable behavior. Pointing a user-level command at a project script is allowed — the user wrote the command.</li>
+  </ul>
+
+  <h3>Configuration</h3>
+  <pre class="code"><span class="cm"># ~/.gg/hooks.toml — user-level policy, loaded once at startup</span>
+[[hooks]]
+event = "pre_tool"                 <span class="cm"># pre_tool | post_tool | run_end</span>
+tools = ["bash"]                   <span class="cm"># tool events: omit or ["*"] for all; exact names</span>
+command = "~/.gg/hooks/guard-bash.sh"
+timeout_secs = 5                   <span class="cm"># default 10; must be positive</span>
+
+[[hooks]]
+event = "post_tool"
+tools = ["edit", "write"]
+command = "./scripts/format-changed-file.sh"
+
+[[hooks]]
+event = "run_end"
+command = "notify-send gg 'run finished'"</pre>
+  <table class="tbl">
+    <tr><th>key</th><th>required</th><th>rule</th></tr>
+    <tr><td><code>event</code></td><td>yes</td><td><code>pre_tool</code>, <code>post_tool</code>, <code>run_end</code>; anything else is a config error naming the valid set</td></tr>
+    <tr><td><code>tools</code></td><td>no</td><td>tool events only; exact registry names or <code>["*"]</code>/omitted for all; empty or unknown names are errors; forbidden on <code>run_end</code></td></tr>
+    <tr><td><code>command</code></td><td>yes</td><td>non-empty; run with <code>bash -c</code> in the session cwd</td></tr>
+    <tr><td><code>timeout_secs</code></td><td>no</td><td>default 10; positive; the process group is killed at the deadline</td></tr>
+  </table>
+  <ul>
+    <li>An absent file means no hooks. A malformed or unreadable file is a startup error naming the path (the <code>config.rs</code> philosophy: invalid values are loud). Unknown keys are ignored, consistent with config and wire forward-compatibility.</li>
+    <li>Hooks load once per process (a <code>--watch</code> restart reloads them, like skills and prompt templates). The TUI factory reuses the same set across <code>/new</code> and <code>/resume</code>.</li>
+    <li><code>--no-hooks</code> skips loading and the project-file warning entirely; <code>/hooks</code> lists what loaded, or says hooks are disabled.</li>
+  </ul>
+
+  <h3>Events and firing points</h3>
+  <table class="tbl">
+    <tr><th>event</th><th>when</th><th>may</th><th>failure policy</th></tr>
+    <tr><td><code>pre_tool</code></td><td>after <code>ToolCallStarted</code>, before dispatch</td><td>allow or deny (no rewrite)</td><td><code>Warned</code> + allow</td></tr>
+    <tr><td><code>post_tool</code></td><td>after <code>ToolCallFinished</code>; the result is already recorded</td><td>observe only</td><td><code>Warned</code>, run continues</td></tr>
+    <tr><td><code>run_end</code></td><td>once, after a clean final answer, before <code>RunEnded</code></td><td>observe only</td><td><code>Warned</code>, run continues</td></tr>
+  </table>
+  <ul>
+    <li>Matching hooks run in file order, one at a time. The first <code>pre_tool</code> deny wins and the remaining pre hooks for that call are skipped; the tool never executes and no <code>post_tool</code> hook fires for it. Other calls in the batch still run.</li>
+    <li>A deny synthesizes <code>ToolResult::err("denied by pre_tool hook: &lt;reason&gt;")</code> — a normal tool error the model reads and reacts to. It is appended to the session like any result, so replay stays truthful.</li>
+    <li><code>post_tool</code> runs after the result is recorded, so a slow formatter cannot change what the model was told. <code>run_end</code> fires for a clean final answer only; aborted and failed runs return before it.</li>
+    <li>No hooks fire for the compaction summarize call, the TUI's <code>!</code> shell, skill loading, or prompt-template expansion — those are not model tool calls. A call whose provider arguments failed to parse also skips hooks: dispatch's <code>args_error</code> result is the answer, not a policy decision (§10).</li>
+    <li>The abort flag is polled while a hook runs (every 100&nbsp;ms); Esc kills the hook's process group, the current call gets <code>"aborted before execution"</code>, and the loop's existing abort path synthesizes the rest of the batch (§09).</li>
+  </ul>
+
+  <h3>Protocol</h3>
+  <p>One JSON object on stdin. Every payload carries <code>version</code> (1), <code>event</code>, <code>cwd</code>, and <code>session_id</code> (<code>null</code> with <code>--no-session</code>). Tool events add the call; <code>post_tool</code> also carries the result the model saw:</p>
+  <pre class="code">{"version":1,"event":"pre_tool","cwd":"/home/hf/Projects/ganggang","session_id":"…",
+ "tool":{"id":"call_339…","name":"bash","args":{"command":"git status"}}}
+
+{"version":1,"event":"post_tool","cwd":"…","session_id":"…",
+ "tool":{"id":"call_339…","name":"bash","args":{"command":"git status"}},
+ "result":{"output":"[exit code: 0]\n…","is_error":false}}
+
+{"version":1,"event":"run_end","cwd":"…","session_id":"…","turns":3}</pre>
+  <p>Only <code>pre_tool</code> reads stdout, and only one decision is recognised:</p>
+  <pre class="code">{"decision":"deny","reason":"recursive delete outside the repo"}</pre>
+  <table class="tbl">
+    <tr><th>hook ends with</th><th><code>pre_tool</code></th><th><code>post_tool</code> / <code>run_end</code></th></tr>
+    <tr><td>exit 0, empty stdout</td><td>allow</td><td>success</td></tr>
+    <tr><td>exit 0, <code>{"decision":"allow"}</code> / <code>{"decision":"deny","reason":"…"}</code></td><td>explicit allow / deny</td><td>stdout ignored</td></tr>
+    <tr><td>exit 0, anything else on stdout</td><td><code>Warned</code> + allow</td><td>ignored</td></tr>
+    <tr><td>non-zero exit, signal, timeout, spawn failure</td><td><code>Warned</code> + allow</td><td><code>Warned</code></td></tr>
+  </table>
+  <ul>
+    <li><code>reason</code> is optional and capped at 2&nbsp;KiB; the default names the hook. Unknown fields are ignored; an unknown decision or invalid JSON is a failure, not a deny.</li>
+    <li>Failure is deliberately fail-open — a broken guard must not wedge the agent. The <code>Warned</code> names the hook and carries a bounded stderr tail. A guard that must fail closed should not be the only defence; there is no sandbox (§04).</li>
+    <li>stdout is capped at 64&nbsp;KiB and stderr at 8&nbsp;KiB, both drained past the cap so the child never blocks on a full pipe. A hook that ignores stdin is fine; a broken pipe on the stdin write is not a failure.</li>
+    <li>Hooks share the <code>bash</code> tool's process discipline: own process group, <code>kill_on_drop</code>, group-wide SIGKILL at the deadline (§10). A hook is sequential with the tool call it observes; there is no parallelism.</li>
+    <li>No new <code>AgentEvent</code> variants: a deny is a <code>ToolCallFinished</code> with <code>is_error</code>; a hook failure is <code>Warned</code>. JSON mode and print mode need no shape changes (§15).</li>
+  </ul>
+
+  <h3>Deliberate limits (v1)</h3>
+  <ul>
+    <li><b>No argument rewriting, synthetic results, or output injection.</b> The recorded call and result must match what actually ran and what the model saw; rewriting would need a new session entry to stay honest. Revisit with an explicit <code>hook</code> entry type.</li>
+    <li><b>No "ask" decision.</b> There is no approval UI; the model is either allowed or denied, and a denial is a value.</li>
+    <li><b>No regex matchers, per-run hook environment, chains, or parallel hooks.</b> Exact tool names or <code>*</code>; sequential in file order.</li>
+    <li><b>No project-scoped hooks.</b> They need a trust story (a startup prompt or a user-level allowlist), which is more surface than the feature is worth today. A user-level command can still point at a project script.</li>
+    <li><b>Still deferred: the long-lived plugin runtime.</b> Custom tools, commands, and TUI components remain out of scope (§03, §04); hooks cover only the stateless cases.</li>
+  </ul>
+
+  <h3>Example: a guard</h3>
+  <pre class="code"><span class="cm">#!/usr/bin/env bash — ~/.gg/hooks/guard-bash.sh</span>
+cmd=$(jq -r '.tool.args.command // empty')
+case "$cmd" in
+  *"git push --force"*|*"rm -rf /"*)
+    printf '{"decision":"deny","reason":"blocked by the user guard hook"}\n' ;;
+esac</pre>
+  <p>Wire it with the <code>pre_tool</code> entry from the configuration above. The hook needs <code>jq</code> only because it chooses to parse JSON in shell; <code>gg</code> adds no dependency.</p>
+
+  <div class="note warn"><b>Security stance:</b> hooks run arbitrary user commands with the user's permissions, in the session cwd — exactly like the <code>bash</code> tool, and just as unsandboxed. They are a workflow tool, not a defence against a hostile model. Because they are user-level only, a repository can never ship them.</div>
 </section>
 
 <footer class="doc">
-  ganggang design v2 &middot; v1 feedback incorporated &middot; sources studied: pi <code>docs/</code> (how-pi-works, skills, session-format, message-types, compaction, cli, settings, security, extensions) + review research: <a href="https://github.com/1jehuang/jcode" style="color:var(--muted)">jcode</a> (self-dev), <a href="https://opencode.ai/v2/docs/plugins" style="color:var(--muted)">opencode 2 plugins</a>, <code>@earendil-works/pi-durable</code>, <a href="https://github.com/Niko1221/Strata" style="color:var(--muted)">Strata</a> (backend, <code>127.0.0.1:8080/v1</code>) &middot; repo state: M1.5 @ <code>a0e8a42</code> + uncommitted two-turn smoke test
+  ganggang design v2.2 &middot; v1 feedback incorporated &middot; hooks amendment &middot; sources studied: pi <code>docs/</code> (how-pi-works, skills, session-format, message-types, compaction, cli, settings, security, extensions) + review research: <a href="https://github.com/1jehuang/jcode" style="color:var(--muted)">jcode</a> (self-dev), <a href="https://opencode.ai/v2/docs/plugins" style="color:var(--muted)">opencode 2 plugins</a>, <code>@earendil-works/pi-durable</code>, <a href="https://github.com/Niko1221/Strata" style="color:var(--muted)">Strata</a> (backend, <code>127.0.0.1:8080/v1</code>) &middot; repo state: M1.5 @ <code>a0e8a42</code> + uncommitted two-turn smoke test
 </footer>
 
 </main>
