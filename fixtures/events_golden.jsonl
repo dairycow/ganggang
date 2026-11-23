@@ -1,0 +1,9 @@
+{"type":"run_started"}
+{"type":"turn_started"}
+{"type":"tool_call_started","name":"echo","id":"call_1","args":{"text":"hi"}}
+{"type":"tool_call_finished","name":"echo","id":"call_1","output":"hi","is_error":false}
+{"type":"turn_ended","stop_reason":"tool_calls"}
+{"type":"turn_started"}
+{"type":"assistant_text","delta":"done"}
+{"type":"turn_ended","stop_reason":"stop"}
+{"type":"run_ended","turns":2}

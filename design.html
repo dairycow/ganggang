@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ganggang — design (v2, for review)</title>
+<style>
+  :root {
+    --bg: #101418; --panel: #171d24; --panel2: #1d242d; --line: #2a333f;
+    --text: #d7dee7; --muted: #8b98a7; --accent: #7aa2f7; --accent2: #9ece6a;
+    --warn: #e0af68; --err: #f7768e; --ok: #9ece6a; --q: #bb9af7;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.65 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  }
+  .layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); max-width: 1180px; margin: 0 auto; }
+  nav#toc {
+    position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+    padding: 24px 14px; border-right: 1px solid var(--line); font-size: 13.5px;
+  }
+  nav#toc h3 { margin: 0 0 10px; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  nav#toc a { display: flex; gap: 8px; align-items: baseline; padding: 3px 8px; color: var(--muted); text-decoration: none; border-radius: 6px; }
+  nav#toc a:hover { color: var(--text); background: var(--panel); }
+  nav#toc a .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; align-self: center; }
+  nav#toc a .dot.approve { background: var(--ok); } nav#toc a .dot.changes { background: var(--err); }
+  nav#toc a .dot.question { background: var(--q); } nav#toc a .dot.comment { background: var(--warn); }
+  main { padding: 40px 48px 120px; min-width: 0; }
+  header.doc h1 { font-size: 30px; margin: 0 0 4px; }
+  header.doc .sub { color: var(--muted); margin-bottom: 20px; }
+  .howto {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 18px; margin: 0 0 8px; font-size: 14.5px;
+  }
+  .howto b { color: var(--accent); }
+  .toolbar { display: flex; gap: 10px; margin: 14px 0 40px; flex-wrap: wrap; }
+  button.btn {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 14px; font: inherit; font-size: 14px; cursor: pointer;
+  }
+  button.btn:hover { border-color: var(--accent); color: var(--accent); }
+  button.btn.primary { background: var(--accent); color: #0c1016; border-color: var(--accent); font-weight: 600; }
+  button.btn.primary:hover { filter: brightness(1.1); color: #0c1016; }
+  section { border-top: 1px solid var(--line); padding: 26px 0 6px; margin-top: 26px; }
+  section h2 { font-size: 21px; margin: 0 0 4px; display: flex; align-items: center; gap: 10px; }
+  section h2 .num { color: var(--muted); font-size: 14px; font-family: var(--mono); }
+  section h3 { font-size: 16.5px; margin: 22px 0 6px; color: var(--accent); }
+  section > p.lead { color: var(--muted); margin: 2px 0 14px; font-size: 15px; }
+  p { margin: 10px 0; }
+  ul, ol { margin: 8px 0; padding-left: 24px; }
+  li { margin: 4px 0; }
+  code { font-family: var(--mono); font-size: 0.88em; background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
+  pre.code {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.55;
+    margin: 12px 0;
+  }
+  pre.code .cm { color: #5c6a7a; } /* comment */
+  table.tbl { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+  table.tbl th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: .06em; }
+  table.tbl th, table.tbl td { border-bottom: 1px solid var(--line); padding: 7px 10px; vertical-align: top; }
+  table.tbl td:first-child { white-space: nowrap; }
+  .chip { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 20px; border: 1px solid; white-space: nowrap; }
+  .chip.adopt { color: var(--ok); border-color: var(--ok); }
+  .chip.later { color: var(--warn); border-color: var(--warn); }
+  .chip.skip  { color: var(--err); border-color: var(--err); }
+  .chip.simp  { color: var(--accent); border-color: var(--accent); }
+  .note { border-left: 3px solid var(--accent); background: var(--panel); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 14px 0; font-size: 14.5px; }
+  .note.warn { border-left-color: var(--warn); }
+  .note.ask { border-left: 3px solid var(--q); }
+  .fb { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 18px 0 8px; }
+  .fb .fb-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; flex-wrap: wrap; }
+  .fb .fb-head .grow { flex: 1; }
+  .fb textarea {
+    width: 100%; min-height: 64px; resize: vertical; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: 14px/1.5 var(--mono);
+  }
+  .fb textarea:focus { outline: none; border-color: var(--accent); }
+  .vbtn { font: 600 12px/1 inherit; padding: 5px 10px; border-radius: 20px; border: 1px solid var(--line); background: var(--panel2); color: var(--muted); cursor: pointer; }
+  .vbtn[aria-pressed="true"].v-approve { background: var(--ok); color: #0c1016; border-color: var(--ok); }
+  .vbtn[aria-pressed="true"].v-changes { background: var(--err); color: #0c1016; border-color: var(--err); }
+  .vbtn[aria-pressed="true"].v-question { background: var(--q); color: #0c1016; border-color: var(--q); }
+  .fb-status { font-size: 12px; color: var(--muted); }
+  details.export { margin-top: 10px; }
+  details.export pre { font-size: 12.5px; }
+  footer.doc { margin-top: 60px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 16px; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } nav#toc { display: none; } }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav id="toc"><h3>Contents</h3><div id="toc-list"></div></nav>
+<main>
+
+<header class="doc">
+  <h1>ganggang — a minimal Rust coding harness</h1>
+  <div class="sub">Design v2.1 (v1 review feedback incorporated) &middot; modelled on <a href="https://github.com/earendil-works/pi" style="color:var(--accent)">pi</a> &middot; binary <code>gg</code> &middot; backend: <a href="https://github.com/Niko1221/Strata" style="color:var(--accent)">Strata</a> at <code>127.0.0.1:8080/v1</code> &middot; status: M2 in progress</div>
+  <div class="howto">
+    <b>How to review:</b> every section below has a feedback box — pick a verdict (<i>approve / needs changes / question</i>) and write comments.
+    Feedback is saved in your browser as you type. When done, click <b>Export feedback</b> and hand me the resulting Markdown file (or just paste it back into chat).
+    v2 feedback starts fresh (v1 verdicts were consumed into this revision — see changelog below).
+  </div>
+  <div class="note"><b>v1 → v2 changelog (from your feedback):</b> comments trimmed to standard OSS-Rust docs (§01, §18) · thinking levels <i>skip→later</i> (§02) · extensions researched — jcode / opencode&nbsp;2 / pi-durable — new §03 with seam-keeping decision · turn limit removed, abort is the guard (§09, §21) · settings → TOML, defaults raised: max_tokens 4096, context 131072 (§06, §16) · backend renamed llama.cpp → Strata everywhere (§16, §19) · all eight open questions resolved (§21) · print-mode sessions persist by default (§13, §15).</div>
+  <div class="note"><b>v2 → v2.1 amendments (from building M2):</b> domain <code>ToolCall</code> gains <code>args_error</code> — arguments parse once at the <code>from_response</code> boundary; dispatch checks it first and returns the §10 error result without invoking the tool (§08, §10) · a call with unparseable args replays with <code>{}</code> and is never dropped (§08) · <code>Message.ts_unix</code> dropped — dead weight, timestamps live on <code>Entry</code> (§08) · session files write <code>is_error</code> only when true — minimal-write, consistent with omitting empty <code>tool_calls</code>/<code>usage</code>; §13 example updated (§13) · abort synthesizes tool_results for unanswered calls and emits a terminal <code>RunAborted</code> event (§08, §09) · a final turn with no content emits a <code>Warned</code> (§17 made explicit) · skill <code>name</code> is authoritative from frontmatter and validated leniently (non-empty only — no charset/length/dir-match rule; collisions are case-sensitive, first-wins) — deliberate divergence from agentskills.io, recorded here per §0 (§11) · a BOM ahead of the fences makes a SKILL.md fence-less → skipped (§11) · quoted frontmatter values lose their surrounding quotes (§11) · M4 amendments: collapsed tool lines show args + ✓/✗ status (§15) · Ctrl+C is a single-press quit in the TUI (session flush-per-append makes mid-run exit safe; print mode keeps two-press) · extra keys beyond §15's list: Ctrl+J (portable newline), PageUp/Down, bracketed paste, Backspace, <code>/exit</code> alias, <code>!!</code> · session filenames stamp <code>YYYYMMDD-HHMMSS</code> (§13) · the footer shows busy state and context % (§15) · <code>/context</code> added to the command set (§12/§15) · §18's Arc/channel budget relaxed for the TUI agent-task factory and channels · M5 amendments: a stream that ends without <code>[DONE]</code> is a transport error — abort with context, never a silently-accepted partial answer (§17; Strata serves SSE connection-close framed, so a mid-generation death is a clean EOF) · the streamed path records assistant <code>content: null</code> on pure tool-call turns — the role-echo chunk's <code>content: ""</code> is not content, so streamed session files match non-streamed shapes byte-for-byte (§08) · print-mode spinner redraws gate on <code>stderr</code> being a terminal and are closed when the event channel ends, so failed runs leave no residue (§15) · M7 amendments: the default <code>tools</code> allowlist is now <code>["read","bash","edit","write","grep","find","ls"]</code> (§16 table updated — the polish tools ship enabled; §02's "bash covers them" stance ends when they exist) · <code>grep</code> is fixed-substring, not regex — no new dependency (§10); regex wants the bash tool · compaction visibility: successful compactions report as <code>Warned</code> events (§08's enum has no dedicated variant; §17's visibility rule applied) · JSON mode lives in <code>src/json_mode.rs</code>, session header via the store's <code>header_record</code>, omitted for <code>--no-session</code> (§15) · M6 review amendments: <code>/compact</code> while a run is in flight is ignored (the busy gate — commands land between runs); a session-I/O failure during manual <code>/compact</code> degrades to a reported failure instead of aborting, since there is no run to kill (the loop's auto-compaction keeps §17's abort) · a closed stdout pipe ends JSON/print runs quietly — an early-closing consumer is a normal producer end, not an error · trigger-true-with-no-cut-point warns once per run instead of silently requesting past the window (§17) · M7.3 amendment: `AgentEvent` grows `Thinking { delta }` — streamed reasoning fragments, serialized `{"type":"thinking"}`; JSON mode passes them through, print mode omits them (§08, §15). Assistant `Message.reasoning` is persisted when non-empty but never replayed to the model (§08, §13) · M7.4/M7.5 amendments: `/prompts` joins §15's command set; prompt templates load from `~/.gg/prompts/*.md` (frontmatter `name`/`description`; no-fences files valid with the stem as name; built-in command names win collisions; first-name-wins between files; `/<name> [args]` INSERTS the draft into the editor rather than submitting); `@path` mentions expand at TUI submission into visible attachment blocks (50 KB cap, binary/missing/cap markers per §17; a token mentions a file only when its text after `@` contains `/` or `.` — emails and lone `@` stay literal);  print-mode prompts stay literal — mentions are editor behavior (§15). · post-build amendment (2026-11-23, daily-driver feedback): typing a <code>/</code> command in the composer shows a live suggestion list floating above the editor — the built-in set, the discovered prompt templates, and (once <code>/skill:</code> is typed) one row per skill; <code>↑</code>/<code>↓</code> move the highlight, Tab completes the highlighted row into the composer (trailing space, ready for args), Enter keeps §15's send semantics; the list shows only while the composer is a bare command word (leading <code>/</code>, no whitespace) and caps at nine rows (§15). Refinements from review: the generic <code>/skill:</code> row completes to the bare colon — no trailing space, which would close the popup before the skill name is typed; <code>/exit</code> remains a hidden alias, never advertised in the popup; the selection clamps to the rows the terminal actually drew, so the highlight cannot walk off a short screen; known corner, accepted: on terminals too short to draw the popup at all (≤ 7 rows) the popup keys stay live against an invisible list (§15). · post-build amendment (2026-11-23, daily-driver feedback): <code>Ctrl+G</code> opens the composer's text in an external editor — <code>$VISUAL</code>, else <code>$EDITOR</code>, else <code>nano</code>, pi's order and fallback; the value may carry arguments (<code>code --wait</code>). The draft is a user-only file in the temp dir; what the editor saves replaces the composer once the editor exits with status 0, normalized like a paste (line endings, the trailing newline editors add), and nothing is sent until Enter. A non-zero exit leaves the composer alone and keeps an edited draft where the warning names it; a cancel with no edits leaves nothing behind. The loop keeps folding agent events while the editor owns the screen, so a run in flight neither stalls nor bursts on return. No config key, no new dependency. What testing settled, kept as the rule: the key reader parks on delivering Ctrl+G — a blocking read cannot be interrupted from outside, and two readers on one tty race for every byte; the repaint on return is a resize to the current size, not <code>Terminal::clear</code> — that asks the terminal for the cursor position and blocks until it answers, and on a terminal that does not (a raw pty) the timeout ended the session; and no input is flushed on return — the parting query nvim makes for the terminal's attributes is answered in a form crossterm consumes itself, so a flush only dropped keys typed as the editor closed. Refinements from its fresh review: on return the tty goes back to the mode the shell left (recorded once, before gg first goes raw, with <code>stty -g</code>) before gg re-enters — crossterm keeps a single mode-before-raw and would otherwise remember a killed editor's raw mode, so that quitting gg left the shell a raw terminal — and the modes an editor switches on and a killed one never switches off (mouse reporting, focus events, keyboard-enhancement flags at every level, synchronized output, application cursor keys and keypad, key modification) are reset — in tmux, with keypad mode left on the numpad typed nothing, and with key modification left on (tmux's <code>extended-keys</code> on, which is off by default, or outside tmux a terminal that honours modifyOtherKeys) Ctrl+C itself arrived in a form gg never saw, so a killed nvim left gg running with no way to quit it from the keyboard; keys that shared Ctrl+G's tty read are dropped, since gg read them first and they could never reach the editor (an Enter among them sent the draft sight unseen); the loop ends the editor before restoring the terminal if it exits with one open, puts the tty and the modes back there too, and tells the user where the editor's draft was kept; exactly the final newline of a saved draft is dropped, and a byte-order mark with it; a draft gg cannot read as text is kept and said to be kept, whatever the editor's exit; an editor that returns in under half a second with nothing saved leaves a hint about wait flags (<code>EDITOR=code</code> opens a window and returns at once; a slower-starting one takes longer than that and then stays silent); drafts sit in one private directory per gg run (<code>gg-draft-&lt;pid&gt;</code> in the temp dir — a name taken only if it is the user's own to take, else a fresh one — removed when gg exits normally and holds no kept draft), so an editor with persistent undo keeps one history per run. Known corner, recorded: crossterm consumes cursor-position, device-attribute and keyboard-flag reports itself — the kind nvim asks for as it exits — but a reply in another form (a mode report, an OSC or DCS string) arriving after the editor is gone arrives as typed keys, a mode report holds the parser until a <code>c</code> or <code>u</code> is typed, and an OSC reply ended with BEL parses as Ctrl+G and reopens the editor; no editor measured (nvim, vim, nano, micro) sends such a query on exit, and flushing input on return was rejected because it drops the keys a fast hand types as the editor closes. Verified live by <code>scripts/tui-live.sh</code>: driven through tmux, each case on a tmux server of its own (tmux options are server-wide, so the user's is never touched) — the hand-off, the editor's failure modes, and what the pane's terminal looks like after gg quits, including a killed nvim with tmux's <code>extended-keys</code> off and on (§15). · post-build amendment (2026-11-23, daily-driver feedback): the composer gains readline editing and portable newline keys — Alt+Enter and Ctrl+J insert a newline (Shift+Enter stays, for terminals that report modified keys), Ctrl+A/Ctrl+E jump to the current line's start/end, Ctrl+K/Ctrl+U kill to the line's end/start (kill-line joins the next line on at EOL), and ←/→/↑/↓ move the cursor (Home/End jump to the line's bounds); gg asks for modified keys on entering — under tmux the xterm modifyOtherKeys request, which tmux honours only with <code>extended-keys on</code> and answers in CSI-u form that crossterm parses, otherwise crossterm's kitty flags — and both are popped by <code>restore</code> so the shell gets a plain terminal back. · post-build amendment (2026-11-23, daily-driver feedback): <code>gg --watch</code> — the jcode-style self-dev loop (§03's seam). Watch <code>src/</code> plus <code>Cargo.toml</code>/<code>Cargo.lock</code> by mtime+len snapshot (no new dependency), debounce 600 ms, run <code>cargo build</code> as a tokio task, then re-exec the rebuilt binary on the same session (<code>--resume &lt;8-hex&gt;</code>): the TUI returns <code>Exit::Restart</code> and <code>main</code> execs only after the terminal guard has put the tty back. The profile is inferred from the running exe (<code>target/debug</code> vs <code>target/release</code>) so a restart never silently changes build type; <code>cargo metadata --no-deps</code> refuses any workspace without a <code>gg</code> bin target, so <code>--watch</code> cannot exec another project's binary. A restart waits for idle and an empty composer; with unsent text the footer holds at <code>rebuild ready · Ctrl+R</code> (Ctrl+R rebuilds and restarts on demand), and the draft is written beside the session (<code>&lt;session&gt;.watch-draft</code>, 0600) and restored by the new process. A fresh watch session materializes its file at boot — restart continuity needs an id to resume — while ordinary runs stay lazy (§13). Build failures render the tail of cargo's output as a <code>Warned</code> and leave the old binary running; the next edit (or Ctrl+R) retries. Verified live by <code>scripts/watch-live.sh</code> through tmux with a temp HOME: boot, automatic restart into a new executable inode, the same session resumed by id, and the draft hold + carry — with no model calls (§15). Review fixes, kept as rules: a build whose inputs changed while cargo ran is discarded and rebuilt, so a restart never lands an older binary than the newest save (a Ctrl+R request survives that chain); the snapshot covers <code>*.rs</code> under <code>src/</code> only and skips symlinks, so editor swap/autosave files cannot trigger builds; cargo is spawned with <code>kill_on_drop</code>, so quitting gg mid-build cannot leave a child holding the package lock; a multi-line warning renders line by line (the cargo tail keeps rustc's alignment); header-only watch sessions sort below real conversations in <code>-c</code>/<code>/resume</code> yet stay resolvable by id; the draft is chmod 0600 even when a stale file exists; discovery requires the <code>ganggang</code> package, not merely some <code>gg</code> bin target. · post-build amendment (2026-11-23, multi-provider support): <code>[providers.&lt;name&gt;]</code> presets for <code>strata</code> (default), <code>glm-coding-plan</code> (alias <code>zai-coding-plan</code>), <code>opencode-go</code>, and <code>deepseek</code>; <code>openai-completions</code> and <code>anthropic-messages</code> wire adapters (with per-model routing, <code>x-opencode-session</code> routing header for OpenCode Go, and <code>replay_reasoning</code> for interleaved thinking models); CLI flags <code>-P</code>/<code>--provider</code>, <code>-m</code>/<code>--model</code>, and <code>--list-models</code>; and TUI <code>/model</code> mid-session switching (§08, §15, §16).</div>
+  <div class="toolbar">
+    <button class="btn primary" id="export-btn">⬇ Export feedback (.md)</button>
+    <button class="btn" id="clear-btn">Clear all feedback</button>
+    <span class="fb-status" id="global-status"></span>
+  </div>
+</header>
+
+<!-- ==================================================================== -->
+
+<section id="principles" data-title="Principles">
+  <h2><span class="num">01</span> Principles</h2>
+  <p class="lead">The rules every later decision defers to.</p>
+  <ol>
+    <li><b>Documentation is standard OSS Rust, not a tutorial.</b> <code>//!</code> module docs and <code>///</code> on public items explain <i>why</i>; inline comments cover non-obvious decisions only. (v1 over-did this in <code>src/llm/types.rs</code> — v2 trims it back.)</li>
+    <li><b>Pi is the reference, not the requirement.</b> Adopt the parts of pi's design that teach something; simplify where pi is product-scale (providers catalog, OAuth, packages).</li>
+    <li><b>The data model is the design.</b> Sessions and events are plain JSONL you can <code>cat</code>, <code>grep</code>, and replay. Anything important is a serde type.</li>
+    <li><b>Small surface.</b> One binary, one provider protocol (OpenAI-compatible), one trait (<code>Tool</code>), no plugin code execution. Deep trait hierarchies, macros, and <code>unsafe</code> are banned.</li>
+    <li><b>Budgets keep it honest:</b> ~150–300 lines per module; split when exceeded. Every commit keeps <code>cargo test</code> and <code>cargo clippy</code> clean (the existing review culture).</li>
+    <li><b>Be permissive on the wire, strict internally.</b> Providers are parsed loosely (unknown fields ignored); internal state is typed enums, not strings.</li>
+  </ol>
+</section>
+
+<section id="feature-map" data-title="Feature map: pi → gg">
+  <h2><span class="num">02</span> Feature map: pi → ganggang</h2>
+  <p class="lead">Every notable pi feature and what ganggang does with it. This table is the contract — the rest of the doc just details the “adopt” rows.</p>
+  <table class="tbl">
+    <tr><th>pi feature</th><th>Decision</th><th>Notes</th></tr>
+    <tr><td>Agent loop (request → tool calls → results → repeat)</td><td><span class="chip adopt">adopt</span></td><td>The heart of M2. Sequential tool execution, abort support.</td></tr>
+    <tr><td>Tools: read, bash, edit, write (defaults)</td><td><span class="chip adopt">adopt</span></td><td>Same four, same semantics as pi where sensible.</td></tr>
+    <tr><td>Tools: grep, find, ls</td><td><span class="chip later">later</span></td><td><code>bash</code> covers them; add as polish once loop is stable.</td></tr>
+    <tr><td>Streaming responses (SSE)</td><td><span class="chip later">later</span></td><td>Non-streaming first (simpler, testable); SSE in M5. Wire types designed so streaming is additive.</td></tr>
+    <tr><td>Skills (Agent Skills spec)</td><td><span class="chip adopt">adopt</span></td><td>Core requirement. <code>SKILL.md</code> discovery from <code>~/.agents/skills</code> and <code>.agents/skills</code>, advertised in system prompt, loaded on demand.</td></tr>
+    <tr><td>Context files (AGENTS.md)</td><td><span class="chip simp">simplify</span></td><td><code>AGENTS.md</code> only (not CLAUDE.md), from cwd up to repo root, plus <code>~/.gg/AGENTS.md</code>.</td></tr>
+    <tr><td>Sessions as JSONL</td><td><span class="chip adopt">adopt</span></td><td>Pi's entry shapes, simplified: linear first, but <code>id</code>/<code>parentId</code> reserved so the tree is additive.</td></tr>
+    <tr><td>Session resume / <code>--continue</code></td><td><span class="chip adopt">adopt</span></td><td>Picker comes with the TUI.</td></tr>
+    <tr><td>Compaction</td><td><span class="chip later">later</span></td><td>Designed now (numbers, entry type, rebuild rule), implemented in M6.</td></tr>
+    <tr><td>Interactive TUI</td><td><span class="chip adopt">adopt</span></td><td>ratatui + crossterm. Transcript + editor + footer, like pi's fullscreen mode.</td></tr>
+    <tr><td>Print mode (<code>-p</code>)</td><td><span class="chip adopt">adopt</span></td><td>One-shot, final answer to stdout. First non-TUI interface shipped.</td></tr>
+    <tr><td>JSON mode (event stream)</td><td><span class="chip later">later</span></td><td>M6. Same internal event enum the TUI consumes.</td></tr>
+    <tr><td>Slash commands</td><td><span class="chip simp">simplify</span></td><td>Small fixed set: <code>/new /resume /compact /skills /quit</code> + <code>/skill:&lt;name&gt;</code> + <code>!</code> shell prefix.</td></tr>
+    <tr><td>Prompt templates</td><td><span class="chip later">later</span></td><td>Easy once slash-command plumbing exists; not core.</td></tr>
+    <tr><td>Steering / queued messages mid-run</td><td><span class="chip later">later</span></td><td>v1 has abort only; steering queue is a small extension of the loop's input side.</td></tr>
+    <tr><td>Extensions (in-process TS modules)</td><td><span class="chip later">later</span></td><td>Researched per review (§03: pi, opencode&nbsp;2, jcode, pi-durable). No plugin runtime in scope — but the architecture keeps four seams so a plugin system, or jcode-style self-dev, can be added without rework.</td></tr>
+    <tr><td>MCP servers</td><td><span class="chip skip">skip</span></td><td>Out of scope; would reintroduce process/protocol management.</td></tr>
+    <tr><td>Multi-provider catalog, OAuth, API-key store</td><td><span class="chip skip">skip</span></td><td>One OpenAI-compatible endpoint via env/config (Strata default). The <code>llm</code> layer keeps the seam clean if this ever changes.</td></tr>
+    <tr><td>RPC mode + SDK</td><td><span class="chip skip">skip</span></td><td>JSON mode is the automation surface.</td></tr>
+    <tr><td>Themes, keybindings config, packages, sharing, bug reports</td><td><span class="chip skip">skip</span></td><td>Product polish; not learning goals.</td></tr>
+    <tr><td>Project trust</td><td><span class="chip simp">simplify</span></td><td>No project-executable resources are loaded (no plugin runtime — §03), so there is nothing to gate. The <i>bash tool</i> is the trust boundary — documented, not enforced (see §10).</td></tr>
+    <tr><td>Thinking levels, cache warming, image content</td><td><span class="chip later">later</span></td><td>Thinking <i>is</i> wanted (v2 decision): Strata's Qwen3.8 emits <code>reasoning_content</code>; wire parsing is already permissive, so capturing/displaying it is additive (M7). Cache warming and image content stay skipped.</td></tr>
+  </table>
+  <div class="note ask">If you'd re-classify any row, say so in the feedback box — each decision is a bet that it never blocks daily use.</div>
+</section>
+
+<section id="extensions-research" data-title="Extension research (new in v2)">
+  <h2><span class="num">03</span> Extension research: pi, opencode 2, jcode, pi-durable</h2>
+  <p class="lead">Requested in review: “do more research on extensions/plugins before confirming — if we get this architecture right, gg can evolve into anything.” Findings and the resulting decision.</p>
+  <table class="tbl">
+    <tr><th>project</th><th>mechanism</th><th>lesson for ganggang</th></tr>
+    <tr><td><b>pi</b> extensions</td><td>TS modules loaded <i>into</i> the agent process: event hooks, custom tools, commands, TUI components; distributed as npm/git packages.</td><td>Maximal integration — but requires embedding a scripting runtime and trusting plugin code with everything the process can do.</td></tr>
+    <tr><td><b>opencode 2</b> plugins</td><td>npm packages or local <code>.ts/.js</code> dirs declared in <code>opencode.jsonc</code>; lifecycle hooks (<code>tool.execute.before/after</code>, chat events); discovered from <code>.opencode/plugins/</code>.</td><td>Same in-process model as pi; config-declared discovery is clean. Confirms hooks-over-events as the canonical surface.</td></tr>
+    <tr><td><b>jcode</b> (Rust, ~22k★)</td><td><b>No plugin API at all.</b> “Self-dev mode”: the agent edits, builds, and tests its <i>own source</i>, then hot-swaps its binary and continues its sessions automatically.</td><td>The other pole: customizability = source access, not a plugin sandbox. Needs exactly what ganggang already plans: fast builds, append-only sessions, restart continuity.</td></tr>
+    <tr><td><b>pi-durable</b></td><td>Durable conversation/task/document runtime for pi: runs checkpointed to pluggable stores (filesystem, postgres), resumable anywhere; companion tools (pi-env, pi-durable-agent) build on it.</td><td>Durability is a <i>storage</i> concern layered over an append-only log — not a core-loop redesign. Ganggang's JSONL sessions are the same substrate.</td></tr>
+  </table>
+  <h3>Decision (v2)</h3>
+  <ul>
+    <li><b>No plugin runtime now</b> — but the architecture keeps <b>four seams</b> so any of the above can be added later without rework:
+      <ol>
+        <li><b>One event stream.</b> Everything observable already flows through <code>AgentEvent</code>; a hook system is “subscribe + intercept” on that channel (pi/opencode shape).</li>
+        <li><b>Tool trait + registry.</b> Future dynamic tools (plugins, MCP) slot in as another <code>Box&lt;dyn Tool&gt;</code> source; the loop never changes.</li>
+        <li><b>Append-only JSONL sessions.</b> The durable base pi-durable builds on; checkpoint/resume is a storage upgrade, not a redesign.</li>
+        <li><b>Self-dev falls out for free.</b> Small Rust codebase + fast <code>cargo build</code> + persisted sessions = the model can evolve gg with its own tools today (jcode's bet, zero infra).</li>
+      </ol></li>
+    <li><b>Candidate mechanism when needed:</b> out-of-process plugins speaking JSONL over stdio — reuses the <code>--mode json</code> protocol verbatim, needs no embedded runtime, and isolates plugin crashes. Not decided; revisit deliberately.</li>
+  </ul>
+</section>
+
+<section id="non-goals" data-title="Non-goals">
+  <h2><span class="num">04</span> Non-goals (explicit)</h2>
+  <p class="lead">Written down so “not yet” never becomes “accidentally half-built”.</p>
+  <ul>
+    <li>No plugin/extension <i>runtime</i> in v2 — seams kept (§03). Adding behavior means editing Rust and rebuilding, which the agent itself can do.</li>
+    <li>No sandboxing or permission system. <code>gg</code> runs with the user's permissions; safety comes from where you run it (pi's stance, stated in our docs).</li>
+    <li>No sub-agents, plan modes, or orchestration on top of the loop.</li>
+    <li>No cross-provider abstraction beyond the OpenAI-compatible wire types.</li>
+    <li>No Windows-specific tooling (POSIX <code>bash</code> assumed).</li>
+    <li>No performance work beyond “streaming renders promptly”.</li>
+  </ul>
+</section>
+
+<section id="architecture" data-title="Architecture">
+  <h2><span class="num">05</span> Architecture</h2>
+  <p class="lead">Three layers, mirroring how pi factored its TS monorepo (<code>pi-ai</code> / <code>pi-agent</code> / <code>pi-coding-agent</code>) — but as modules in one crate.</p>
+  <pre class="code">┌──────────────────────────── app layer ────────────────────────────┐
+│  main.rs (clap CLI)   tui/ (ratatui)   printers (print, json)     │   interfaces
+├──────────────────────────── agent layer ───────────────────────────┤
+│  agent::loop_   context (system prompt)   skills   compaction     │   decisions
+│  tools: read, bash, edit, write          session (JSONL io)       │
+├──────────────────────────── llm layer ────────────────────────────┤
+│  llm::types (wire)   llm::client (reqwest, timeouts, SSE later)   │   transport
+└───────────────────────────────────────────────────────────────────┘</pre>
+  <ul>
+    <li><b><code>llm</code></b> — exists today. Talks one protocol: OpenAI-compatible chat completions against <code>GG_BASE_URL</code> (Strata by default). Knows nothing about tools' meaning, sessions, or the loop.</li>
+    <li><b><code>agent</code></b> — the harness proper. Pure decision logic + tool execution + session persistence. Testable without a network (mock server, §19). Depends on <code>llm</code>, never on <code>tui</code>.</li>
+    <li><b><b><code>app</code></b></b> — CLI parsing, the TUI, print/JSON output. Consumes a single <code>AgentEvent</code> stream from the agent layer; never touches <code>reqwest</code> directly.</li>
+  </ul>
+  <p><b>One turn, end to end</b> (the whole system in one picture):</p>
+  <pre class="code">user input ──▶ session.append(user)
+                  │
+                  ▼
+        context::build_request()          system = preamble + AGENTS.md + tools + skills
+                  │                       history = active session entries → wire messages
+                  ▼
+        llm::client.send() ──▶ ChatResponse
+                  │
+        session.append(assistant)         text + tool_calls, recorded as entries
+                  │
+      ┌─── tool_calls empty? ── no ──▶ for each call: tools::dispatch()
+      │                                   session.append(toolResult)
+      │                                   (compaction check here, M6)
+      │                                   loop back to build_request()
+      ▼ yes
+   run ends ──▶ events to TUI / stdout</pre>
+  <div class="note">The <b>same agent core serves every interface</b> — TUI, print, JSON. This is pi's most load-bearing property and costs nothing to keep.</div>
+</section>
+
+<section id="dependencies" data-title="Dependencies">
+  <h2><span class="num">06</span> Dependencies</h2>
+  <p class="lead">Small, boring, well-known crates only. Everything already present stays.</p>
+  <table class="tbl">
+    <tr><th>crate</th><th>status</th><th>used for</th></tr>
+    <tr><td>tokio, reqwest (rustls), serde, serde_json, anyhow, clap</td><td>present</td><td>as today</td></tr>
+    <tr><td><code>ratatui</code> + <code>crossterm</code></td><td>add (M4)</td><td>TUI. The only significant new surface.</td></tr>
+    <tr><td><code>uuid</code> (v4)</td><td>add (M3)</td><td>session ids; entry ids derive from it (8-hex prefix, like pi)</td></tr>
+    <tr><td><code>time</code></td><td>add (M3)</td><td>ISO-8601 timestamps on session entries</td></tr>
+    <tr><td><code>toml</code></td><td>add (M2)</td><td><code>config.toml</code> parsing — idiomatic Rust config format (review decision)</td></tr>
+    <tr><td><code>tempfile</code></td><td>add (dev)</td><td>tool + session tests</td></tr>
+  </table>
+  <h3>Deliberately not added (yet)</h3>
+  <ul>
+    <li><code>schemars</code> — derives JSON Schema for tool parameters automatically. Convenient but hides what's on the wire; v1 hand-writes the four tool schemas (decided in review). Revisit if tools multiply.</li>
+    <li><code>async-trait</code> — see the <code>Tool</code> trait discussion in §10; a 10-line manual boxed-future wrapper avoids the macro (decided, §21).</li>
+    <li>no YAML crate — skill frontmatter is a tiny <code>key: value</code> subset, hand-parsed (§11).</li>
+  </ul>
+  <div class="note"><b>Format decisions (review):</b> TOML for human-edited config; JSONL stays for the machine-written session log (append-only, one object per line); JSON stays for the wire and tool schemas (protocol-defined). Each format where it is the ecosystem standard.</div>
+</section>
+
+<section id="layout" data-title="Module layout">
+  <h2><span class="num">07</span> Module layout</h2>
+  <p class="lead">Target tree with per-file budgets (lines). Everything starts with a doc comment explaining why it exists.</p>
+  <pre class="code">src/
+├── main.rs          ~120  clap CLI, mode dispatch (TUI / print / json)
+├── config.rs        ~160  env + config.toml merge (exists, grows)
+├── events.rs        ~120  AgentEvent enum: the agent layer's only output stream
+├── llm/                    <span class="cm">// transport — exists today</span>
+│   ├── types.rs    ~260  wire types (grows: tools field on request)
+│   └── client.rs   ~150  send(); +stream() later
+├── agent/                  <span class="cm">// the harness — no tui, no clap</span>
+│   ├── mod.rs      ~80   Agent struct: owns session, tools, config
+│   ├── loop_.rs    ~180  the turn engine (§9)
+│   ├── context.rs  ~160  system-prompt assembly (§12)
+│   ├── session.rs  ~220  entry types, JSONL append/load/replay (§13)
+│   ├── skills.rs   ~180  discovery + frontmatter (§11)
+│   ├── compaction.rs ~150  summary generation + rebuild (M6)
+│   └── tools/
+│       ├── mod.rs  ~140  Tool trait, registry, dispatch, arg parsing
+│       ├── read.rs  ~90
+│       ├── bash.rs ~110  timeout, output capture/truncation
+│       ├── edit.rs ~110  exact-match replacement (unique, non-overlapping)
+│       └── write.rs ~70
+├── printers.rs     ~120  print mode + json mode (event → stdout)
+└── tui/                    <span class="cm">// ratatui app (M4)</span>
+    ├── mod.rs      ~200  event loop, key handling, slash commands
+    ├── transcript.rs ~180  render entries + live assistant text
+    └── footer.rs   ~80   model, tokens, context %, session name</pre>
+  <div class="note">Total ≈ 2,600 lines of Rust for the full vision — comfortably readable in an afternoon, which is the point. <code>loop_</code> keeps the underscore (Rust keyword collision) — a reminder that the agent loop is the product.</div>
+</section>
+
+<section id="data-model" data-title="Core data model">
+  <h2><span class="num">08</span> Core data model</h2>
+  <p class="lead">Three type families, deliberately separate: <b>wire</b> (what the provider sees), <b>domain</b> (what we store), <b>events</b> (what the UI sees). Pi makes the same split; conflating them is the classic harness bug.</p>
+
+  <h3>1. Wire — <code>llm::types</code> (exists, grows)</h3>
+  <p><code>ChatMessage</code>, <code>ChatRequest</code>, <code>ChatResponse</code> as today. M2 adds the request's <code>tools</code> array (JSON-Schema function declarations). These stay stringly (<code>role: String</code>) on purpose: they mirror an external, evolving protocol.</p>
+
+  <h3>2. Domain — <code>agent::session</code></h3>
+  <p>The source of truth. Typed, replayable, append-only. Conversion to wire messages happens per request, so domain types can be strict enums:</p>
+  <pre class="code">/// One entry in a session file. `id`/`parent_id` mirror pi's tree format;
+/// v1 only ever appends a linear chain (parent = previous entry).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum Entry {
+    Message { id: String, parent_id: Option&lt;String&gt;, ts: String, message: Message },
+    Compaction { id: String, parent_id: Option&lt;String&gt;, ts: String,
+                 summary: String, first_kept_id: String },
+}
+
+/// Domain message. Strict where the wire is loose: role is an enum,
+/// tool arguments are parsed JSON (Value), not a string-in-a-string.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Message {
+    pub role: Role,                       // User | Assistant | ToolResult
+    pub content: Option&lt;String&gt;,
+    pub tool_calls: Vec&lt;ToolCall&gt;,        // assistant only
+    pub tool_call_id: Option&lt;String&gt;,    // tool results only
+    pub usage: Option&lt;Usage&gt;,            // assistant only, for the footer
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role { User, Assistant, ToolResult }</pre>
+  <p>The agent layer owns exactly one conversion function, <code>to_wire(&amp;[Entry]) -&gt; Vec&lt;ChatMessage&gt;</code>, plus its inverse for recording responses. All provider-shape knowledge lives in those two functions — the rest of the codebase never sees <code>"function"</code> objects or string-encoded arguments. <b>This replaces</b> the current <code>main.rs</code> pattern of pushing wire <code>ChatMessage</code>s directly.</p>
+  <p>The domain <code>ToolCall</code> carries <code>args: Value</code> (parsed once at the boundary, in <code>from_response</code>) plus <code>args_error: Option&lt;String&gt;</code> — set when the provider's argument string was not valid JSON. A call with <code>args_error</code> is never dropped from replay (its tool_result references the id) and its arguments replay as <code>{}</code>, never as the invalid text.</p>
+
+  <h3>3. Events — <code>events.rs</code></h3>
+  <pre class="code">/// Everything the outside world can observe. The TUI renders these;
+/// `--mode json` serializes them; print mode prints the last AssistantText.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentEvent {
+    RunStarted,
+    TurnStarted,
+    AssistantText { delta: String },     // streaming-era: chunks
+    ToolCallStarted { name: String, id: String, args: Value },
+    ToolCallFinished { name: String, id: String, output: String, is_error: bool },
+    TurnEnded { stop_reason: String },
+    RunEnded { turns: u32 },
+    RunAborted,                          // terminal record of an aborted run
+    Warned { message: String },          // truncation, compaction, bad args…
+}</pre>
+  <p>The agent layer emits events through a channel (<code>tokio::sync::mpsc</code>); interfaces subscribe. JSON mode is literally <code>serde_json::to_line(event)</code>.</p>
+</section>
+
+<section id="agent-loop" data-title="The agent loop">
+  <h2><span class="num">09</span> The agent loop</h2>
+  <p class="lead">~60 lines of straight-line async. Everything else in the agent layer exists to feed it.</p>
+  <pre class="code">pub async fn run(&amp;mut self, input: String, events: &amp;mut Sender&lt;AgentEvent&gt;) -&gt; anyhow::Result&lt;()&gt; {
+    self.session.append_user(input)?;
+    let mut turns = 0;
+
+    loop {
+        turns += 1;
+        events.send(AgentEvent::TurnStarted).await?;
+
+        let req = context::build_request(&amp;self.session, &amp;self.tools, &amp;self.cfg)?;
+        let resp = self.client.send(req).await?;           // existing client
+        let msg = self.session.append_assistant(resp)?;    // records usage, tool_calls
+
+        if msg.tool_calls.is_empty() {
+            events.send(AgentEvent::TurnEnded { stop_reason: "stop".into() }).await?;
+            break;
+        }
+        // Sequential, in order: deterministic, debuggable. (Parallelism = later, if ever.)
+        for call in &amp;msg.tool_calls {
+            events.send(AgentEvent::ToolCallStarted { .. }).await?;
+            let result = tools::dispatch(&amp;self.tools, call).await;   // errors are VALUES
+            self.session.append_tool_result(call.id.clone(), &amp;result)?;
+            events.send(AgentEvent::ToolCallFinished { .. }).await?;
+        }
+        events.send(AgentEvent::TurnEnded { stop_reason: "tool_calls".into() }).await?;
+        // (M6: compaction check here, before next build_request)
+    }
+    events.send(AgentEvent::RunEnded { turns }).await?;
+    Ok(())
+}</pre>
+  <ul>
+    <li><b>Tool errors never abort the run.</b> A failed tool call is recorded as an <code>is_error</code> result the model can react to. Only transport/session-io failures propagate with <code>?</code>. (Already the documented contract in <code>types.rs</code>.)</li>
+    <li><b>No turn cap</b> (review decision — pi has none either): a runaway loop is stopped by the <b>user</b> (Esc / Ctrl-C abort), not by a counter. The <code>turns</code> counter exists only for the <code>RunEnded</code> event and the footer.</li>
+    <li><b>Abort:</b> a <code>tokio_util::sync::CancellationToken</code> (or plain <code>Arc&lt;AtomicBool&gt;</code>) checked between tool calls; on abort, synthesize <code>is_error</code> tool_results for the batch's unanswered calls (replay must never carry a dangling tool_call), append a marker, emit <code>RunAborted</code>, and return <code>Ok</code>. Esc in the TUI sets it.</li>
+    <li><b>Steering (later):</b> the input side grows a queue; user messages submitted mid-run are appended after the current tool batch — pi's “steering” semantics. The loop shape above already has the seam (end of tool batch).</li>
+  </ul>
+</section>
+
+<section id="tools" data-title="Tools">
+  <h2><span class="num">10</span> Tools</h2>
+  <p class="lead">One trait, four implementations, plain values in and out. Pi's tool semantics, Rust-ified.</p>
+  <pre class="code">pub struct ToolResult { pub output: String, pub is_error: bool }
+
+pub trait Tool: Send + Sync {
+    fn name(&amp;self) -&gt; &amp;'static str;
+    fn description(&amp;self) -&gt; &amp;'static str;
+    /// JSON Schema for the `parameters` object of the function declaration.
+    fn schema(&amp;self) -&gt; Value;
+    /// Boxed future: `async fn` in traits is stable but not dyn-compatible,
+    /// and one 10-line wrapper beats an macro dependency.
+    fn execute&lt;'a&gt;(&amp;'a self, args: &amp;'a Value) -&gt; BoxFuture&lt;'a, ToolResult&gt;;
+}
+
+pub struct Registry(Vec&lt;Box&lt;dyn Tool&gt;&gt;);</pre>
+  <p><b>Dispatch</b> never touches JSON-in-a-string: <code>from_response</code> parses <code>call.function.arguments</code> once at the boundary (empty string ⇒ empty object) and records parse failures as <code>args_error</code> on the domain call. Dispatch checks <code>args_error</code> first and returns an <code>is_error</code> tool result (“arguments were not valid JSON: …”) without invoking the tool — never a run failure, so the model retries correctly. Each tool then deserializes the parsed <code>Value</code> into its own args struct (<code>serde</code>, permissive defaults), reporting field errors the same way.</p>
+  <h3>The four tools (pi semantics)</h3>
+  <table class="tbl">
+    <tr><th>tool</th><th>behavior</th><th>guardrails</th></tr>
+    <tr><td><code>read</code></td><td>text file → string; images rejected for now</td><td>cap 2000 lines / 50&nbsp;KB, truncated with a notice</td></tr>
+    <tr><td><code>bash</code></td><td>run command, capture stdout+stderr, report exit code</td><td>default 30&nbsp;s timeout (config); output truncated at 10&nbsp;KB; runs in session cwd with the user's permissions — <b>the documented trust boundary</b></td></tr>
+    <tr><td><code>edit</code></td><td>exact-match replacement, each match must be unique and non-overlapping</td><td>miss/duplicate ⇒ error result with context, file untouched</td></tr>
+    <tr><td><code>write</code></td><td>create or overwrite</td><td>refuses paths outside cwd unless arg <code>force</code>; always shows byte count in result</td></tr>
+  </table>
+  <p>Tool declarations are serialized into the request's <code>tools</code> array; <code>--tools read,bash</code> and a <code>tools</code> setting select the allowlist (pi's flag, simplified to plain names only).</p>
+  <div class="note warn">No permission gating: like pi, ganggang does not ask before tool calls. Safe use = run it where the bash tool is allowed to be (container/VM for untrusted work). This goes in the README verbatim.</div>
+</section>
+
+<section id="skills" data-title="Skills">
+  <h2><span class="num">11</span> Skills</h2>
+  <p class="lead">Core requirement. Implement the <a href="https://agentskills.io/specification" style="color:var(--accent)">Agent Skills spec</a> subset pi implements, so pi/Anthropic skills work unmodified.</p>
+  <ul>
+    <li><b>Discovery</b> (at startup): <code>~/.agents/skills/</code> then <code>.agents/skills/</code> found walking cwd → ancestors, stopping at the repo root. Only directories containing <code>SKILL.md</code> (pi's portable form; standalone <code>.md</code> files not supported — noted divergence).</li>
+    <li><b>Frontmatter</b>: hand-parsed <code>key: value</code> subset of YAML between <code>---</code> fences. Read: <code>name</code>, <code>description</code>, <code>disable-model-invocation</code>. Unknown keys ignored (spec says warn, not fail). Missing name/description ⇒ skill skipped with a warning event.</li>
+    <li><b>Advertising</b>: names + descriptions + absolute paths go into a system-prompt section (§12) — <i>never</i> the full instructions; that's the whole trick.</li>
+    <li><b>Loading</b>: the model reads <code>SKILL.md</code> with the existing <code>read</code> tool when a task matches, then follows it (including bundled scripts via <code>bash</code>, resolved relative to the skill dir — the system prompt tells it how).</li>
+    <li><b>Forcing</b>: <code>/skill:&lt;name&gt; [args]</code> in the TUI loads the instructions and appends them as a user message (pi's exact behavior). <code>disable-model-invocation: true</code> hides from advertising, command still works.</li>
+    <li><b>Collisions</b>: first discovered wins, warning event (pi's rule).</li>
+  </ul>
+  <pre class="code"><span class="cm"># ~/.agents/skills/pdf-tools/SKILL.md — loads as-is under ganggang</span>
+---
+name: pdf-tools
+description: Extract text and tables from PDFs. Use when reading or inspecting PDFs.
+---
+Run scripts relative to this skill directory…</pre>
+  <div class="note">A skill is <b>instructions, not code</b> — it executes only through the same four tools, so skills add no new trust surface beyond what the model could already do. That's why we can skip pi's project-trust machinery.</div>
+</section>
+
+<section id="context" data-title="Context & system prompt">
+  <h2><span class="num">12</span> Context assembly &amp; system prompt</h2>
+  <p class="lead">Built fresh for every request (cheap, no invalidation bugs), from named sections like pi:</p>
+  <pre class="code">&lt;system-prompt&gt; ::=
+  preamble            <span class="cm"># ~40 lines: identity, cwd, tool-use rules, edit discipline,</span>
+                      <span class="cm">#   "be concise", diff-awareness, no praise padding</span>
+  context_files       <span class="cm"># ~/.gg/AGENTS.md, then AGENTS.md from repo root → cwd, in order</span>
+  tools               <span class="cm"># name + one-line description + key arg hints, compact list</span>
+  skills              <span class="cm"># name + description + path; "read &lt;path&gt;/SKILL.md when one applies"</span>
+  working_dir         <span class="cm"># cwd, OS, today's date</span></pre>
+  <ul>
+    <li>The preamble is a <code>const &amp;str</code> in <code>context.rs</code> — versioned with the code, not a user file. (Override via file is a non-goal.)</li>
+    <li><code>GG_DEBUG_PROMPT=1</code> (or <code>/context</code> in the TUI) prints the assembled prompt to stderr — the single most useful debugging affordance a harness can have.</li>
+    <li><code>AGENTS.md</code> discovery walks ancestors and stops at the repo root (pi's rule for skills, applied to context files too). Files are concatenated root-first so deeper files read as refinements.</li>
+  </ul>
+</section>
+
+<section id="sessions" data-title="Sessions">
+  <h2><span class="num">13</span> Sessions</h2>
+  <p class="lead">Pi's format, thinned. JSONL, append-only, one file per session.</p>
+  <pre class="code">~/.gg/sessions/&lt;path-slug&gt;/20261111_1030-a0b1c2d3.jsonl
+
+{"type":"session","version":1,"id":"uuid","timestamp":"…","cwd":"/home/user/Projects/ganggang","model":"qwen3.8-…"}
+{"type":"message","id":"e6f1a2b3","parentId":null,     "timestamp":"…","message":{"role":"user","content":"fix the failing test"}}
+{"type":"message","id":"e7a3c4d5","parentId":"e6f1a2b3","timestamp":"…","message":{"role":"assistant","content":null,"tool_calls":[…],"usage":{…}}}
+{"type":"message","id":"e8b5d6f7","parentId":"e7a3c4d5","timestamp":"…","message":{"role":"tool_result","tool_call_id":"call_339…","content":"…"}}
+{"type":"compaction","id":"…","parentId":"…","timestamp":"…","summary":"…","firstKeptId":"…"}</pre>
+  <ul>
+    <li><b>The first format version is a linear chain</b> — every entry's <code>parentId</code> is the previous entry. But the field exists, ids exist, so pi-style tree navigation (<code>/tree</code>, forking) can be added without a format migration. That's the entire reason they're there from day one.</li>
+    <li><b>Append-only:</b> one <code>serde_json::to_line</code> + <code>write</code> + flush per entry. Crash-safe by construction; corrupt trailing line (crash mid-write) is skipped with a warning on load.</li>
+    <li><b>Replay</b> = read the file into <code>Vec&lt;Entry&gt;</code>, rebuild the request via <code>to_wire</code>. Compaction entries are honored during rebuild (§14).</li>
+    <li><b>Resume:</b> <code>gg -c</code> picks the newest session file for the cwd; <code>gg --resume</code> opens a picker (TUI) or takes an id/prefix. <b>Every mode persists by default</b>, print included (review decision — pi parity; one mechanism, no mode-specific rules); <code>--no-session</code> opts out.</li>
+    <li>Usage totals (tokens in/out) accumulate from assistant entries; the footer and <code>/session</code> display them. Costs are skipped (local model).</li>
+  </ul>
+</section>
+
+<section id="compaction" data-title="Compaction">
+  <h2><span class="num">14</span> Compaction</h2>
+  <p class="lead">Designed now, built in M6 — pi's algorithm with pi's defaults.</p>
+  <ul>
+    <li><b>Trigger:</b> after a tool batch, before the next request: <code>context_tokens &gt; context_window − reserve (16,384)</code>. Context tokens from the last response's <code>usage</code>; estimate <code>chars/4</code> only when the server reports none.</li>
+    <li><b>Cut point:</b> walk back through entries accumulating tokens until <code>keep_recent (20,000)</code>; snap to the preceding user-message boundary (pi's span rule — never orphan tool results from their assistant call).</li>
+    <li><b>Summarize:</b> one extra LLM call: “summarize the conversation so far for continuation; preserve goals, decisions, file paths, open tasks” + the messages being dropped. Failure ⇒ warn and continue un-compacted (never kill the run).</li>
+    <li><b>Record &amp; rebuild:</b> append a <code>compaction</code> entry; from then on <code>to_wire</code> emits summary-as-user-note + entries from <code>firstKeptId</code> onward. Raw entries stay in the file (pi's invariant: compaction never destroys history).</li>
+    <li><b>Manual:</b> <code>/compact [instructions]</code> same path with focus instructions.</li>
+    <li><code>context_window</code> is config (<code>GG_CONTEXT_WINDOW</code>), default <b>131,072</b> (review: “context should be higher”). Set it to match <code>strata launch --context</code>, which takes 8k–256k.</li>
+  </ul>
+</section>
+
+<section id="interfaces" data-title="Interfaces (TUI, print, json)">
+  <h2><span class="num">15</span> Interfaces</h2>
+  <p class="lead">One agent core, three front-ends. Interface choice mirrors pi: TTY ⇒ TUI; <code>-p</code> ⇒ print; <code>--mode json</code> ⇒ events.</p>
+  <h3>TUI (ratatui, M4)</h3>
+  <ul>
+    <li>Fullscreen layout like pi: scrolling transcript / editor / one-line footer (dir, model, tokens, context %).</li>
+    <li>Transcript renders: user text, assistant text (markdown later), tool calls as collapsed <code>▸ bash git status</code> lines expandable with Ctrl+O, warnings dimmed.</li>
+    <li>Keys (fixed, no config): Enter send · Alt+Enter / Ctrl+J newline (Shift+Enter where the terminal reports modified keys) · Ctrl+A/E line start/end · Ctrl+K/U kill to line end/start · arrows move the composer cursor · Esc abort run · Ctrl+O expand · Ctrl+X copy last answer · <code>/</code> commands · <code>!cmd</code> shell prefix (output enters context, like pi).</li>
+    <li>Commands: <code>/new /resume /compact /skills /session /quit /skill:&lt;name&gt;</code>. <code>/skills</code> lists discovered skills with paths — cheap, great for debugging discovery.</li>
+  </ul>
+  <h3>Print mode (M2)</h3>
+  <ul>
+    <li><code>gg -p "explain the failing test"</code> — progress to stderr (turn markers, tool lines), final assistant text to stdout, exit. Pipeable: <code>git diff | gg -p "review"</code> reads stdin into the prompt. Persists a session like every other mode; <code>--no-session</code> for throwaway runs.</li>
+  </ul>
+  <h3>JSON mode (M6)</h3>
+  <ul>
+    <li><code>gg --mode json "…"</code> — session header then <code>AgentEvent</code>s, one JSON object per line; same enum the TUI consumes, so the two can't drift. No RPC, no SDK.</li>
+  </ul>
+</section>
+
+<section id="config" data-title="Configuration">
+  <h2><span class="num">16</span> Configuration</h2>
+  <p class="lead">Precedence: CLI flags &gt; environment &gt; project <code>.gg/config.toml</code> &gt; user <code>~/.gg/config.toml</code> &gt; defaults. TOML, per review — the idiomatic Rust config format.</p>
+  <table class="tbl">
+    <tr><th>setting</th><th>env</th><th>default (v2)</th><th></th></tr>
+    <tr><td><code>base_url</code></td><td><code>GG_BASE_URL</code></td><td><code>http://127.0.0.1:8080/v1</code></td><td>Strata's server address</td></tr>
+    <tr><td><code>model</code></td><td><code>GG_MODEL</code></td><td><code>qwen3.8-flash-next-iq3_s</code></td><td></td></tr>
+    <tr><td><code>max_tokens</code></td><td><code>GG_MAX_TOKENS</code></td><td><b>4096</b></td><td>raised from 512 — 512 was too small for real tool-using answers</td></tr>
+    <tr><td><code>api_key</code></td><td><code>GG_API_KEY</code></td><td>none</td><td>Bearer header when set</td></tr>
+    <tr><td><code>context_window</code></td><td><code>GG_CONTEXT_WINDOW</code></td><td><b>131072</b></td><td>compaction trigger; match Strata's <code>--context</code> (8k–256k)</td></tr>
+    <tr><td><code>bash_timeout_secs</code></td><td><code>GG_BASH_TIMEOUT</code></td><td>30</td><td></td></tr>
+    <tr><td><code>tools</code></td><td>—</td><td><code>["read", "bash", "edit", "write", "grep", "find", "ls"]</code></td><td>allowlist (M7: search tools ship enabled)</td></tr>
+  </table>
+  <p><code>max_turns</code> is gone — no turn cap (review + §09). File merging is shallow (project keys override user keys) — no deep-merge magic. Invalid values are errors, not silent defaults (existing <code>config.rs</code> philosophy). <code>~/.gg/</code> also holds <code>AGENTS.md</code> and <code>sessions/</code>.</p>
+</section>
+
+<section id="errors" data-title="Error handling">
+  <h2><span class="num">17</span> Error handling &amp; robustness</h2>
+  <ul>
+    <li><b><code>anyhow</code> everywhere for now</b> — one error type, <code>?</code> + <code>.context()</code>, already the house style. Upgrade path (thiserror enums in <code>llm</code>) is noted but not taken until a caller actually needs to match on variants.</li>
+    <li><b>Three failure classes, three policies:</b> transport/IO ⇒ abort run with context (user retries); <b>tool failure ⇒ value fed back to model</b>; provider-shape oddities (no choices, empty content) ⇒ warn event + best effort (existing patterns in <code>main.rs</code> keep their comments).</li>
+    <li>Timeouts: existing client values (10 s connect / 300 s request) plus per-tool bash timeout. Everything that can hang has a number.</li>
+    <li>Every truncation or dropped call is visible: a <code>Warned</code> event, never a silent <code>.unwrap_or_default()</code> at the boundary.</li>
+    <li>No retries in v1 — the local server is either up or it isn't. Revisit with streaming.</li>
+  </ul>
+</section>
+
+<section id="style" data-title="Code style">
+  <h2><span class="num">18</span> Code style</h2>
+  <p class="lead">Per review: follow existing, modern open-source Rust project standards. Don't overdo the learning.</p>
+  <ul>
+    <li><b>Standard tooling, default settings:</b> <code>cargo fmt</code> (stock rustfmt config), <code>cargo clippy --all-targets -- -D warnings</code> clean at every commit, tests colocated in-module under <code>#[cfg(test)]</code> with fixtures in <code>fixtures/</code>.</li>
+    <li><b>Documentation like any good crate:</b> a short <code>//!</code> at the top of each module and <code>///</code> on public items — what it's for, plus any non-obvious contract. No tutorial-style commentary restating syntax or teaching idioms; trim what M1 over-wrote.</li>
+    <li><b>Idioms:</b> follow the Rust API Guidelines where they apply; no <code>unwrap()</code>/<code>expect()</code> outside tests; <code>?</code> with <code>.context()</code> for errors; prefer iterator chains when they read better than loops.</li>
+    <li><b>Derives on all public data types:</b> <code>Debug, Clone, Serialize, Deserialize</code> where the type crosses a boundary.</li>
+    <li><b>Complexity budget:</b> no generics in the agent layer beyond what serde forces; no builder patterns; no <code>Rc</code>/<code>RefCell</code>; <code>Arc</code> only for the abort flag. One <code>dyn Trait</code> (the tool registry) and one channel.</li>
+    <li>Milestone reviews keep using the <code>.review-prompt.md</code> template (it worked for M1).</li>
+  </ul>
+</section>
+
+<section id="testing" data-title="Testing strategy">
+  <h2><span class="num">19</span> Testing strategy</h2>
+  <ul>
+    <li><b>Wire types:</b> fixture-driven serde tests (all 8 existing tests keep passing through the M1→M2 refactor — they're the safety net for it).</li>
+    <li><b>Loop:</b> a fake OpenAI server on a std <code>TcpListener</code> returning canned responses in sequence (“scripted model”). No new trait, no test-only seams in production code — the agent loop is driven through real HTTP against localhost. Scripts: plain-answer, tool-call→result→answer, tool error recovery, abort mid-batch, compaction trigger.</li>
+    <li><b>Tools:</b> tempdir round-trips for read/edit/write; bash tests use trivial commands (<code>echo</code>, <code>false</code>) + one timeout case.</li>
+    <li><b>Skills:</b> fixture skill dirs — discovery order, collision rule, frontmatter edge cases (empty description, unknown keys, no frontmatter).</li>
+    <li><b>Sessions:</b> golden JSONL files; load-replay equality (<code>to_wire(load(fixtures/golden.jsonl))</code> snapshot), corrupt-trailing-line tolerance.</li>
+    <li><b>Smoke:</b> <code>scripts/smoke.sh</code> against a live <b>Strata</b> server (per review) — <code>strata launch</code>, then <code>curl 127.0.0.1:8080/health</code>; run it manually before each milestone. Strata speaks the same OpenAI-compatible chat-completions protocol, so nothing else in the stack changes.</li>
+  </ul>
+</section>
+
+<section id="milestones" data-title="Milestones">
+  <h2><span class="num">20</span> Milestones</h2>
+  <p class="lead">Proposed ordering — each milestone is independently demoable and reviewable, continuing the M-numbering.</p>
+  <table class="tbl">
+    <tr><th>milestone</th><th>scope</th><th>acceptance</th></tr>
+    <tr><td><b>M2</b> — loop + tools + print</td><td>agent layer skeleton, domain/wire split, <code>Entry</code>/<code>Message</code>, Tool trait + 4 tools, dispatch, request <code>tools</code> array, print mode, <code>AgentEvent</code> (print consumer), abort flag, TOML config with v2 defaults, fake-server tests</td><td><code>gg -p "what version is in Cargo.toml?"</code> answers by reading the file; tool-error recovery tested</td></tr>
+    <tr><td><b>M3</b> — context + skills</td><td><code>context.rs</code> section assembly, AGENTS.md discovery, skills discovery + advertising, <code>GG_DEBUG_PROMPT</code>, preamble v1</td><td>a fixture skill is advertised and its instructions get followed in a scripted run; prompt dump looks right</td></tr>
+    <tr><td><b>M4</b> — sessions + TUI</td><td>JSONL persistence + <code>-c</code>/<code>--resume</code>, ratatui shell (transcript/editor/footer), abort, slash commands, <code>!</code> prefix</td><td>interactive session survives restart; abort mid-tool-batch leaves a clean file</td></tr>
+    <tr><td><b>M5</b> — streaming</td><td>SSE parsing in <code>llm</code>, delta events, live rendering in TUI + stderr progress in print</td><td>tokens appear as generated; non-streaming path retained for tests</td></tr>
+    <tr><td><b>M6</b> — compaction + JSON mode</td><td>§14 in full; <code>--mode json</code>; usage footer totals</td><td>long scripted run compacts and continues correctly; json mode drives an external consumer</td></tr>
+    <tr><td><b>M7</b> — polish</td><td>grep/find/ls tools, prompt templates, <code>@file</code> mentions, markdown rendering, thinking display (<code>reasoning_content</code>, hidden behind Ctrl+T like pi), export session → HTML (like this doc)</td><td>“a good afternoon of use” — daily-driver check</td></tr>
+  </table>
+  <p>M2 explicitly includes the <b>M1→M2 refactor</b>: moving message ownership out of <code>main.rs</code> into the session/domain types. The uncommitted two-turn smoke test in <code>main.rs</code> is the bridge — its manual history-push becomes <code>session.append</code>.</p>
+</section>
+
+<section id="decisions" data-title="Decisions from review">
+  <h2><span class="num">21</span> Decisions from review</h2>
+  <p class="lead">All eight v1 open questions are resolved (from your feedback where given, my call where delegated). Overrule anything here in the feedback box — each row links to where it lands in the doc.</p>
+  <table class="tbl">
+    <tr><th>#</th><th>question (v1)</th><th>decision</th><th>source</th></tr>
+    <tr><td>1</td><td>Tool schemas by hand vs <code>schemars</code></td><td><b>Hand-written</b> — see-the-wire argument; four schemas are small. Revisit past ~6 tools. (§06)</td><td>review</td></tr>
+    <tr><td>2</td><td>Settings JSON vs TOML</td><td><b>TOML</b> — idiomatic Rust config. Format audit: sessions stay JSONL (machine-written append-only log), wire/schemas stay JSON (protocol-defined). (§06, §16)</td><td>review</td></tr>
+    <tr><td>3</td><td><code>Tool</code> trait async mechanism</td><td><b>Manual boxed future</b> (<code>BoxFuture</code>, tower/axum-style) — zero new deps, one 10-line helper; <code>async-trait</code> not needed for one trait. (§10)</td><td>my call (delegated)</td></tr>
+    <tr><td>4</td><td>Sessions linear vs tree in v1</td><td><b>Linear</b>, tree-ready format (<code>id</code>/<code>parentId</code> reserved). (§13)</td><td>review</td></tr>
+    <tr><td>5</td><td>Do print-mode runs persist a session?</td><td><b>Yes, by default</b> — every mode persists (pi parity, one mechanism); <code>--no-session</code> opts out. (§13, §15)</td><td>my call (delegated)</td></tr>
+    <tr><td>6</td><td>Standalone <code>.md</code> skills (no directory)</td><td><b>Skip</b> — directory-with-<code>SKILL.md</code> only, the portable form. (§11)</td><td>review</td></tr>
+    <tr><td>7</td><td>Turn-limit default</td><td><b>No turn limit</b> — pi has none; abort (Esc) is the guard. Config <code>max_turns</code> removed entirely. (§09)</td><td>review</td></tr>
+    <tr><td>8</td><td>Milestone order (TUI before streaming?)</td><td><b>Keep proposed order</b> — demoable early beats pretty-to-build later. (§20)</td><td>review</td></tr>
+  </table>
+  <div class="note ask">Still open for a future review (not blocking M2): the plugin mechanism when extensions are wanted — out-of-process JSONL-over-stdio is the current candidate (§03).</div>
+</section>
+
+<footer class="doc">
+  ganggang design v2 &middot; v1 feedback incorporated &middot; sources studied: pi <code>docs/</code> (how-pi-works, skills, session-format, message-types, compaction, cli, settings, security, extensions) + review research: <a href="https://github.com/1jehuang/jcode" style="color:var(--muted)">jcode</a> (self-dev), <a href="https://opencode.ai/v2/docs/plugins" style="color:var(--muted)">opencode 2 plugins</a>, <code>@earendil-works/pi-durable</code>, <a href="https://github.com/Niko1221/Strata" style="color:var(--muted)">Strata</a> (backend, <code>127.0.0.1:8080/v1</code>) &middot; repo state: M1.5 @ <code>a0e8a42</code> + uncommitted two-turn smoke test
+</footer>
+
+</main>
+</div>
+
+<script>
+(function () {
+  var VERSION = "ganggang-design-v2";
+  var KEY = "gg-design-feedback-v2";
+  var sections = Array.prototype.slice.call(document.querySelectorAll("section[data-title]"));
+
+  // ---- load persisted feedback ----
+  function load() {
+    try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+  }
+  function saveAll(data) {
+    try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) { /* private mode etc. */ }
+  }
+
+  // ---- build widgets + toc ----
+  var toc = document.getElementById("toc-list");
+  var state = load();
+  var renderers = {};
+  var gstat = document.getElementById("global-status");
+
+  function updateGlobal() {
+    if (!gstat) return;
+    var reviewed = 0, approved = 0, changes = 0, questions = 0;
+    sections.forEach(function (s) {
+      var d = state[s.id] || {};
+      if (d.verdict || d.text) reviewed++;
+      if (d.verdict === "approve") approved++;
+      if (d.verdict === "changes") changes++;
+      if (d.verdict === "question") questions++;
+    });
+    gstat.textContent = reviewed + "/" + sections.length + " sections reviewed · " +
+      approved + " approved · " + changes + " changes · " + questions + " questions";
+  }
+
+
+  sections.forEach(function (sec, i) {
+    var id = sec.id, title = sec.getAttribute("data-title");
+    var num = sec.querySelector("h2 .num");
+
+    var fb = document.createElement("div");
+    fb.className = "fb";
+    fb.innerHTML =
+      '<div class="fb-head">' +
+        '<span>FEEDBACK — ' + title + '</span><span class="grow"></span>' +
+        '<button class="vbtn v-approve"  data-v="approve"  title="This section is good as designed">✓ approve</button>' +
+        '<button class="vbtn v-changes"  data-v="changes"  title="Needs changes — explain below">✗ needs changes</button>' +
+        '<button class="vbtn v-question" data-v="question" title="Open question — explain below">? question</button>' +
+      '</div>' +
+      '<textarea placeholder="Comments, overrules, additions… (saved locally as you type)"></textarea>' +
+      '<div class="fb-status">not reviewed yet</div>';
+    sec.appendChild(fb);
+
+    // toc link
+    var a = document.createElement("a");
+    a.href = "#" + id;
+    a.innerHTML = '<span class="dot"></span><span>' + (num ? num.textContent + " " : "") + title + "</span>";
+    toc.appendChild(a);
+
+    var ta = fb.querySelector("textarea");
+    var btns = {};
+    fb.querySelectorAll(".vbtn").forEach(function (b) { btns[b.dataset.v] = b; });
+    var status = fb.querySelector(".fb-status");
+    var dot = a.querySelector(".dot");
+
+    function render() {
+      var d = state[id] || {};
+      ["approve", "changes", "question"].forEach(function (v) {
+        btns[v].setAttribute("aria-pressed", d.verdict === v ? "true" : "false");
+      });
+      ta.value = d.text || "";
+      var bits = [];
+      if (d.verdict) bits.push("verdict: " + d.verdict);
+      if (d.text) bits.push(d.text.length + " chars");
+      bits.push(d.ts ? "saved " + new Date(d.ts).toLocaleString() : "not reviewed yet");
+      status.textContent = bits.join(" · ");
+      dot.className = "dot" + (d.verdict ? " " + d.verdict : (d.text ? " comment" : ""));
+      updateGlobal();
+    }
+    renderers[id] = render;
+
+    function update(verdict) {
+      var d = state[id] || {};
+      d.verdict = (d.verdict === verdict) ? null : verdict; // toggle off
+      d.ts = Date.now();
+      state[id] = d; saveAll(state); render();
+    }
+    fb.querySelectorAll(".vbtn").forEach(function (b) {
+      b.addEventListener("click", function () { update(b.dataset.v); });
+    });
+    var t;
+    ta.addEventListener("input", function () {
+      var d = state[id] || {};
+      d.text = ta.value; d.ts = Date.now(); state[id] = d;
+      clearTimeout(t); t = setTimeout(function () { saveAll(state); render(); }, 300);
+      render();
+    });
+
+    render();
+  });
+
+  // ---- export ----
+  var exportBtn = document.getElementById("export-btn");
+  exportBtn.addEventListener("click", function () {
+    var lines = ["# ganggang design v2 — review feedback", "", "_generated " + new Date().toISOString() + "_", ""];
+    var any = false;
+    sections.forEach(function (sec) {
+      var d = state[sec.id] || {};
+      if (!d.verdict && !d.text) return;
+      any = true;
+      var title = sec.getAttribute("data-title");
+      var v = { approve: "APPROVE", changes: "NEEDS CHANGES", question: "QUESTION" }[d.verdict] || "COMMENT";
+      lines.push("## " + title + " — " + v);
+      if (d.text) lines.push("", d.text.trim());
+      lines.push("");
+    });
+    if (!any) lines.push("_(no feedback entered yet)_");
+    var md = lines.join("\n");
+
+    // show inline as well, in case the download is blocked
+    var box = document.getElementById("export-out");
+    if (!box) {
+      box = document.createElement("details");
+      box.className = "export note"; box.id = "export-out";
+      box.innerHTML = '<summary>Exported feedback (also downloading as file — copy from here if the download is blocked)</summary><pre class="code"></pre>';
+      exportBtn.parentNode.appendChild(box);
+    }
+    box.open = true;
+    box.querySelector("pre").textContent = md;
+
+    try {
+      var blob = new Blob([md], { type: "text/markdown" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "ganggang-design-feedback-v2.md";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+    } catch (e) { /* clipboard route above still works */ }
+  });
+
+  // ---- clear ----
+  document.getElementById("clear-btn").addEventListener("click", function () {
+    if (!confirm("Clear all feedback for this design doc?")) return;
+    state = {}; saveAll(state);
+    Object.keys(renderers).forEach(function (id) { renderers[id](); });
+  });
+})();
+</script>
+</body>
+</html>

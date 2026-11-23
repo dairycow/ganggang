@@ -1,0 +1,441 @@
+//! Configuration: defaults < user file < project file < environment
+//! (spec §16). CLI flags sit above everything and are applied via
+//! [`Config::apply_cli`] after [`load`].
+//!
+//! An invalid value is an error wherever it comes from — a typo'd
+//! `GG_MAX_TOKENS` or a string-typed `max_tokens` must fail loudly,
+//! never silently fall back to a default that hides the mistake.
+
+pub mod providers;
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use anyhow::Context;
+
+use crate::llm::{ApiKind, AuthStyle};
+pub use providers::{Endpoint, ProviderConfig};
+
+/// Tool names a config allowlist may reference. Tracks the default
+/// registry (`agent::tools`); grows when tools are added.
+const KNOWN_TOOLS: &[&str] = &["read", "bash", "edit", "write", "grep", "find", "ls"];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Config {
+    pub provider: String,
+    pub base_url: String,
+    pub api: ApiKind,
+    pub auth: AuthStyle,
+    pub model: String,
+    pub max_tokens: u32,
+    pub api_key: Option<String>,
+    pub context_window: u32,
+    pub replay_reasoning: bool,
+    pub reasoning_effort: Option<String>,
+    pub bash_timeout_secs: u64,
+    pub tools: Vec<String>,
+    pub providers: BTreeMap<String, ProviderConfig>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        let providers = providers::builtin_providers();
+        let ep = providers
+            .get("strata")
+            .expect("built-in strata provider")
+            .resolve(None);
+        Self {
+            provider: ep.provider,
+            base_url: ep.base_url,
+            api: ep.api,
+            auth: ep.auth,
+            model: ep.model,
+            max_tokens: ep.max_tokens,
+            api_key: ep.api_key,
+            context_window: ep.context_window,
+            replay_reasoning: ep.replay_reasoning,
+            reasoning_effort: ep.reasoning_effort,
+            bash_timeout_secs: 30,
+            tools: KNOWN_TOOLS.iter().map(|s| s.to_string()).collect(),
+            providers,
+        }
+    }
+}
+
+impl Config {
+    pub fn active_endpoint(&self) -> Endpoint {
+        let api_key_env = self
+            .providers
+            .get(&self.provider)
+            .and_then(|p| p.api_key_env.clone());
+        Endpoint {
+            provider: self.provider.clone(),
+            model: self.model.clone(),
+            base_url: self.base_url.clone(),
+            api: self.api,
+            auth: self.auth,
+            api_key: self.api_key.clone(),
+            api_key_env,
+            max_tokens: self.max_tokens,
+            context_window: self.context_window,
+            replay_reasoning: self.replay_reasoning,
+            reasoning_effort: self.reasoning_effort.clone(),
+        }
+    }
+
+    pub fn apply_cli(&mut self, provider: Option<&str>, model: Option<&str>) -> anyhow::Result<()> {
+        if provider.is_none() && model.is_none() {
+            return Ok(());
+        }
+        let (model_provider, model_id) = match model {
+            Some(m) => match providers::split_provider_model(m, &self.providers) {
+                Some((p, id)) => (Some(p.to_string()), Some(id)),
+                None => (None, Some(m)),
+            },
+            None => (None, None),
+        };
+        let cli_provider = provider.map(|p| providers::canonical_provider_name(p).to_string());
+        if let (Some(cp), Some(mp)) = (&cli_provider, &model_provider)
+            && cp != mp
+        {
+            anyhow::bail!("--provider {cp:?} conflicts with --model provider prefix {mp:?}");
+        }
+        let target_provider = cli_provider
+            .or(model_provider)
+            .unwrap_or_else(|| self.provider.clone());
+        let pcfg = lookup_provider(&self.providers, &target_provider)?;
+        let ep = pcfg.resolve(model_id);
+        self.apply_endpoint(&ep);
+        validate(self)
+    }
+
+    pub fn resolve_switch(&self, spec: &str) -> anyhow::Result<Endpoint> {
+        let spec = spec.trim();
+        anyhow::ensure!(!spec.is_empty(), "model specification must not be empty");
+        let canon = providers::canonical_provider_name(spec);
+        if let Some(pcfg) = self.providers.get(canon) {
+            return Ok(pcfg.resolve(None));
+        }
+        if let Some((p, m)) = providers::split_provider_model(spec, &self.providers) {
+            let pcfg = lookup_provider(&self.providers, p)?;
+            return Ok(pcfg.resolve(Some(m)));
+        }
+        if let Some(cur) = self.providers.get(&self.provider)
+            && cur.models.iter().any(|m| m.id == spec)
+        {
+            return Ok(cur.resolve(Some(spec)));
+        }
+        let matches: Vec<&ProviderConfig> = self
+            .providers
+            .values()
+            .filter(|p| p.models.iter().any(|m| m.id == spec))
+            .collect();
+        match matches.as_slice() {
+            [one] => Ok(one.resolve(Some(spec))),
+            [] => {
+                let cur = lookup_provider(&self.providers, &self.provider)?;
+                Ok(cur.resolve(Some(spec)))
+            }
+            many => {
+                let choices: Vec<String> =
+                    many.iter().map(|p| format!("{}/{spec}", p.name)).collect();
+                anyhow::bail!(
+                    "model {spec:?} exists on multiple providers; specify one of: {}",
+                    choices.join(", ")
+                );
+            }
+        }
+    }
+
+    fn apply_endpoint(&mut self, ep: &Endpoint) {
+        self.provider = ep.provider.clone();
+        self.model = ep.model.clone();
+        self.base_url = ep.base_url.clone();
+        self.api = ep.api;
+        self.auth = ep.auth;
+        self.api_key = ep.api_key.clone();
+        self.max_tokens = ep.max_tokens;
+        self.context_window = ep.context_window;
+        self.replay_reasoning = ep.replay_reasoning;
+        self.reasoning_effort = ep.reasoning_effort.clone();
+    }
+}
+
+/// What a config file may set. Unknown keys are ignored, the same
+/// forward-compatibility rule the wire types follow.
+#[derive(Default, serde::Deserialize)]
+struct FileConfig {
+    provider: Option<String>,
+    base_url: Option<String>,
+    api: Option<ApiKind>,
+    auth: Option<AuthStyle>,
+    model: Option<String>,
+    max_tokens: Option<u32>,
+    api_key: Option<String>,
+    context_window: Option<u32>,
+    replay_reasoning: Option<bool>,
+    reasoning_effort: Option<String>,
+    bash_timeout_secs: Option<u64>,
+    tools: Option<Vec<String>>,
+    #[serde(default)]
+    providers: BTreeMap<String, providers::FileProviderConfig>,
+}
+
+/// Read every layer and merge. The pure merging logic lives in [`merge`];
+/// this function only gathers real files and environment.
+pub fn load() -> anyhow::Result<Config> {
+    let user = read_if_exists(&user_path())?;
+    let project = read_if_exists(&Some(std::path::PathBuf::from(".gg/config.toml")))?;
+    let env: Vec<(String, String)> = std::env::vars().collect();
+    merge(Config::default(), user.as_deref(), project.as_deref(), &env)
+}
+
+/// `~/.gg/config.toml` — absent when HOME is unset (no home, no user file).
+fn user_path() -> Option<std::path::PathBuf> {
+    std::env::var("HOME")
+        .ok()
+        .map(|home| Path::new(&home).join(".gg").join("config.toml"))
+}
+
+/// None = no file. A file that exists but cannot be read (permissions,
+/// encoding) is an error: silently dropping a layer would hide it.
+fn read_if_exists(path: &Option<std::path::PathBuf>) -> anyhow::Result<Option<String>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+/// Merge precedence, lowest to highest: `defaults` < `user_toml` <
+/// `project_toml` < `env`. Shallow: a layer that sets a key wins whole,
+/// no deep merging. Pure — tests feed strings, never the real HOME.
+pub fn merge(
+    defaults: Config,
+    user_toml: Option<&str>,
+    project_toml: Option<&str>,
+    env: &[(String, String)],
+) -> anyhow::Result<Config> {
+    let user = parse_layer(user_toml, "user config (~/.gg/config.toml)")?;
+    let project = parse_layer(project_toml, "project config (.gg/config.toml)")?;
+
+    let mut providers = defaults.providers.clone();
+    providers::apply_provider_layer(&mut providers, user.providers)?;
+    providers::apply_provider_layer(&mut providers, project.providers)?;
+    providers::resolve_provider_keys(&mut providers, env);
+
+    let pick = |u: &Option<String>, p: &Option<String>| p.clone().or_else(|| u.clone());
+    let pick_list =
+        |u: &Option<Vec<String>>, p: &Option<Vec<String>>| p.clone().or_else(|| u.clone());
+
+    let file_provider = pick(&user.provider, &project.provider)
+        .map(|p| providers::canonical_provider_name(&p).to_string())
+        .unwrap_or_else(|| defaults.provider.clone());
+
+    let env_provider = env_value(env, "GG_PROVIDER")
+        .filter(|s| !s.trim().is_empty())
+        .map(|p| providers::canonical_provider_name(&p).to_string());
+    let env_model_raw = env_value(env, "GG_MODEL");
+    let (env_model_provider, env_model_id) = match env_model_raw.as_deref() {
+        Some(m) => match providers::split_provider_model(m, &providers) {
+            Some((p, id)) => (Some(p.to_string()), Some(id.to_string())),
+            None => (None, Some(m.to_string())),
+        },
+        None => (None, None),
+    };
+    if let (Some(ep), Some(mp)) = (&env_provider, &env_model_provider)
+        && ep != mp
+    {
+        anyhow::bail!("GG_PROVIDER={ep:?} conflicts with GG_MODEL provider prefix {mp:?}");
+    }
+
+    let active_provider = env_provider
+        .or(env_model_provider)
+        .unwrap_or_else(|| file_provider.clone());
+    let pcfg = lookup_provider(&providers, &active_provider)?;
+    let apply_file_flat = active_provider == file_provider;
+
+    let file_model = if apply_file_flat {
+        pick(&user.model, &project.model)
+    } else {
+        None
+    };
+    let chosen_model = env_model_id.or(file_model);
+    let mut ep = pcfg.resolve(chosen_model.as_deref());
+
+    if apply_file_flat {
+        if let Some(v) = pick(&user.base_url, &project.base_url) {
+            ep.base_url = v;
+        }
+        if let Some(v) = project.api.or(user.api) {
+            ep.api = v;
+        }
+        if let Some(v) = project.auth.or(user.auth) {
+            ep.auth = v;
+        }
+        if let Some(v) = project.max_tokens.or(user.max_tokens) {
+            ep.max_tokens = v;
+        }
+        if let Some(v) = pick(&user.api_key, &project.api_key) {
+            ep.api_key = (!v.is_empty()).then_some(v);
+        }
+        if let Some(v) = project.context_window.or(user.context_window) {
+            ep.context_window = v;
+        }
+        if let Some(v) = project.replay_reasoning.or(user.replay_reasoning) {
+            ep.replay_reasoning = v;
+        }
+        if let Some(v) = pick(&user.reasoning_effort, &project.reasoning_effort) {
+            ep.reasoning_effort = (!v.is_empty()).then_some(v);
+        }
+    }
+
+    if let Some(v) = env_value(env, "GG_BASE_URL") {
+        ep.base_url = v;
+    }
+    ep.max_tokens = parse_env(
+        env_value(env, "GG_MAX_TOKENS"),
+        "GG_MAX_TOKENS",
+        ep.max_tokens,
+    )?;
+    if let Some(v) = env_value(env, "GG_API_KEY") {
+        ep.api_key = (!v.is_empty()).then_some(v);
+    }
+    ep.context_window = parse_env(
+        env_value(env, "GG_CONTEXT_WINDOW"),
+        "GG_CONTEXT_WINDOW",
+        ep.context_window,
+    )?;
+
+    let cfg = Config {
+        provider: ep.provider,
+        base_url: ep.base_url,
+        api: ep.api,
+        auth: ep.auth,
+        model: ep.model,
+        max_tokens: ep.max_tokens,
+        api_key: ep.api_key,
+        context_window: ep.context_window,
+        replay_reasoning: ep.replay_reasoning,
+        reasoning_effort: ep.reasoning_effort,
+        bash_timeout_secs: parse_env(
+            env_value(env, "GG_BASH_TIMEOUT"),
+            "GG_BASH_TIMEOUT",
+            pick_num(
+                &user.bash_timeout_secs,
+                &project.bash_timeout_secs,
+                defaults.bash_timeout_secs,
+            ),
+        )?,
+        tools: pick_list(&user.tools, &project.tools).unwrap_or(defaults.tools),
+        providers,
+    };
+    validate(&cfg)?;
+    Ok(cfg)
+}
+
+fn lookup_provider<'a>(
+    providers: &'a BTreeMap<String, ProviderConfig>,
+    name: &str,
+) -> anyhow::Result<&'a ProviderConfig> {
+    providers.get(name).ok_or_else(|| {
+        let known: Vec<&str> = providers.keys().map(String::as_str).collect();
+        anyhow::anyhow!("unknown provider {name:?} (known: {})", known.join(", "))
+    })
+}
+
+fn parse_layer(raw: Option<&str>, what: &str) -> anyhow::Result<FileConfig> {
+    let Some(raw) = raw else {
+        return Ok(FileConfig::default());
+    };
+    toml::from_str(raw).with_context(|| format!("parsing {what}"))
+}
+
+fn env_value(env: &[(String, String)], name: &str) -> Option<String> {
+    env.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone())
+}
+
+fn pick_num<T: Clone>(user: &Option<T>, project: &Option<T>, default: T) -> T {
+    project.clone().or_else(|| user.clone()).unwrap_or(default)
+}
+
+/// Validate cross-field rules after merging. Each message names the
+/// setting so the user knows exactly what to fix.
+fn validate(cfg: &Config) -> anyhow::Result<()> {
+    if cfg.base_url.trim().is_empty() {
+        anyhow::bail!("base_url must not be empty");
+    }
+    if cfg.model.trim().is_empty() {
+        anyhow::bail!("model must not be empty");
+    }
+    if cfg.max_tokens == 0 {
+        anyhow::bail!("max_tokens must be positive");
+    }
+    if cfg.context_window == 0 {
+        anyhow::bail!("context_window must be positive");
+    }
+    if cfg.bash_timeout_secs == 0 {
+        anyhow::bail!("bash_timeout_secs must be positive");
+    }
+    for tool in &cfg.tools {
+        if tool.trim().is_empty() {
+            anyhow::bail!("tools list contains an empty name");
+        }
+        if !KNOWN_TOOLS.contains(&tool.as_str()) {
+            anyhow::bail!("unknown tool in tools allowlist: {tool}");
+        }
+    }
+    for p in cfg.providers.values() {
+        if p.base_url.trim().is_empty() {
+            anyhow::bail!("provider '{}' base_url must not be empty", p.name);
+        }
+        if p.default_model.trim().is_empty() {
+            anyhow::bail!("provider '{}' model must not be empty", p.name);
+        }
+        if p.max_tokens == 0 {
+            anyhow::bail!("provider '{}' max_tokens must be positive", p.name);
+        }
+        if p.context_window == 0 {
+            anyhow::bail!("provider '{}' context_window must be positive", p.name);
+        }
+    }
+    Ok(())
+}
+
+/// Parse one env var's string into a typed value, erroring with the var
+/// name on garbage. Kept as a free function so tests never mutate
+/// process-global environment state.
+fn parse_env<T>(raw: Option<String>, name: &str, default: T) -> anyhow::Result<T>
+where
+    T: std::str::FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    let Some(raw) = raw else {
+        return Ok(default);
+    };
+    raw.parse()
+        .with_context(|| format!("{name}={raw:?} is not a valid number"))
+}
+
+/// Resolve the effective tool allowlist: CLI flag > config setting,
+/// validated against the names the registry actually offers (the caller
+/// knows the registry; config does not — layering).
+pub fn resolve_tools(
+    cli: Option<Vec<String>>,
+    config: Vec<String>,
+    registry_names: &[&str],
+) -> anyhow::Result<Vec<String>> {
+    let chosen = cli.unwrap_or(config);
+    for name in &chosen {
+        if !registry_names.contains(&name.as_str()) {
+            anyhow::bail!("unknown tool in allowlist: {name}");
+        }
+    }
+    Ok(chosen)
+}
+
+#[cfg(test)]
+mod tests;
