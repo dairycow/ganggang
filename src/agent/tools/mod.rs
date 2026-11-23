@@ -137,6 +137,32 @@ pub(crate) fn display(path: &std::path::Path) -> String {
     out.display().to_string()
 }
 
+pub(crate) const PRUNED_DIRS: &[&str] = &[".git", "target", "node_modules"];
+
+pub(crate) fn display_relative(cwd: &std::path::Path, path: &std::path::Path) -> String {
+    let rel = path.strip_prefix(cwd).unwrap_or(path);
+    let rendered = display(rel);
+    if rendered.is_empty() {
+        ".".to_string()
+    } else {
+        rendered
+    }
+}
+
+pub(crate) fn resolve_walk_root(root: &std::path::Path) -> (PathBuf, bool) {
+    let is_symlink = std::fs::symlink_metadata(root)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    if is_symlink {
+        (
+            std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()),
+            true,
+        )
+    } else {
+        (root.to_path_buf(), false)
+    }
+}
+
 /// Names of the default registry's tools, in advertisement order. The
 /// config allowlist and hook matchers validate against this canonical
 /// list; registration and this constant move together (pinned by test).

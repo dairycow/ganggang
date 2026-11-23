@@ -27,6 +27,7 @@ pub struct Config {
     pub context_window: u32,
     pub replay_reasoning: bool,
     pub reasoning_effort: Option<String>,
+    pub reasoning_budget_tokens: Option<u32>,
     pub bash_timeout_secs: u64,
     pub tools: Vec<String>,
     pub providers: BTreeMap<String, ProviderConfig>,
@@ -50,6 +51,7 @@ impl Default for Config {
             context_window: ep.context_window,
             replay_reasoning: ep.replay_reasoning,
             reasoning_effort: ep.reasoning_effort,
+            reasoning_budget_tokens: ep.reasoning_budget_tokens,
             bash_timeout_secs: 30,
             tools: crate::agent::tools::NAMES
                 .iter()
@@ -78,6 +80,7 @@ impl Config {
             context_window: self.context_window,
             replay_reasoning: self.replay_reasoning,
             reasoning_effort: self.reasoning_effort.clone(),
+            reasoning_budget_tokens: self.reasoning_budget_tokens,
         }
     }
 
@@ -105,6 +108,16 @@ impl Config {
         let ep = pcfg.resolve(model_id);
         self.apply_endpoint(&ep);
         validate(self)
+    }
+
+    pub fn apply_reasoning_cli(&mut self, effort: Option<&str>, budget: Option<u32>) {
+        if let Some(v) = effort {
+            let trimmed = v.trim();
+            self.reasoning_effort = (!trimmed.is_empty()).then(|| trimmed.to_string());
+        }
+        if let Some(b) = budget {
+            self.reasoning_budget_tokens = (b > 0).then_some(b);
+        }
     }
 
     pub fn resolve_switch(&self, spec: &str) -> anyhow::Result<Endpoint> {
@@ -156,6 +169,7 @@ impl Config {
         self.context_window = ep.context_window;
         self.replay_reasoning = ep.replay_reasoning;
         self.reasoning_effort = ep.reasoning_effort.clone();
+        self.reasoning_budget_tokens = ep.reasoning_budget_tokens;
     }
 }
 
@@ -173,6 +187,7 @@ struct FileConfig {
     context_window: Option<u32>,
     replay_reasoning: Option<bool>,
     reasoning_effort: Option<String>,
+    reasoning_budget_tokens: Option<u32>,
     bash_timeout_secs: Option<u64>,
     tools: Option<Vec<String>>,
     #[serde(default)]
@@ -287,6 +302,12 @@ pub fn merge(
         if let Some(v) = pick(&user.reasoning_effort, &project.reasoning_effort) {
             ep.reasoning_effort = (!v.is_empty()).then_some(v);
         }
+        if let Some(v) = project
+            .reasoning_budget_tokens
+            .or(user.reasoning_budget_tokens)
+        {
+            ep.reasoning_budget_tokens = (v > 0).then_some(v);
+        }
     }
 
     if let Some(v) = env_value(env, "GG_BASE_URL") {
@@ -305,6 +326,14 @@ pub fn merge(
         "GG_CONTEXT_WINDOW",
         ep.context_window,
     )?;
+    if let Some(v) = env_value(env, "GG_REASONING_EFFORT") {
+        let trimmed = v.trim();
+        ep.reasoning_effort = (!trimmed.is_empty()).then(|| trimmed.to_string());
+    }
+    if let Some(raw) = env_value(env, "GG_THINKING_BUDGET") {
+        let parsed: u32 = parse_env(Some(raw), "GG_THINKING_BUDGET", 0)?;
+        ep.reasoning_budget_tokens = (parsed > 0).then_some(parsed);
+    }
 
     let cfg = Config {
         provider: ep.provider,
@@ -317,6 +346,7 @@ pub fn merge(
         context_window: ep.context_window,
         replay_reasoning: ep.replay_reasoning,
         reasoning_effort: ep.reasoning_effort,
+        reasoning_budget_tokens: ep.reasoning_budget_tokens,
         bash_timeout_secs: parse_env(
             env_value(env, "GG_BASH_TIMEOUT"),
             "GG_BASH_TIMEOUT",

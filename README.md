@@ -103,9 +103,9 @@ context (`!!` doesn't).
 
 ## Configuration & Providers (§16)
 
-Precedence: CLI flags (`-P`/`--provider`, `-m`/`--model`, `--tools`) > environment
+Precedence: CLI flags (`-P`/`--provider`, `-m`/`--model`, `--tools`, `--reasoning-effort`, `--thinking-budget`) > environment
 (`GG_PROVIDER`, `GG_BASE_URL`, `GG_MODEL`, `GG_MAX_TOKENS`, `GG_API_KEY`,
-`GG_CONTEXT_WINDOW`, `GG_BASH_TIMEOUT`, `GG_DEBUG_PROMPT=1` to dump the
+`GG_CONTEXT_WINDOW`, `GG_BASH_TIMEOUT`, `GG_REASONING_EFFORT`, `GG_THINKING_BUDGET`, `GG_DEBUG_PROMPT=1` to dump the
 assembled system prompt to stderr, plus provider env vars `ZHIPU_API_KEY`,
 `OPENCODE_API_KEY`, `DEEPSEEK_API_KEY`) > `.gg/config.toml` >
 `~/.gg/config.toml` > defaults.
@@ -124,8 +124,10 @@ gg -m opencode-go/claude-haiku-5-5 -p "…"
 
 ```toml
 provider = "strata"
-max_tokens = 4096
+max_tokens = 16384
 context_window = 131072   # match `strata launch --context`
+# reasoning_effort = "medium"       # strata default
+# reasoning_budget_tokens = 4096    # strata default (0 disables)
 bash_timeout_secs = 30
 tools = ["read", "bash", "edit", "write", "grep", "find", "ls"]
 

@@ -6,17 +6,17 @@ The tool surface the model sees, generated from the registry (advertisement orde
 
 | Tool | Description |
 |---|---|
-| `read` | Read a text file. Returns up to 2000 lines / 50 KiB; truncated reads say so. Use offset (1-based line) and limit to page through larger files. |
+| `read` | Read a text file with 1-based line numbers (N\| text). Returns up to 2000 lines / 50 KiB; truncated reads say so. Use offset (1-based line) and limit to page through larger files (including past 50 KiB). |
 | `bash` | Run a command in bash and return the merged stdout+stderr and exit code. Nonzero exits are reported as errors with the output included. |
 | `edit` | Apply exact-match text edits to a file. Every old_text must appear exactly once; if any edit misses or is ambiguous, nothing is written. |
 | `write` | Create or overwrite a file with the given content. Refuses paths outside the working directory unless force is true. Reports the byte count written. |
-| `grep` | Search file contents for a fixed substring (not a regex) and get matching lines as path:line: text. Searches a file or a directory tree recursively (.git and binary files skipped). Returns at most max_results matching lines (default 50); the stop is noted in the output. For regex or case-insensitive search, use the bash tool instead. |
-| `find` | Find files and directories whose NAME matches a glob (* = any run of characters, ? = one character; no character classes). Searches recursively from a root directory (default the working directory), dotfiles included, results sorted. Returns at most max_results paths (default 50); the stop is noted in the output. |
+| `grep` | Search file contents using a regular expression (or literal text with fixed_strings: true). Respects .gitignore and skips .git, target, node_modules, and binary files. Supports glob filtering, case_insensitive, and context lines. Returns at most max_results matches (default 50). |
+| `find` | Find files and directories matching a glob (e.g. "*.rs", "**/*.md"). Respects .gitignore and skips .git, target, and node_modules by default (pass include_ignored: true to include them). Dotfiles included, results sorted, capped at max_results (default 50). |
 | `ls` | List one directory level: directories first (name/), then files with their byte size, alphabetical. Not recursive — use find to locate files deeper down. Hidden entries included. Entries that cannot be read are skipped with a noted line. |
 
 ## `read`
 
-Read a text file. Returns up to 2000 lines / 50 KiB; truncated reads say so. Use offset (1-based line) and limit to page through larger files.
+Read a text file with 1-based line numbers (N| text). Returns up to 2000 lines / 50 KiB; truncated reads say so. Use offset (1-based line) and limit to page through larger files (including past 50 KiB).
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -54,23 +54,28 @@ Create or overwrite a file with the given content. Refuses paths outside the wor
 
 ## `grep`
 
-Search file contents for a fixed substring (not a regex) and get matching lines as path:line: text. Searches a file or a directory tree recursively (.git and binary files skipped). Returns at most max_results matching lines (default 50); the stop is noted in the output. For regex or case-insensitive search, use the bash tool instead.
+Search file contents using a regular expression (or literal text with fixed_strings: true). Respects .gitignore and skips .git, target, node_modules, and binary files. Supports glob filtering, case_insensitive, and context lines. Returns at most max_results matches (default 50).
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
+| `case_insensitive` | boolean | no | Case-insensitive matching (default: false) |
+| `context` | integer | no | Number of context lines before and after each match (max 10) |
+| `fixed_strings` | boolean | no | Treat pattern as literal text instead of regex (default: false) |
+| `glob` | string | no | Optional glob filter on file names or paths, e.g. "*.rs" |
 | `max_results` | integer | no | Maximum number of matching lines to return (default 50) |
-| `path` | string | yes | File or directory to search, relative to the working directory |
-| `pattern` | string | yes | Substring to search for (literal text, not a regex) |
+| `path` | string | no | File or directory to search, relative to the working directory (default: ".") |
+| `pattern` | string | yes | Regular expression to search for (or literal text when fixed_strings is true) |
 
 ## `find`
 
-Find files and directories whose NAME matches a glob (* = any run of characters, ? = one character; no character classes). Searches recursively from a root directory (default the working directory), dotfiles included, results sorted. Returns at most max_results paths (default 50); the stop is noted in the output.
+Find files and directories matching a glob (e.g. "*.rs", "**/*.md"). Respects .gitignore and skips .git, target, and node_modules by default (pass include_ignored: true to include them). Dotfiles included, results sorted, capped at max_results (default 50).
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
+| `include_ignored` | boolean | no | Include .gitignore'd, target/, and node_modules/ entries (default: false) |
 | `max_results` | integer | no | Maximum number of paths to return (default 50) |
 | `path` | string | no | Directory to search from (default: the working directory) |
-| `pattern` | string | yes | Glob matched against entry names, e.g. "*.rs" or "config?" |
+| `pattern` | string | yes | Glob matched against entry names (or relative paths when pattern contains '/') |
 
 ## `ls`
 

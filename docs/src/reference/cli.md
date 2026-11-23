@@ -39,6 +39,10 @@ Options:
           List configured providers and models, then exit
       --no-hooks
           Skip user hooks for this run (§22), including the hooks file and the project-file warning
+      --reasoning-effort <EFFORT>
+          Reasoning effort sent to supporting endpoints (e.g. "low", "medium", "high", "xhigh", "none"). Pass "" to clear a provider preset's default
+      --thinking-budget <TOKENS>
+          Cap thinking/reasoning tokens per turn (Strata/local backends). 0 disables any preset cap
   -h, --help
           Print help
   -V, --version
@@ -62,3 +66,5 @@ Options:
 | `-m, --model <MODEL>` | Model id or `provider/model` (overrides config and provider default) |  |  |
 | `--list-models` | List configured providers and models, then exit |  |  |
 | `--no-hooks` | Skip user hooks for this run (§22), including the hooks file and the project-file warning |  |  |
+| `--reasoning-effort <EFFORT>` | Reasoning effort sent to supporting endpoints (e.g. "low", "medium", "high", "xhigh", "none"). Pass "" to clear a provider preset's default |  |  |
+| `--thinking-budget <TOKENS>` | Cap thinking/reasoning tokens per turn (Strata/local backends). 0 disables any preset cap |  |  |

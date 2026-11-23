@@ -9,7 +9,7 @@ Built-in provider presets, generated from the provider table. `zai-coding-plan` 
 | `deepseek` | `deepseek-flash` | `openai-completions` | `DEEPSEEK_API_KEY` | `https://api.deepseek.com` | 16384 | 1000000 |
 | `glm-coding-plan` | `glm-5.3-flash` | `openai-completions` | `ZHIPU_API_KEY` | `https://api.z.ai/api/coding/paas/v4` | 16384 | 1000000 |
 | `opencode-go` | `deepseek-v4.1-flash` | `openai-completions` | `OPENCODE_API_KEY` | `https://opencode.ai/inference/go/openai/v1` | 16384 | 1000000 |
-| `strata` | `qwen3.8-flash-next-iq3_s` | `openai-completions` | none (local) | `http://127.0.0.1:8080/v1` | 4096 | 131072 |
+| `strata` | `qwen3.8-flash-next-iq3_s` | `openai-completions` | none (local) | `http://127.0.0.1:8080/v1` | 16384 | 131072 |
 
 ## deepseek
 
@@ -57,4 +57,4 @@ Built-in provider presets, generated from the provider table. `zai-coding-plan` 
 
 | Model | Wire API | Context window | Max tokens | Replays reasoning | Base URL |
 |---|---|---|---|---|---|
-| `qwen3.8-flash-next-iq3_s` (default) | `openai-completions` | 131072 | 4096 | no | `http://127.0.0.1:8080/v1` |
+| `qwen3.8-flash-next-iq3_s` (default) | `openai-completions` | 131072 | 16384 | no | `http://127.0.0.1:8080/v1` |

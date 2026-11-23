@@ -18,7 +18,7 @@ or `tools = [...]` in [config](configuration.md). The flag overrides the config.
 
 ## `read`
 
-Reads a text file: at most 2000 lines and 50 KiB per call, with a `[truncated: …]` note when cut. `offset` (1-based line) and `limit` page through large files. Non-UTF-8 files are refused.
+Reads a text file with 1-based line numbers (`N| text`): at most 2000 lines and 50 KiB per call, with a `[truncated: …]` note when cut. `offset` (1-based line) and `limit` stream sequentially so you can page cleanly past 50 KiB. Non-UTF-8 files are refused.
 
 ## `bash`
 
@@ -34,11 +34,11 @@ Creates or overwrites a file, creating parent directories. Paths that resolve (l
 
 ## `grep`
 
-Searches file contents for a **literal substring** (not a regex). Defaults to 50 results; each matching line is cut at 250 characters; only the first 1 MiB of each file is searched; binary files and `.git` are skipped; symlinks are not followed. For regex, alternation, or case-insensitivity, the model uses `bash`.
+Searches file contents using a regular expression (or literal text with `fixed_strings: true`). Respects `.gitignore` and skips `.git`, `target`, `node_modules`, and binary files. Supports `glob` filtering, `case_insensitive`, `context` lines (up to 10), and optional `path` (default `.`). Defaults to 50 results; each matching line is cut at 250 characters; only the first 1 MiB of each file is searched; symlinks are not followed.
 
 ## `find`
 
-Matches entry **names** against a glob with `*` and `?` (no `**`, no character classes). The walk is sorted and deterministic and includes hidden entries. Defaults to 50 results with a visible note when it stops.
+Matches entry names (or relative paths when `pattern` contains `/`) against a `globset` glob (e.g. `*.rs`, `**/*.md`). Respects `.gitignore` and skips `.git`, `target`, and `node_modules` by default (`include_ignored: true` includes them). The walk is sorted and deterministic and includes dotfiles. Defaults to 50 results with a visible note when it stops.
 
 ## `ls`
 

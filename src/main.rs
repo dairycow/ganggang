@@ -100,6 +100,15 @@ struct Cli {
     /// project-file warning.
     #[arg(long)]
     no_hooks: bool,
+
+    /// Reasoning effort sent to supporting endpoints (e.g. "low", "medium", "high", "xhigh", "none").
+    /// Pass "" to clear a provider preset's default.
+    #[arg(long = "reasoning-effort", value_name = "EFFORT")]
+    reasoning_effort: Option<String>,
+
+    /// Cap thinking/reasoning tokens per turn (Strata/local backends). 0 disables any preset cap.
+    #[arg(long = "thinking-budget", value_name = "TOKENS")]
+    thinking_budget: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -194,6 +203,7 @@ async fn main() -> anyhow::Result<()> {
         let cwd = std::env::current_dir()?;
         let mut cfg = config::load()?;
         cfg.apply_cli(cli.provider.as_deref(), cli.model.as_deref())?;
+        cfg.apply_reasoning_cli(cli.reasoning_effort.as_deref(), cli.thinking_budget);
         cfg.active_endpoint().require_auth()?;
         // Hooks are user-level policy (§22), loaded once and shared by the
         // TUI factory. A project hooks file only produces a warning.
@@ -364,6 +374,7 @@ fn pick_of(cli: &Cli) -> tui::SessionPick {
 fn open_agent(cli: &Cli, abort: Arc<AtomicBool>) -> anyhow::Result<Agent> {
     let mut cfg = config::load()?;
     cfg.apply_cli(cli.provider.as_deref(), cli.model.as_deref())?;
+    cfg.apply_reasoning_cli(cli.reasoning_effort.as_deref(), cli.thinking_budget);
     let endpoint = cfg.active_endpoint();
     endpoint.require_auth()?;
     let cwd = std::env::current_dir()?;
@@ -414,6 +425,8 @@ fn boot_and_factory(
             model: None,
             list_models: false,
             no_hooks,
+            reasoning_effort: None,
+            thinking_budget: None,
         };
         assemble_boot(&cfg, endpoint, &cwd, abort, &cli, pick, &hooks)
     });
@@ -592,5 +605,17 @@ mod tests {
         assert!(list.list_models);
         assert!(parse(&["--list-models", "-p", "hi"]).is_err());
         assert!(parse(&["--list-models", "--watch"]).is_err());
+
+        let r = parse(&[
+            "--reasoning-effort",
+            "low",
+            "--thinking-budget",
+            "2048",
+            "-p",
+            "hi",
+        ])
+        .unwrap();
+        assert_eq!(r.reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(r.thinking_budget, Some(2048));
     }
 }

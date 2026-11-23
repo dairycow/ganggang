@@ -149,6 +149,8 @@ pub struct ChatRequest<'a> {
     pub stream_options: Option<StreamOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_budget_tokens: Option<u32>,
 }
 
 /// The `stream_options` object of a streaming request.
@@ -176,6 +178,7 @@ mod tests {
             stream: None,
             stream_options: None,
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
         };
 
         // skip_serializing_if drops the empty tool_calls, None tool_call_id and
@@ -206,6 +209,7 @@ mod tests {
                 include_usage: true,
             }),
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
         };
         assert_eq!(
             serde_json::to_string(&req).unwrap(),
@@ -242,6 +246,7 @@ mod tests {
             stream: None,
             stream_options: None,
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
         };
 
         let json = serde_json::to_string(&req).unwrap();
@@ -363,9 +368,32 @@ mod tests {
             stream: None,
             stream_options: None,
             reasoning_effort: Some("low"),
+            reasoning_budget_tokens: None,
         };
         let v = serde_json::to_value(&req).unwrap();
         assert_eq!(v["reasoning_effort"], "low");
+        assert!(v.get("reasoning_budget_tokens").is_none());
+    }
+
+    #[test]
+    fn request_omits_or_includes_reasoning_budget_tokens() {
+        let messages = [ChatMessage {
+            role: "user".to_string(),
+            content: Some("hi".to_string()),
+            ..Default::default()
+        }];
+        let req = ChatRequest {
+            model: "m",
+            messages: &messages,
+            max_tokens: 512,
+            tools: &[],
+            stream: None,
+            stream_options: None,
+            reasoning_effort: None,
+            reasoning_budget_tokens: Some(4096),
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["reasoning_budget_tokens"], 4096);
     }
 
     #[test]

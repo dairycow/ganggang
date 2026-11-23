@@ -316,3 +316,64 @@ fn resolve_switch_and_require_auth() {
     let adhoc = cfg.resolve_switch("my-custom-lora").unwrap();
     assert_eq!(adhoc.label(), "strata/my-custom-lora");
 }
+
+#[test]
+fn strata_defaults_and_reasoning_controls_override_cleanly() {
+    let def = Config::default();
+    assert_eq!(def.max_tokens, 16_384);
+    assert_eq!(def.reasoning_effort.as_deref(), Some("medium"));
+    assert_eq!(def.reasoning_budget_tokens, Some(4096));
+
+    // File layer 0 clears preset budget.
+    let cleared = merge(
+        Config::default(),
+        Some("reasoning_budget_tokens = 0\n"),
+        None,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(cleared.reasoning_budget_tokens, None);
+
+    // Env overrides files and presets; empty effort or 0 budget clears them.
+    let env_set = merge(
+        Config::default(),
+        None,
+        None,
+        &env(&[
+            ("GG_REASONING_EFFORT", "low"),
+            ("GG_THINKING_BUDGET", "2048"),
+        ]),
+    )
+    .unwrap();
+    assert_eq!(env_set.reasoning_effort.as_deref(), Some("low"));
+    assert_eq!(env_set.reasoning_budget_tokens, Some(2048));
+
+    let env_clear = merge(
+        Config::default(),
+        None,
+        None,
+        &env(&[("GG_REASONING_EFFORT", ""), ("GG_THINKING_BUDGET", "0")]),
+    )
+    .unwrap();
+    assert_eq!(env_clear.reasoning_effort, None);
+    assert_eq!(env_clear.reasoning_budget_tokens, None);
+
+    let err = merge(
+        Config::default(),
+        None,
+        None,
+        &env(&[("GG_THINKING_BUDGET", "nope")]),
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("GG_THINKING_BUDGET"));
+
+    // CLI overrides even after provider switch.
+    let mut switched = Config::default();
+    switched.apply_cli(Some("deepseek"), None).unwrap();
+    switched.apply_reasoning_cli(Some("xhigh"), Some(8192));
+    assert_eq!(switched.reasoning_effort.as_deref(), Some("xhigh"));
+    assert_eq!(switched.reasoning_budget_tokens, Some(8192));
+    switched.apply_reasoning_cli(Some(""), Some(0));
+    assert_eq!(switched.reasoning_effort, None);
+    assert_eq!(switched.reasoning_budget_tokens, None);
+}

@@ -15,6 +15,7 @@ pub struct ModelSpec {
     pub context_window: Option<u32>,
     pub replay_reasoning: Option<bool>,
     pub reasoning_effort: Option<String>,
+    pub reasoning_budget_tokens: Option<u32>,
 }
 
 impl ModelSpec {
@@ -27,6 +28,7 @@ impl ModelSpec {
             context_window: None,
             replay_reasoning: None,
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
         }
     }
 
@@ -45,6 +47,7 @@ impl ModelSpec {
             context_window: None,
             replay_reasoning: Some(false),
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
         }
     }
 }
@@ -62,6 +65,7 @@ pub struct ProviderConfig {
     pub context_window: u32,
     pub replay_reasoning: bool,
     pub reasoning_effort: Option<String>,
+    pub reasoning_budget_tokens: Option<u32>,
     pub models: Vec<ModelSpec>,
 }
 
@@ -91,6 +95,10 @@ impl ProviderConfig {
             reasoning_effort: spec
                 .and_then(|s| s.reasoning_effort.clone())
                 .or_else(|| self.reasoning_effort.clone()),
+            reasoning_budget_tokens: spec
+                .and_then(|s| s.reasoning_budget_tokens)
+                .map(|v| (v > 0).then_some(v))
+                .unwrap_or(self.reasoning_budget_tokens),
         }
     }
 }
@@ -108,6 +116,7 @@ pub struct Endpoint {
     pub context_window: u32,
     pub replay_reasoning: bool,
     pub reasoning_effort: Option<String>,
+    pub reasoning_budget_tokens: Option<u32>,
 }
 
 impl Endpoint {
@@ -152,6 +161,7 @@ pub(super) struct FileProviderConfig {
     pub context_window: Option<u32>,
     pub replay_reasoning: Option<bool>,
     pub reasoning_effort: Option<String>,
+    pub reasoning_budget_tokens: Option<u32>,
     pub models: Option<Vec<FileModelEntry>>,
 }
 
@@ -171,6 +181,7 @@ pub(super) struct FileModelSpec {
     pub context_window: Option<u32>,
     pub replay_reasoning: Option<bool>,
     pub reasoning_effort: Option<String>,
+    pub reasoning_budget_tokens: Option<u32>,
 }
 
 impl From<FileModelEntry> for ModelSpec {
@@ -185,6 +196,7 @@ impl From<FileModelEntry> for ModelSpec {
                 context_window: s.context_window,
                 replay_reasoning: s.replay_reasoning,
                 reasoning_effort: s.reasoning_effort,
+                reasoning_budget_tokens: s.reasoning_budget_tokens,
             },
         }
     }
@@ -210,10 +222,11 @@ pub fn builtin_providers() -> BTreeMap<String, ProviderConfig> {
             api_key: None,
             api_key_env: None,
             default_model: "qwen3.8-flash-next-iq3_s".to_string(),
-            max_tokens: 4096,
+            max_tokens: 16_384,
             context_window: 131_072,
             replay_reasoning: false,
-            reasoning_effort: None,
+            reasoning_effort: Some("medium".to_string()),
+            reasoning_budget_tokens: Some(4096),
             models: vec![ModelSpec::id_only("qwen3.8-flash-next-iq3_s")],
         },
     );
@@ -232,6 +245,7 @@ pub fn builtin_providers() -> BTreeMap<String, ProviderConfig> {
             context_window: 1_000_000,
             replay_reasoning: true,
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
             models: vec![
                 ModelSpec::id_only("glm-5.3-flash"),
                 ModelSpec::id_only("glm-5.3"),
@@ -256,6 +270,7 @@ pub fn builtin_providers() -> BTreeMap<String, ProviderConfig> {
             context_window: 1_000_000,
             replay_reasoning: true,
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
             models: vec![
                 ModelSpec::id_only("deepseek-v4.1-flash"),
                 ModelSpec::id_only("deepseek-v4-pro"),
@@ -298,6 +313,7 @@ pub fn builtin_providers() -> BTreeMap<String, ProviderConfig> {
             context_window: 1_000_000,
             replay_reasoning: true,
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
             models: vec![
                 ModelSpec::id_only("deepseek-flash"),
                 ModelSpec::id_only("deepseek-v4-pro"),
@@ -355,6 +371,9 @@ pub(super) fn apply_provider_layer(
             if let Some(v) = patch.reasoning_effort {
                 existing.reasoning_effort = (!v.is_empty()).then_some(v);
             }
+            if let Some(v) = patch.reasoning_budget_tokens {
+                existing.reasoning_budget_tokens = (v > 0).then_some(v);
+            }
             if let Some(models) = patch.models {
                 existing.models = models.into_iter().map(ModelSpec::from).collect();
             }
@@ -383,6 +402,7 @@ pub(super) fn apply_provider_layer(
                     context_window: patch.context_window.unwrap_or(131_072),
                     replay_reasoning: patch.replay_reasoning.unwrap_or(false),
                     reasoning_effort: patch.reasoning_effort.filter(|s| !s.is_empty()),
+                    reasoning_budget_tokens: patch.reasoning_budget_tokens.filter(|&v| v > 0),
                     models,
                 },
             );

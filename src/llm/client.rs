@@ -20,6 +20,7 @@ pub struct LlmClient {
     auth: AuthStyle,
     api_key: Option<String>,
     reasoning_effort: Option<String>,
+    reasoning_budget_tokens: Option<u32>,
     session_id: String,
     session_header: Option<String>,
 }
@@ -44,6 +45,7 @@ impl LlmClient {
             auth: AuthStyle::Auto,
             api_key: None,
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
             session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
             session_header,
         })
@@ -54,7 +56,8 @@ impl LlmClient {
             .with_api(endpoint.api)
             .with_auth(endpoint.auth)
             .with_api_key(endpoint.api_key.clone())
-            .with_reasoning_effort(endpoint.reasoning_effort.clone()))
+            .with_reasoning_effort(endpoint.reasoning_effort.clone())
+            .with_reasoning_budget_tokens(endpoint.reasoning_budget_tokens))
     }
 
     pub fn with_api(mut self, api: ApiKind) -> Self {
@@ -75,6 +78,11 @@ impl LlmClient {
 
     pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
         self.reasoning_effort = effort;
+        self
+    }
+
+    pub fn with_reasoning_budget_tokens(mut self, budget: Option<u32>) -> Self {
+        self.reasoning_budget_tokens = budget.filter(|&n| n > 0);
         self
     }
 
@@ -131,6 +139,7 @@ impl LlmClient {
                     stream: None,
                     stream_options: None,
                     reasoning_effort: self.reasoning_effort.as_deref(),
+                    reasoning_budget_tokens: self.reasoning_budget_tokens,
                 };
                 let request = self.apply_auth(self.http.post(&url).json(&body));
                 let resp = request
@@ -195,6 +204,7 @@ impl LlmClient {
                         include_usage: true,
                     }),
                     reasoning_effort: self.reasoning_effort.as_deref(),
+                    reasoning_budget_tokens: self.reasoning_budget_tokens,
                 };
                 let request = self.apply_auth(self.http.post(&url).json(&body));
                 let resp = request
@@ -300,5 +310,37 @@ mod tests {
         assert!(raw.contains("x-opencode-session: sess-123"), "{raw}");
         assert!(raw.contains("x-opencode-client: ganggang"), "{raw}");
         assert!(raw.contains("user-agent: ganggang/"), "{raw}");
+    }
+
+    #[tokio::test]
+    async fn reasoning_effort_and_budget_are_sent_when_configured() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(String::new()));
+        let seen_clone = seen.clone();
+
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = s.read(&mut buf).unwrap();
+            *seen_clone.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).to_string();
+            let body = r#"{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            s.write_all(resp.as_bytes()).unwrap();
+        });
+
+        let client = LlmClient::new(&format!("http://{addr}"))
+            .unwrap()
+            .with_reasoning_effort(Some("medium".into()))
+            .with_reasoning_budget_tokens(Some(4096));
+        let _ = client.send("m", &[], 16, &[]).await.unwrap();
+        let raw = seen.lock().unwrap().clone();
+        let body = raw.split("\r\n\r\n").nth(1).unwrap();
+        let v: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(v["reasoning_effort"], "medium");
+        assert_eq!(v["reasoning_budget_tokens"], 4096);
     }
 }
