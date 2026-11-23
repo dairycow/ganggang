@@ -4,6 +4,8 @@ A small, sharp agentic harness in Rust. One agent loop, four-plus tools, an
 interactive TUI — modelled on [pi](https://github.com/earendil-works/pi),
 built to be read.
 
+📖 **[Read the User Guide →](https://dairycow.github.io/ganggang/)**
+
 `gg` defaults to a local [Strata](https://github.com/Niko1221/Strata) server — no cloud, no accounts, no telemetry — and also speaks OpenAI Chat Completions and Anthropic Messages endpoints with built-in provider presets and custom `[providers.<name>]` configs.
 
 ## Install & run
@@ -112,7 +114,7 @@ Built-in providers: `strata` (local default), `glm-coding-plan` (Z.AI,
 alias `zai-coding-plan`), `opencode-go` (routes OpenAI Completions and
 Anthropic Messages per model), and `deepseek`. Custom `[providers.<name>]`
 sections are also supported (`base_url`, `model`, optional `api =
-"openai-completions"` | `"anthropic-messages"`, `api_key_env`, etc.).
+"open-ai-completions"` | `"anthropic-messages"`, `api_key_env`, etc.).
 
 ```sh
 gg --list-models
@@ -218,6 +220,7 @@ scripts/smoke.sh      # live acceptance against a running Strata (print mode)
 scripts/hooks-live.sh # hooks: deny path, observe paths, --no-hooks, project hooks
 scripts/tui-live.sh   # the TUI's terminal hand-off through tmux: Ctrl+G, !, tty state
 scripts/watch-live.sh # --watch: rebuild, re-exec, session continuity, draft carry
+scripts/sync-docs.sh  # regenerate + verify the user guide's reference pages (docs/)
 ```
 
-The spec is `design.html` — read it first; `TASKS.md` tracks the build.
+The spec is `design.html` — read it first; `TASKS.md` tracks the build. The user guide's sources are the mdBook in `docs/`; `AGENTS.md` explains how docs stay in sync.

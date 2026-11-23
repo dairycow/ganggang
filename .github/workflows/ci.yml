@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  MDBOOK_VERSION: v0.5.4
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      # Includes the doc_sync tests: stale generated reference pages and
+      # guide/code contract violations fail here.
+      - run: cargo test
+      - run: cargo clippy --all-targets -- -D warnings
+      - name: Build the user guide
+        run: |
+          curl -sSfL "https://github.com/rust-lang/mdBook/releases/download/${MDBOOK_VERSION}/mdbook-${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/mdbook" build docs
+
+  docs-freshness:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Remind when src/ changed without docs
+        run: |
+          changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          if grep -q '^src/' <<<"$changed" && ! grep -Eq '^(docs/|README\.md)' <<<"$changed"; then
+            msg="src/ changed but docs/ and README.md did not. If behaviour users can see changed, update docs/src/guide/ (see AGENTS.md)."
+            echo "::notice title=Docs check::$msg"
+            echo "### Docs check" >> "$GITHUB_STEP_SUMMARY"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          fi

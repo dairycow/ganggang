@@ -4,6 +4,8 @@
 
 mod agent;
 mod config;
+#[cfg(test)]
+mod doc_sync;
 mod events;
 mod export;
 mod home;

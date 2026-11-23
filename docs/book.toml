@@ -1,0 +1,12 @@
+[book]
+title = "ganggang (gg) User Guide"
+authors = ["dairycow"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "coal"
+preferred-dark-theme = "coal"
+site-url = "/ganggang/"
+git-repository-url = "https://github.com/dairycow/ganggang"
+edit-url-template = "https://github.com/dairycow/ganggang/edit/main/docs/{path}"

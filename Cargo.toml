@@ -7,9 +7,10 @@ license = "MIT"
 readme = "README.md"
 repository = "https://github.com/dairycow/ganggang"
 homepage = "https://github.com/dairycow/ganggang"
+documentation = "https://dairycow.github.io/ganggang/"
 keywords = ["agent", "ai", "cli", "tui"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = [".cargo/", ".claude/", ".review-*.md", "design.html", "TASKS.md"]
+exclude = [".cargo/", ".claude/", ".github/", ".review-*.md", "AGENTS.md", "design.html", "docs/", "TASKS.md"]
 
 [[bin]]
 name = "gg"
