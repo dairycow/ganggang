@@ -103,10 +103,19 @@ context (`!!` doesn't).
 
 Precedence: CLI flags (`-P`/`--provider`, `-m`/`--model`, `--tools`) > environment
 (`GG_PROVIDER`, `GG_BASE_URL`, `GG_MODEL`, `GG_MAX_TOKENS`, `GG_API_KEY`,
-`GG_CONTEXT_WINDOW`, `GG_BASH_TIMEOUT`, `GG_DEBUG_PROMPT=1` to dump the
+`GG_CONTEXT_WINDOW`, `GG_BASH_TIMEOUT`, `GG_MAX_RETRIES`, `GG_DEBUG_PROMPT=1` to dump the
 assembled system prompt to stderr, plus provider env vars `ZHIPU_API_KEY`,
 `OPENCODE_API_KEY`, `DEEPSEEK_API_KEY`) > `.gg/config.toml` >
 `~/.gg/config.toml` > defaults.
+
+Transient LLM transport failures are retried: connection errors, request
+timeouts, and HTTP 408/429/5xx earn up to `max_retries` extra attempts
+(default 3) with exponential backoff from 500 ms and a little jitter, and a
+provider's `Retry-After` (seconds, capped at 30 s) wins over the backoff.
+Any other 4xx fails at once, and a stream that already delivered a delta is
+never replayed — a cut mid-answer stays a cut, never a duplicated answer.
+Each retry prints a `warning:` line to stderr; nothing above the HTTP client
+has to know retries happened. `max_retries = 0` turns retrying off.
 
 Built-in providers: `strata` (local default), `glm-coding-plan` (Z.AI,
 alias `zai-coding-plan`), `opencode-go` (routes OpenAI Completions and
@@ -125,6 +134,7 @@ provider = "strata"
 max_tokens = 4096
 context_window = 131072   # match `strata launch --context`
 bash_timeout_secs = 30
+max_retries = 3           # extra attempts on a transient transport failure
 tools = ["read", "bash", "edit", "write", "grep", "find", "ls"]
 
 [providers.strata]

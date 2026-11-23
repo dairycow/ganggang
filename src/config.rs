@@ -28,6 +28,9 @@ pub struct Config {
     pub replay_reasoning: bool,
     pub reasoning_effort: Option<String>,
     pub bash_timeout_secs: u64,
+    /// Extra attempts a transient LLM transport failure earns (0 turns
+    /// retrying off). The policy itself lives in `llm::retry`.
+    pub max_retries: u32,
     pub tools: Vec<String>,
     pub providers: BTreeMap<String, ProviderConfig>,
 }
@@ -51,6 +54,7 @@ impl Default for Config {
             replay_reasoning: ep.replay_reasoning,
             reasoning_effort: ep.reasoning_effort,
             bash_timeout_secs: 30,
+            max_retries: 3,
             tools: crate::agent::tools::NAMES
                 .iter()
                 .map(|s| s.to_string())
@@ -174,6 +178,7 @@ struct FileConfig {
     replay_reasoning: Option<bool>,
     reasoning_effort: Option<String>,
     bash_timeout_secs: Option<u64>,
+    max_retries: Option<u32>,
     tools: Option<Vec<String>>,
     #[serde(default)]
     providers: BTreeMap<String, providers::FileProviderConfig>,
@@ -324,6 +329,15 @@ pub fn merge(
                 &user.bash_timeout_secs,
                 &project.bash_timeout_secs,
                 defaults.bash_timeout_secs,
+            ),
+        )?,
+        max_retries: parse_env(
+            env_value(env, "GG_MAX_RETRIES"),
+            "GG_MAX_RETRIES",
+            pick_num(
+                &user.max_retries,
+                &project.max_retries,
+                defaults.max_retries,
             ),
         )?,
         tools: pick_list(&user.tools, &project.tools).unwrap_or(defaults.tools),
