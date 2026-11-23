@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{BoxFuture, Tool, ToolResult, display, parse_args};
+use super::{BoxFuture, Cancel, Tool, ToolResult, display, parse_args};
 
 const DEFAULT_MAX_RESULTS: usize = 50;
 
@@ -68,9 +68,12 @@ fn glob(pattern: &[char], name: &[char]) -> bool {
     p == pattern.len()
 }
 
-fn find(root: &Path, pattern: &str, max_results: usize) -> ToolResult {
+fn find(root: &Path, pattern: &str, max_results: usize, cancel: &Cancel) -> ToolResult {
     if pattern.is_empty() {
         return ToolResult::err("pattern must not be empty".into());
+    }
+    if cancel.is_cancelled() {
+        return ToolResult::err("search aborted by user before it started".into());
     }
     let pat: Vec<char> = pattern.chars().collect();
     // The ROOT is followed (metadata, not symlink_metadata): a
@@ -84,7 +87,26 @@ fn find(root: &Path, pattern: &str, max_results: usize) -> ToolResult {
     }
 
     let mut hits = Vec::new();
-    walk(root, &pat, &mut hits, max_results);
+    // `stopped` distinguishes a walk that ran out of tree from one the
+    // user stopped: a stopped walk's "(no matches)" would be a lie.
+    let stopped = walk(root, &pat, &mut hits, max_results, cancel);
+    if stopped.is_stopped() {
+        // Partial hits ride along (they are real work already done), but
+        // the result is an error so the model cannot read a truncated
+        // walk as the complete answer.
+        let mut out = String::new();
+        for hit in &hits {
+            out.push_str(hit);
+            out.push('\n');
+        }
+        out.push_str(if hits.is_empty() {
+            "search aborted by user before any match"
+        } else {
+            "search aborted by user — results are partial"
+        });
+        out.push('\n');
+        return ToolResult::err(out);
+    }
 
     let mut out = String::new();
     for hit in &hits {
@@ -104,15 +126,35 @@ fn find(root: &Path, pattern: &str, max_results: usize) -> ToolResult {
 
 /// Depth-first, children sorted, every entry considered (hidden
 /// included — finding a hidden file is a legitimate query). Symlinks
-/// are leaves: following them could cycle. Returns false at the cap so
-/// the recursion unwinds.
-fn walk(dir: &Path, pat: &[char], hits: &mut Vec<String>, cap: usize) -> bool {
+/// are leaves: following them could cycle. The walk stops at the cap or
+/// on the user's stop request, and reports which (unwinding the
+/// recursion either way).
+#[derive(PartialEq, Eq)]
+enum Walk {
+    /// Every reachable entry was considered, or the cap was reached.
+    Done,
+    /// The user stopped the run partway through the tree.
+    Stopped,
+}
+
+impl Walk {
+    fn is_stopped(&self) -> bool {
+        *self == Self::Stopped
+    }
+}
+
+fn walk(dir: &Path, pat: &[char], hits: &mut Vec<String>, cap: usize, cancel: &Cancel) -> Walk {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return true; // unreadable subtree: skipped, the search continues
+        return Walk::Done; // unreadable subtree: skipped, the search continues
     };
     let mut children: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
     children.sort();
     for child in children {
+        // One relaxed load per entry: enough resolution to stop a walk
+        // through a huge tree promptly without measuring the tree first.
+        if cancel.is_cancelled() {
+            return Walk::Stopped;
+        }
         let name: Vec<char> = child
             .file_name()
             .map_or(String::new(), |n| n.to_string_lossy().into_owned())
@@ -121,17 +163,17 @@ fn walk(dir: &Path, pat: &[char], hits: &mut Vec<String>, cap: usize) -> bool {
         if glob(pat, &name) {
             hits.push(display(&child));
             if hits.len() >= cap {
-                return false;
+                return Walk::Done;
             }
         }
         let is_dir = std::fs::symlink_metadata(&child)
             .map(|m| m.is_dir())
             .unwrap_or(false);
-        if is_dir && !walk(&child, pat, hits, cap) {
-            return false;
+        if is_dir && walk(&child, pat, hits, cap, cancel).is_stopped() {
+            return Walk::Stopped;
         }
     }
-    true
+    Walk::Done
 }
 
 impl Tool for FindTool {
@@ -158,7 +200,7 @@ max_results paths (default 50); the stop is noted in the output."
         })
     }
 
-    fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult> {
+    fn execute<'a>(&'a self, args: &'a Value, cancel: &'a Cancel) -> BoxFuture<'a, ToolResult> {
         Box::pin(async move {
             let args: FindArgs = match parse_args(args) {
                 Ok(a) => a,
@@ -168,6 +210,7 @@ max_results paths (default 50); the stop is noted in the output."
                 &self.resolve(args.path.as_deref()),
                 &args.pattern,
                 args.max_results.unwrap_or(DEFAULT_MAX_RESULTS).max(1),
+                cancel,
             )
         })
     }
@@ -175,10 +218,20 @@ max_results paths (default 50); the stop is noted in the output."
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::*;
 
-    async fn run(dir: &std::path::Path, args: Value) -> ToolResult {
-        FindTool::new(dir.to_path_buf()).execute(&args).await
+    async fn run(dir: &Path, args: Value) -> ToolResult {
+        run_with(dir, args, &Cancel::none()).await
+    }
+
+    /// The same call with the user's stop request in hand.
+    async fn run_with(dir: &Path, args: Value, cancel: &Cancel) -> ToolResult {
+        FindTool::new(dir.to_path_buf())
+            .execute(&args, cancel)
+            .await
     }
 
     fn tree(dir: &Path) {
@@ -314,5 +367,78 @@ mod tests {
         .await;
         assert!(r.is_error);
         assert!(r.output.contains("not a directory"));
+    }
+
+    /// Esc before the call: the walk never starts, and the answer says so
+    /// as an error rather than as a confident "(no matches)".
+    #[tokio::test]
+    async fn a_cancelled_search_reports_aborted_without_searching() {
+        let dir = tempfile::tempdir().unwrap();
+        tree(dir.path());
+        let flag = Arc::new(AtomicBool::new(true));
+
+        let r = run_with(
+            dir.path(),
+            serde_json::json!({"pattern": "*.rs"}),
+            &Cancel::new(flag),
+        )
+        .await;
+        assert!(r.is_error);
+        assert!(r.output.contains("aborted by user"), "{}", r.output);
+    }
+
+    /// Esc mid-walk: a stop request raised while the walk is in flight
+    /// ends it. The walk is synchronous, so the flag comes from a real
+    /// thread, and its delay is a quarter of this machine's measured cost
+    /// of the same walk — the stop lands inside the walk here as surely as
+    /// on a faster or slower box. The partial hit list is the proof it
+    /// really stopped early: the same call uncancelled finds them all.
+    #[tokio::test]
+    async fn a_cancelled_walk_stops_and_reports_partial_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let (dirs, per_dir) = (2000usize, 10usize);
+        for i in 0..dirs {
+            let sub = dir.path().join(format!("d{i}"));
+            std::fs::create_dir_all(&sub).unwrap();
+            for j in 0..per_dir {
+                std::fs::write(sub.join(format!("f{j}.rs")), "").unwrap();
+            }
+        }
+        let total = dirs * per_dir;
+        // A cap above the tree's size: an uncancelled walk finds all of them.
+        let args = || serde_json::json!({"pattern": "*.rs", "max_results": total + 10});
+
+        let measured = std::time::Instant::now();
+        let complete = run(dir.path(), args()).await;
+        let walk_time = measured.elapsed();
+        assert!(!complete.is_error);
+        assert_eq!(complete.output.matches('\n').count(), total);
+
+        let delay = walk_time / 4;
+        let flag = Arc::new(AtomicBool::new(false));
+        let setter = {
+            let flag = flag.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(delay);
+                flag.store(true, Ordering::Relaxed);
+            })
+        };
+
+        let r = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            run_with(dir.path(), args(), &Cancel::new(flag)),
+        )
+        .await
+        .expect("a cancelled walk must not run on to the end of the tree");
+        setter.join().unwrap();
+
+        assert!(r.is_error, "a stopped walk is an error: {}", r.output);
+        assert!(r.output.contains("aborted by user"), "{}", r.output);
+        assert!(r.output.contains("partial"), "{}", r.output);
+        let found = r.output.lines().filter(|l| l.ends_with(".rs")).count();
+        assert!(
+            found > 0 && found < total,
+            "the walk must stop partway: found {found} of {total}"
+        );
     }
 }

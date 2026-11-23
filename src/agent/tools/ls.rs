@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{BoxFuture, Tool, ToolResult, display, parse_args};
+use super::{BoxFuture, Cancel, Tool, ToolResult, display, parse_args};
 
 pub struct LsTool {
     cwd: PathBuf,
@@ -109,8 +109,14 @@ included. Entries that cannot be read are skipped with a noted line."
         })
     }
 
-    fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult> {
+    fn execute<'a>(&'a self, args: &'a Value, cancel: &'a Cancel) -> BoxFuture<'a, ToolResult> {
         Box::pin(async move {
+            // Bounded work: one directory, capped entries. The stop
+            // request is honored at the boundary; nothing in here is worth
+            // polling it inside.
+            if cancel.is_cancelled() {
+                return ToolResult::err("aborted by user".into());
+            }
             let args: LsArgs = match parse_args(args) {
                 Ok(a) => a,
                 Err(e) => return ToolResult::err(e),
@@ -125,7 +131,9 @@ mod tests {
     use super::*;
 
     async fn run(dir: &std::path::Path, args: Value) -> ToolResult {
-        LsTool::new(dir.to_path_buf()).execute(&args).await
+        LsTool::new(dir.to_path_buf())
+            .execute(&args, &Cancel::none())
+            .await
     }
 
     fn tree(dir: &Path) {

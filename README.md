@@ -30,9 +30,11 @@ curl -s 127.0.0.1:8080/health
 ## The pieces
 
 - **Agent loop** (§09 of the design): request → tool calls → results → repeat
-  until answered. Sequential tool execution, streaming responses, abort with
-  Esc. No turn cap — you are the runaway check; a truncated answer is the one
-  exception, continued at most 3 times. A cut stream keeps its partial answer.
+  until answered. Sequential tool execution, streaming responses. No turn cap
+  — you are the runaway check; a truncated answer is the one exception,
+  continued at most 3 times. A cut stream keeps its partial answer. Esc
+  aborts the run: a running `bash` command loses its whole process group, a
+  `grep`/`find` walk stops, and the next tool call never starts.
 - **Tools** (§10): `read`, `bash`, `edit`, `write` — plus `grep`, `find`,
   `ls` for search. Plain values in and out; every truncation is visible in
   the output; tool failures are values the model reacts to, never crashes.

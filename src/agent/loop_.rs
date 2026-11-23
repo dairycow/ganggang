@@ -18,7 +18,7 @@ use super::Agent;
 use super::compaction;
 use super::hooks::PreOutcome;
 use super::session::{self, Role};
-use super::tools::ToolResult;
+use super::tools::{Cancel, ToolResult};
 
 mod cut;
 mod record;
@@ -36,6 +36,10 @@ impl Agent {
         // by an earlier run (or an interface path that forgot to reset it)
         // would phantom-abort this one between tool calls.
         self.abort.store(false, Ordering::Relaxed);
+        // The tool-facing view of that same flag: one handle for every call
+        // this run dispatches, so a running tool can notice the stop request
+        // instead of only being skipped between calls.
+        let cancel = Cancel::new(self.abort.clone());
         // Set when a batch reports trigger-true/NothingToDo, so the
         // "past the line, no cut point" warning fires once, not per batch.
         let mut noop_compaction_warned = false;
@@ -277,7 +281,19 @@ impl Agent {
                         // Invalid provider arguments are never an execution:
                         // dispatch records the parse error and post hooks stay
                         // away, like both tool events (§22).
-                        (self.tools.dispatch(call).await, call.args_error.is_none())
+                        //
+                        // dispatch is also the gate for a stop request: the
+                        // flag is already in effect there, so a stopped run
+                        // never starts another tool.
+                        let result = self.tools.dispatch(call, &cancel).await;
+                        // A call the user stopped while it ran is not an
+                        // execution a `post_tool` hook should observe — the
+                        // same rule as a call that never executed. The tool
+                        // result shape cannot say "cancelled", so the loop
+                        // decides from the flag it owns.
+                        let executed =
+                            call.args_error.is_none() && !self.abort.load(Ordering::Relaxed);
+                        (result, executed)
                     }
                     PreOutcome::Deny { reason, warnings } => {
                         for warning in warnings {

@@ -42,7 +42,11 @@ impl Tool for Echo {
     fn schema(&self) -> Value {
         json!({"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]})
     }
-    fn execute<'a>(&'a self, args: &'a Value) -> tools::BoxFuture<'a, ToolResult> {
+    fn execute<'a>(
+        &'a self,
+        args: &'a Value,
+        _cancel: &'a tools::Cancel,
+    ) -> tools::BoxFuture<'a, ToolResult> {
         Box::pin(async move {
             match parse_args::<EchoArgs>(args) {
                 Ok(a) => ToolResult::ok(a.text),
@@ -66,7 +70,11 @@ impl Tool for SetFlagThenEcho {
     fn schema(&self) -> Value {
         json!({"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]})
     }
-    fn execute<'a>(&'a self, args: &'a Value) -> tools::BoxFuture<'a, ToolResult> {
+    fn execute<'a>(
+        &'a self,
+        args: &'a Value,
+        _cancel: &'a tools::Cancel,
+    ) -> tools::BoxFuture<'a, ToolResult> {
         let flag = self.0.clone();
         Box::pin(async move {
             flag.store(true, Ordering::Relaxed);
@@ -91,7 +99,11 @@ impl Tool for Touch {
     fn schema(&self) -> Value {
         json!({"type": "object", "properties": {}})
     }
-    fn execute<'a>(&'a self, _args: &'a Value) -> tools::BoxFuture<'a, ToolResult> {
+    fn execute<'a>(
+        &'a self,
+        _args: &'a Value,
+        _cancel: &'a tools::Cancel,
+    ) -> tools::BoxFuture<'a, ToolResult> {
         Box::pin(async move {
             std::fs::write(&self.0, "ran")
                 .map_err(|e| e.to_string())

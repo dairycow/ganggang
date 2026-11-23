@@ -4,6 +4,7 @@
 //! `length` finish, a cut stream, the continuation budget) are in
 //! [`continuation`], same contract, its own file, per the module budget.
 
+mod cancel;
 mod continuation;
 
 use std::sync::Arc;

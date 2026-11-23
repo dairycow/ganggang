@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{BoxFuture, Tool, ToolResult, parse_args};
+use super::{BoxFuture, Cancel, Tool, ToolResult, parse_args};
 
 pub struct WriteTool {
     cwd: PathBuf,
@@ -97,8 +97,14 @@ working directory unless force is true. Reports the byte count written."
         })
     }
 
-    fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult> {
+    fn execute<'a>(&'a self, args: &'a Value, cancel: &'a Cancel) -> BoxFuture<'a, ToolResult> {
         Box::pin(async move {
+            // Bounded work: one file written in one call. Refusing to
+            // start is the whole cancellation story; a part-written file
+            // would be worse than a refused write.
+            if cancel.is_cancelled() {
+                return ToolResult::err("aborted by user".into());
+            }
             let args: WriteArgs = match parse_args(args) {
                 Ok(a) => a,
                 Err(e) => return ToolResult::err(e),
@@ -118,7 +124,9 @@ mod tests {
     use super::*;
 
     async fn write_file(dir: &std::path::Path, args: Value) -> ToolResult {
-        WriteTool::new(dir.to_path_buf()).execute(&args).await
+        WriteTool::new(dir.to_path_buf())
+            .execute(&args, &Cancel::none())
+            .await
     }
 
     #[tokio::test]

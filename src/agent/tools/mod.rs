@@ -7,6 +7,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -51,6 +53,31 @@ impl ToolResult {
 /// dependency.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// The user's stop request, handed to every tool call.
+///
+/// An `Arc<AtomicBool>` wrapper over the loop's abort flag: a tool whose
+/// action can run a long time (a shell command, a directory walk) polls it
+/// and stops, so Esc is not dead until the next call boundary. The check is
+/// one relaxed atomic load, cheap enough to repeat inside a walk.
+#[derive(Clone)]
+pub struct Cancel(Arc<AtomicBool>);
+
+impl Cancel {
+    pub fn new(flag: Arc<AtomicBool>) -> Self {
+        Self(flag)
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    /// A flag nothing ever sets, for a caller that must supply a [`Cancel`]
+    /// but has no cancellation path of its own (the TUI's `!` shell).
+    pub fn none() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+}
+
 pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
 
@@ -59,7 +86,11 @@ pub trait Tool: Send + Sync {
     /// JSON Schema for the `parameters` object of the function declaration.
     fn schema(&self) -> Value;
 
-    fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult>;
+    /// Run one call. `cancel` is the user's stop request: a tool with an
+    /// unbounded or long-running action checks it and stops promptly,
+    /// answering with an error result that says it was aborted. It lives as
+    /// long as the call's future, so a tool may hold it across an await.
+    fn execute<'a>(&'a self, args: &'a Value, cancel: &'a Cancel) -> BoxFuture<'a, ToolResult>;
 }
 
 /// Ordered tool set. Order of registration is the order of advertisement.
@@ -103,17 +134,23 @@ impl Registry {
             .collect()
     }
 
-    /// Execute one call. Unparseable arguments (checked first), unknown
+    /// Execute one call. A stop request already in effect answers without
+    /// touching the tool; unparseable arguments (checked first), unknown
     /// names, and field-level argument problems are error *results* — the
     /// model can read them and retry.
-    pub async fn dispatch(&self, call: &ToolCall) -> ToolResult {
+    pub async fn dispatch(&self, call: &ToolCall, cancel: &Cancel) -> ToolResult {
         if let Some(detail) = &call.args_error {
             return ToolResult::err(format!("arguments were not valid JSON: {detail}"));
         }
         let Some(tool) = self.0.iter().find(|t| t.name() == call.name) else {
             return ToolResult::err(format!("unknown tool: {}", call.name));
         };
-        tool.execute(&call.args).await
+        if cancel.is_cancelled() {
+            // Before the tool, not inside it: an Esc must not pay for one
+            // more command's startup.
+            return ToolResult::err("aborted by user".into());
+        }
+        tool.execute(&call.args, cancel).await
     }
 }
 
@@ -187,7 +224,11 @@ mod tests {
             })
         }
 
-        fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult> {
+        fn execute<'a>(
+            &'a self,
+            args: &'a Value,
+            _cancel: &'a Cancel,
+        ) -> BoxFuture<'a, ToolResult> {
             Box::pin(async move {
                 match parse_args::<EchoArgs>(args) {
                     Ok(a) => ToolResult::ok(a.text),
@@ -212,10 +253,28 @@ mod tests {
         registry.register(Box::new(Echo));
 
         let result = registry
-            .dispatch(&call("echo", serde_json::json!({"text": "hello"})))
+            .dispatch(
+                &call("echo", serde_json::json!({"text": "hello"})),
+                &Cancel::none(),
+            )
             .await;
         assert!(!result.is_error);
         assert_eq!(result.output, "hello");
+    }
+
+    /// A stopped run never starts another tool: the check lives in
+    /// dispatch, not in each tool remembering to make it.
+    #[tokio::test]
+    async fn dispatch_skips_the_tool_once_the_user_stopped_the_run() {
+        let mut registry = Registry::new();
+        registry.register(Box::new(Echo));
+        let cancel = Cancel::new(Arc::new(AtomicBool::new(true)));
+
+        let result = registry
+            .dispatch(&call("echo", serde_json::json!({"text": "x"})), &cancel)
+            .await;
+        assert!(result.is_error);
+        assert_eq!(result.output, "aborted by user");
     }
 
     #[test]
@@ -231,7 +290,10 @@ mod tests {
         registry.register(Box::new(Echo));
 
         let result = registry
-            .dispatch(&call("echo", serde_json::json!({"nope": 1})))
+            .dispatch(
+                &call("echo", serde_json::json!({"nope": 1})),
+                &Cancel::none(),
+            )
             .await;
         assert!(result.is_error);
         assert!(result.output.contains("invalid arguments"));
@@ -242,7 +304,7 @@ mod tests {
         let registry = Registry::new();
 
         let result = registry
-            .dispatch(&call("ghost", serde_json::json!({})))
+            .dispatch(&call("ghost", serde_json::json!({})), &Cancel::none())
             .await;
         assert!(result.is_error);
         assert_eq!(result.output, "unknown tool: ghost");
@@ -254,12 +316,15 @@ mod tests {
         registry.register(Box::new(Echo));
 
         let result = registry
-            .dispatch(&ToolCall {
-                id: "call_x".into(),
-                name: "echo".into(),
-                args: serde_json::json!({}),
-                args_error: Some("expected value at line 1 column 1: `{not json`".into()),
-            })
+            .dispatch(
+                &ToolCall {
+                    id: "call_x".into(),
+                    name: "echo".into(),
+                    args: serde_json::json!({}),
+                    args_error: Some("expected value at line 1 column 1: `{not json`".into()),
+                },
+                &Cancel::none(),
+            )
             .await;
         assert!(result.is_error);
         assert!(result.output.starts_with("arguments were not valid JSON"));

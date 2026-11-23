@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{BoxFuture, Tool, ToolResult, parse_args};
+use super::{BoxFuture, Cancel, Tool, ToolResult, parse_args};
 
 /// Files above this size are refused outright: editing a truncated view and
 /// writing it back would silently destroy the tail.
@@ -134,8 +134,14 @@ if any edit misses or is ambiguous, nothing is written."
         })
     }
 
-    fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult> {
+    fn execute<'a>(&'a self, args: &'a Value, cancel: &'a Cancel) -> BoxFuture<'a, ToolResult> {
         Box::pin(async move {
+            // Bounded work: one file, matched and applied in memory. The
+            // stop request is honored at the boundary — starting it is the
+            // decision, and a half-applied edit is worse than a refused one.
+            if cancel.is_cancelled() {
+                return ToolResult::err("aborted by user".into());
+            }
             let args: EditArgs = match parse_args(args) {
                 Ok(a) => a,
                 Err(e) => return ToolResult::err(e),
@@ -150,7 +156,9 @@ mod tests {
     use super::*;
 
     async fn edit_file(dir: &std::path::Path, args: Value) -> ToolResult {
-        EditTool::new(dir.to_path_buf()).execute(&args).await
+        EditTool::new(dir.to_path_buf())
+            .execute(&args, &Cancel::none())
+            .await
     }
 
     fn written(path: &std::path::Path) -> String {

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{BoxFuture, Tool, ToolResult, parse_args};
+use super::{BoxFuture, Cancel, Tool, ToolResult, parse_args};
 
 const MAX_LINES: usize = 2000;
 const MAX_BYTES: usize = 50 * 1024;
@@ -129,8 +129,14 @@ Use offset (1-based line) and limit to page through larger files."
         })
     }
 
-    fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult> {
+    fn execute<'a>(&'a self, args: &'a Value, cancel: &'a Cancel) -> BoxFuture<'a, ToolResult> {
         Box::pin(async move {
+            // Bounded work: one file, at most `limit` lines. The stop
+            // request is honored at the boundary; nothing in here is worth
+            // polling it inside.
+            if cancel.is_cancelled() {
+                return ToolResult::err("aborted by user".into());
+            }
             let args: ReadArgs = match parse_args(args) {
                 Ok(a) => a,
                 Err(e) => return ToolResult::err(e),
@@ -145,7 +151,9 @@ mod tests {
     use super::*;
 
     async fn run(dir: &std::path::Path, args: Value) -> ToolResult {
-        ReadTool::new(dir.to_path_buf()).execute(&args).await
+        ReadTool::new(dir.to_path_buf())
+            .execute(&args, &Cancel::none())
+            .await
     }
 
     #[tokio::test]

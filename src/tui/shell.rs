@@ -34,11 +34,21 @@ pub(super) fn spawn_shell(
 }
 
 pub(super) async fn run_shell(command: &str, cwd: &std::path::Path) -> (String, Option<i32>) {
+    use crate::agent::tools::Cancel;
     use crate::agent::tools::bash::BashOutcome;
 
+    // A flag nothing ever sets: a `!` line is typed by the user at their own
+    // keyboard, it is not part of a run, and Esc belongs to the run — reusing
+    // the run's abort flag here would also inherit its latch (the loop
+    // clears it at run entry, the shell path does not), so a stale Esc would
+    // silently kill the next `!` command. Bounded by the timeout instead.
+    let cancel = Cancel::none();
     let timeout = std::time::Duration::from_secs(SHELL_TIMEOUT_SECS);
-    match crate::agent::tools::bash::run_bash(command, cwd, timeout, SHELL_OUTPUT_CAP).await {
+    match crate::agent::tools::bash::run_bash(command, cwd, timeout, SHELL_OUTPUT_CAP, &cancel)
+        .await
+    {
         BashOutcome::Done { output, status } => (output, status.code()),
+        BashOutcome::Cancelled => ("command aborted by user and killed".to_string(), None),
         BashOutcome::TimedOut => (
             format!("command timed out after {SHELL_TIMEOUT_SECS}s and was killed"),
             None,
