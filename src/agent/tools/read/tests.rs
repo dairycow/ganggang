@@ -103,3 +103,41 @@ async fn an_endless_file_returns_the_cap_quickly_instead_of_hanging() {
     assert!(!r.is_error);
     assert!(r.output.contains("truncated"));
 }
+
+#[tokio::test]
+async fn eof_line_without_trailing_newline_is_not_double_counted() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut body: String = (1..=2000).map(|i| format!("l{i}\n")).collect();
+    body.push_str("l2001");
+    std::fs::write(dir.path().join("no_nl.txt"), body).unwrap();
+
+    let r = run(dir.path(), serde_json::json!({"path": "no_nl.txt"})).await;
+    assert!(!r.is_error);
+    assert!(
+        r.output.contains("showing lines 1-2000 of 2001"),
+        "{}",
+        r.output.lines().last().unwrap_or("")
+    );
+}
+
+#[tokio::test]
+async fn corrupt_utf8_at_eof_returns_error() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("bad.txt"), b"ok\n\xc3").unwrap();
+
+    let r = run(dir.path(), serde_json::json!({"path": "bad.txt"})).await;
+    assert!(r.is_error);
+    assert!(r.output.contains("not valid UTF-8"));
+}
+
+#[tokio::test]
+async fn endless_file_with_offset_stops_bounded_without_loop_hint() {
+    let r = run(
+        std::path::Path::new("/dev"),
+        serde_json::json!({"path": "zero", "offset": 10}),
+    )
+    .await;
+    assert!(r.is_error);
+    assert!(r.output.contains("scan cap"));
+    assert!(!r.output.contains("offset=10"));
+}

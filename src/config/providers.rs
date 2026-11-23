@@ -93,8 +93,12 @@ impl ProviderConfig {
                 .and_then(|s| s.replay_reasoning)
                 .unwrap_or(self.replay_reasoning),
             reasoning_effort: spec
-                .and_then(|s| s.reasoning_effort.clone())
-                .or_else(|| self.reasoning_effort.clone()),
+                .and_then(|s| s.reasoning_effort.as_deref())
+                .map(|s| {
+                    let t = s.trim();
+                    (!t.is_empty()).then(|| t.to_string())
+                })
+                .unwrap_or_else(|| self.reasoning_effort.clone()),
             reasoning_budget_tokens: spec
                 .and_then(|s| s.reasoning_budget_tokens)
                 .map(|v| (v > 0).then_some(v))

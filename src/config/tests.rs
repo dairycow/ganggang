@@ -376,4 +376,19 @@ fn strata_defaults_and_reasoning_controls_override_cleanly() {
     switched.apply_reasoning_cli(Some(""), Some(0));
     assert_eq!(switched.reasoning_effort, None);
     assert_eq!(switched.reasoning_budget_tokens, None);
+
+    let per_model_clear = merge(
+        Config::default(),
+        Some(
+            r#"
+[providers.strata]
+models = [{ id = "qwen3.8-flash-next-iq3_s", reasoning_effort = "", reasoning_budget_tokens = 0 }]
+"#,
+        ),
+        None,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(per_model_clear.reasoning_effort, None);
+    assert_eq!(per_model_clear.reasoning_budget_tokens, None);
 }

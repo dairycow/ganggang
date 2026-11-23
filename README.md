@@ -219,6 +219,7 @@ watch sessions sort below real conversations in `-c`/`/resume`.
 ```sh
 cargo fmt --all && cargo test && cargo clippy --all-targets -- -D warnings
 scripts/smoke.sh      # live acceptance against a running Strata (print mode)
+scripts/eval.sh       # local-compute eval suite (tool discipline, tokens, latency)
 scripts/hooks-live.sh # hooks: deny path, observe paths, --no-hooks, project hooks
 scripts/tui-live.sh   # the TUI's terminal hand-off through tmux: Ctrl+G, !, tty state
 scripts/watch-live.sh # --watch: rebuild, re-exec, session continuity, draft carry

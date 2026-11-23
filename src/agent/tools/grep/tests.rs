@@ -163,3 +163,49 @@ async fn a_single_file_path_searches_that_file() {
     assert!(!r.is_error);
     assert_eq!(r.output, "sub/mid.txt:1: needle three\n");
 }
+
+#[tokio::test]
+async fn context_preserves_match_markers_for_adjacent_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.txt"), "top\nmatch1\nmatch2\nbottom\n").unwrap();
+
+    let r = run(
+        dir.path(),
+        serde_json::json!({"pattern": "match", "context": 1}),
+    )
+    .await;
+    assert!(!r.is_error, "{}", r.output);
+    assert_eq!(
+        r.output,
+        "f.txt-1- top\nf.txt:2: match1\nf.txt:3: match2\nf.txt-4- bottom\n"
+    );
+
+    std::fs::write(dir.path().join("g.txt"), "match1\na\nb\nc\nmatch2\n").unwrap();
+    let r2 = run(
+        dir.path(),
+        serde_json::json!({"pattern": "match", "path": "g.txt", "context": 1}),
+    )
+    .await;
+    assert!(!r2.is_error, "{}", r2.output);
+    assert_eq!(
+        r2.output,
+        "g.txt:1: match1\ng.txt-2- a\n--\ng.txt-4- c\ng.txt:5: match2\n"
+    );
+}
+
+#[tokio::test]
+async fn glob_with_directory_prefix_matches_when_path_is_omitted() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::create_dir_all(dir.path().join("other")).unwrap();
+    std::fs::write(dir.path().join("src/a.rs"), "needle\n").unwrap();
+    std::fs::write(dir.path().join("other/b.rs"), "needle\n").unwrap();
+
+    let r = run(
+        dir.path(),
+        serde_json::json!({"pattern": "needle", "glob": "src/**/*.rs"}),
+    )
+    .await;
+    assert!(!r.is_error, "{}", r.output);
+    assert_eq!(r.output, "src/a.rs:1: needle\n");
+}

@@ -39,6 +39,43 @@ struct ReadArgs {
     limit: Option<usize>,
 }
 
+struct ReadOut {
+    out: String,
+    emitted_lines: usize,
+    max_emit_lines: usize,
+    byte_capped: bool,
+    line_capped: bool,
+}
+
+impl ReadOut {
+    fn push_line(&mut self, line_no: usize, text: &str) -> bool {
+        if self.emitted_lines >= self.max_emit_lines {
+            self.line_capped = true;
+            return false;
+        }
+        let formatted = format!("{line_no}| {text}");
+        let needed = formatted.len() + usize::from(!self.out.is_empty());
+        if self.out.len() + needed > MAX_BYTES {
+            if self.out.is_empty() {
+                let prefix = format!("{line_no}| ");
+                let room = MAX_BYTES.saturating_sub(prefix.len());
+                let cut = floor_char_boundary(text, room);
+                self.out.push_str(&prefix);
+                self.out.push_str(&text[..cut]);
+                self.emitted_lines = 1;
+            }
+            self.byte_capped = true;
+            return false;
+        }
+        if !self.out.is_empty() {
+            self.out.push('\n');
+        }
+        self.out.push_str(&formatted);
+        self.emitted_lines += 1;
+        true
+    }
+}
+
 fn read(path: &Path, offset: Option<usize>, limit: Option<usize>) -> ToolResult {
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
@@ -51,14 +88,18 @@ fn read(path: &Path, offset: Option<usize>, limit: Option<usize>) -> ToolResult 
     let mut reader = BufReader::new(file);
     let mut chunk = [0u8; 8192];
     let mut pending: Vec<u8> = Vec::new();
+    let mut skipped_partial = false;
     let mut scanned_bytes = 0usize;
     let mut line_no = 0usize;
-    let mut out = String::new();
-    let mut emitted_lines = 0usize;
-    let mut byte_capped = false;
-    let mut line_capped = false;
     let mut scan_capped = false;
     let mut eof = false;
+    let mut acc = ReadOut {
+        out: String::new(),
+        emitted_lines: 0,
+        max_emit_lines,
+        byte_capped: false,
+        line_capped: false,
+    };
 
     'outer: loop {
         let n = match reader.read(&mut chunk) {
@@ -80,89 +121,62 @@ fn read(path: &Path, offset: Option<usize>, limit: Option<usize>) -> ToolResult 
             if raw.last() == Some(&b'\r') {
                 raw.pop();
             }
-            let text = match std::str::from_utf8(&raw) {
-                Ok(s) => s,
-                Err(_) => {
-                    return ToolResult::err(format!(
-                        "cannot read {}: not valid UTF-8",
-                        path.display()
-                    ));
-                }
-            };
+            let was_partial = std::mem::take(&mut skipped_partial);
             line_no += 1;
             if line_no < start_line {
                 continue;
             }
-            if emitted_lines >= max_emit_lines {
-                line_capped = true;
-                break 'outer;
-            }
-            let formatted = format!("{line_no}| {text}");
-            let needed = formatted.len() + usize::from(!out.is_empty());
-            if out.len() + needed > MAX_BYTES {
-                if out.is_empty() {
-                    let prefix = format!("{line_no}| ");
-                    let room = MAX_BYTES.saturating_sub(prefix.len());
-                    let cut = floor_char_boundary(text, room);
-                    out.push_str(&prefix);
-                    out.push_str(&text[..cut]);
-                    emitted_lines = 1;
-                }
-                byte_capped = true;
-                break 'outer;
-            }
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(&formatted);
-            emitted_lines += 1;
-        }
-
-        if eof {
-            if !pending.is_empty() {
-                let text = match std::str::from_utf8(&pending) {
-                    Ok(s) => s.to_string(),
-                    Err(e) if e.error_len().is_none() => {
-                        String::from_utf8_lossy(&pending[..e.valid_up_to()]).into_owned()
-                    }
+            let text = if was_partial {
+                ""
+            } else {
+                match std::str::from_utf8(&raw) {
+                    Ok(s) => s,
                     Err(_) => {
                         return ToolResult::err(format!(
                             "cannot read {}: not valid UTF-8",
                             path.display()
                         ));
                     }
+                }
+            };
+            if !acc.push_line(line_no, text) {
+                break 'outer;
+            }
+        }
+
+        if eof {
+            let mut tail = std::mem::take(&mut pending);
+            if tail.last() == Some(&b'\r') {
+                tail.pop();
+            }
+            if !tail.is_empty() || skipped_partial {
+                let text = if skipped_partial {
+                    ""
+                } else {
+                    match std::str::from_utf8(&tail) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            return ToolResult::err(format!(
+                                "cannot read {}: not valid UTF-8",
+                                path.display()
+                            ));
+                        }
+                    }
                 };
                 line_no += 1;
                 if line_no >= start_line {
-                    if emitted_lines >= max_emit_lines {
-                        line_capped = true;
-                    } else {
-                        let formatted = format!("{line_no}| {text}");
-                        let needed = formatted.len() + usize::from(!out.is_empty());
-                        if out.len() + needed > MAX_BYTES {
-                            if out.is_empty() {
-                                let prefix = format!("{line_no}| ");
-                                let room = MAX_BYTES.saturating_sub(prefix.len());
-                                let cut = floor_char_boundary(&text, room);
-                                out.push_str(&prefix);
-                                out.push_str(&text[..cut]);
-                                emitted_lines = 1;
-                            }
-                            byte_capped = true;
-                        } else {
-                            if !out.is_empty() {
-                                out.push('\n');
-                            }
-                            out.push_str(&formatted);
-                            emitted_lines += 1;
-                        }
-                    }
+                    acc.push_line(line_no, text);
                 }
             }
             break;
         }
 
-        if line_no + 1 >= start_line && pending.len() > MAX_BYTES {
+        if line_no + 1 < start_line {
+            if pending.len() > MAX_BYTES {
+                pending.clear();
+                skipped_partial = true;
+            }
+        } else if pending.len() > MAX_BYTES {
             let text = match std::str::from_utf8(&pending) {
                 Ok(s) => s.to_string(),
                 Err(e) if e.error_len().is_none() => {
@@ -175,16 +189,8 @@ fn read(path: &Path, offset: Option<usize>, limit: Option<usize>) -> ToolResult 
                     ));
                 }
             };
-            if out.is_empty() {
-                let cur_line = line_no + 1;
-                let prefix = format!("{cur_line}| ");
-                let room = MAX_BYTES.saturating_sub(prefix.len());
-                let cut = floor_char_boundary(&text, room);
-                out.push_str(&prefix);
-                out.push_str(&text[..cut]);
-                emitted_lines = 1;
-            }
-            byte_capped = true;
+            acc.push_line(line_no + 1, &text);
+            acc.byte_capped = true;
             break;
         }
 
@@ -194,20 +200,29 @@ fn read(path: &Path, offset: Option<usize>, limit: Option<usize>) -> ToolResult 
         }
     }
 
-    if emitted_lines == 0 && !byte_capped && !line_capped && !scan_capped && line_no > 0 {
+    if scan_capped && acc.emitted_lines == 0 {
+        return ToolResult::err(format!(
+            "scan cap {MAX_SCAN_BYTES} bytes reached before line {start_line}"
+        ));
+    }
+
+    if acc.emitted_lines == 0 && !acc.byte_capped && !acc.line_capped && !scan_capped && line_no > 0
+    {
         return ToolResult::ok(format!(
             "[offset {start_line} is past end of file ({line_no} lines)]"
         ));
     }
 
-    let hit_cap = byte_capped
-        || (line_capped && (limit.is_none() || max_emit_lines == MAX_LINES))
+    let hit_cap = acc.byte_capped
+        || (acc.line_capped && (limit.is_none() || max_emit_lines == MAX_LINES))
         || scan_capped;
     if hit_cap {
-        let last_line = start_line + emitted_lines.saturating_sub(1);
+        let last_line = start_line + acc.emitted_lines.saturating_sub(1);
         let mut notes = Vec::new();
-        if line_capped {
-            let total_hint = if file_len > 0 && file_len <= 1024 * 1024 {
+        if acc.line_capped {
+            let total_hint = if eof {
+                format!(" of {line_no}")
+            } else if file_len > 0 && file_len <= 1024 * 1024 {
                 count_remaining_lines(&pending, &mut reader, line_no)
                     .map(|t| format!(" of {t}"))
                     .unwrap_or_default()
@@ -218,17 +233,17 @@ fn read(path: &Path, offset: Option<usize>, limit: Option<usize>) -> ToolResult 
                 "showing lines {start_line}-{last_line}{total_hint}"
             ));
         }
-        if byte_capped {
+        if acc.byte_capped {
             notes.push(format!("byte cap {MAX_BYTES} reached at line {last_line}"));
         }
         if scan_capped {
             notes.push(format!("scan cap {MAX_SCAN_BYTES} bytes reached"));
         }
         notes.push(format!("pass offset={} to continue", last_line + 1));
-        out = format!("{out}\n[truncated: {}]", notes.join("; "));
+        acc.out = format!("{}\n[truncated: {}]", acc.out, notes.join("; "));
     }
 
-    ToolResult::ok(out)
+    ToolResult::ok(acc.out)
 }
 
 fn floor_char_boundary(s: &str, max_bytes: usize) -> usize {

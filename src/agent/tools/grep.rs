@@ -66,7 +66,7 @@ impl<'a> Search<'a> {
             return true;
         };
         if *match_rel {
-            let rel = display_path.strip_prefix(self.cwd).unwrap_or(display_path);
+            let rel = display_relative(self.cwd, display_path);
             matcher.is_match(rel)
         } else {
             display_path
@@ -96,35 +96,55 @@ impl<'a> Search<'a> {
         };
 
         let all_lines: Vec<&str> = content.lines().collect();
-        let loc = display_relative(self.cwd, display_path);
-        let mut last_printed_idx: Option<usize> = None;
-
+        let remaining_cap = self.cap.saturating_sub(self.match_count);
+        let mut match_indices = Vec::new();
         for (i, line) in all_lines.iter().enumerate() {
-            if !self.regex.is_match(line) {
-                continue;
+            if self.regex.is_match(line) {
+                match_indices.push(i);
+                if match_indices.len() >= remaining_cap {
+                    break;
+                }
             }
-            if self.context > 0 {
-                let start = i.saturating_sub(self.context);
-                let end = (i + self.context).min(all_lines.len().saturating_sub(1));
-                if let Some(prev) = last_printed_idx
-                    && start > prev + 1
-                {
-                    self.lines_out.push("--".to_string());
-                }
-                let emit_from = last_printed_idx.map_or(start, |p| start.max(p + 1));
-                for (j, ctx_line) in all_lines.iter().enumerate().take(end + 1).skip(emit_from) {
-                    let sep = if j == i { ':' } else { '-' };
-                    self.lines_out
-                        .push(format!("{loc}{sep}{}{sep} {}", j + 1, cap_line(ctx_line)));
-                }
-                last_printed_idx = Some(end);
-            } else {
+        }
+        if match_indices.is_empty() {
+            return;
+        }
+        self.match_count += match_indices.len();
+
+        let loc = display_relative(self.cwd, display_path);
+        if self.context == 0 {
+            for &i in &match_indices {
                 self.lines_out
-                    .push(format!("{loc}:{}: {}", i + 1, cap_line(line)));
+                    .push(format!("{loc}:{}: {}", i + 1, cap_line(all_lines[i])));
             }
-            self.match_count += 1;
-            if self.capped() {
-                return;
+            return;
+        }
+
+        let last_idx = all_lines.len().saturating_sub(1);
+        let mut intervals: Vec<(usize, usize)> = Vec::new();
+        for &i in &match_indices {
+            let start = i.saturating_sub(self.context);
+            let end = (i + self.context).min(last_idx);
+            if let Some(prev) = intervals.last_mut()
+                && start <= prev.1 + 1
+            {
+                prev.1 = prev.1.max(end);
+            } else {
+                intervals.push((start, end));
+            }
+        }
+        for (idx, (start, end)) in intervals.into_iter().enumerate() {
+            if idx > 0 {
+                self.lines_out.push("--".to_string());
+            }
+            for (j, ctx_line) in all_lines.iter().enumerate().take(end + 1).skip(start) {
+                let sep = if match_indices.binary_search(&j).is_ok() {
+                    ':'
+                } else {
+                    '-'
+                };
+                self.lines_out
+                    .push(format!("{loc}{sep}{}{sep} {}", j + 1, cap_line(ctx_line)));
             }
         }
     }
