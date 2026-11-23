@@ -30,10 +30,10 @@ const BUILTINS: &[&str] = &[
 /// common case, not a warning. Every other problem is reported as a
 /// warning string, never an error — templates are conveniences.
 pub fn discover() -> (Vec<PromptTemplate>, Vec<String>) {
-    let Some(home) = std::env::var("HOME").ok() else {
+    let Some(home) = crate::home::dir() else {
         return (Vec::new(), Vec::new());
     };
-    load_from(&Path::new(&home).join(".gg").join("prompts"))
+    load_from(&home.join(".gg").join("prompts"))
 }
 
 /// The testable core of [`discover`]: read every `*.md` under `dir`

@@ -48,6 +48,7 @@ impl SessionHeader {
 /// then outrank real sessions in `-c`'s newest-first listing.
 pub struct SessionStore {
     path: PathBuf,
+    id: String,
     header_line: String,
     file: Option<std::fs::File>,
 }
@@ -67,6 +68,7 @@ impl SessionStore {
         let header_line = serde_json::to_string(&header).context("serializing session header")?;
         Ok(Self {
             path,
+            id: header.id,
             header_line,
             file: None,
         })
@@ -80,7 +82,7 @@ impl SessionStore {
     /// append would glue two entries onto one line.
     pub fn open_existing(path: &Path) -> anyhow::Result<Self> {
         repair_missing_trailing_newline(path)?;
-        let (_, _, warnings) = load(path)?;
+        let (header, _, warnings) = load(path)?;
         if !warnings.is_empty() {
             anyhow::bail!(
                 "session {} has corrupt lines; not appending to it",
@@ -93,6 +95,7 @@ impl SessionStore {
             .with_context(|| format!("opening {}", path.display()))?;
         Ok(Self {
             path: path.to_path_buf(),
+            id: header.id,
             header_line: String::new(),
             file: Some(file),
         })
@@ -100,6 +103,11 @@ impl SessionStore {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The session header's uuid — the hook payload's `session_id` (§22).
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
     /// The header line as JSON — the record JSON mode echoes before the
@@ -245,9 +253,7 @@ pub fn sessions_dir(cwd: &Path) -> Option<PathBuf> {
 /// `~/.gg/sessions` — the tree root only; [`SessionStore::create_under`]
 /// adds the per-cwd slug itself.
 pub fn sessions_root() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(|home| Path::new(&home).join(".gg").join("sessions"))
+    crate::home::dir().map(|home| home.join(".gg").join("sessions"))
 }
 
 /// Filesystem-safe encoding of the cwd: `/` → `-`.

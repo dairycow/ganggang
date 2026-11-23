@@ -9,16 +9,11 @@
 pub mod providers;
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use anyhow::Context;
 
 use crate::llm::{ApiKind, AuthStyle};
 pub use providers::{Endpoint, ProviderConfig};
-
-/// Tool names a config allowlist may reference. Tracks the default
-/// registry (`agent::tools`); grows when tools are added.
-const KNOWN_TOOLS: &[&str] = &["read", "bash", "edit", "write", "grep", "find", "ls"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -56,7 +51,10 @@ impl Default for Config {
             replay_reasoning: ep.replay_reasoning,
             reasoning_effort: ep.reasoning_effort,
             bash_timeout_secs: 30,
-            tools: KNOWN_TOOLS.iter().map(|s| s.to_string()).collect(),
+            tools: crate::agent::tools::NAMES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             providers,
         }
     }
@@ -192,9 +190,7 @@ pub fn load() -> anyhow::Result<Config> {
 
 /// `~/.gg/config.toml` — absent when HOME is unset (no home, no user file).
 fn user_path() -> Option<std::path::PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(|home| Path::new(&home).join(".gg").join("config.toml"))
+    crate::home::dir().map(|home| home.join(".gg").join("config.toml"))
 }
 
 /// None = no file. A file that exists but cannot be read (permissions,
@@ -384,7 +380,7 @@ fn validate(cfg: &Config) -> anyhow::Result<()> {
         if tool.trim().is_empty() {
             anyhow::bail!("tools list contains an empty name");
         }
-        if !KNOWN_TOOLS.contains(&tool.as_str()) {
+        if !crate::agent::tools::NAMES.contains(&tool.as_str()) {
             anyhow::bail!("unknown tool in tools allowlist: {tool}");
         }
     }

@@ -41,6 +41,10 @@ curl -s 127.0.0.1:8080/health
   task matches. `/skill:<name>` forces one.
 - **Prompt templates**: `~/.gg/prompts/*.md` (frontmatter `name`/
   `description`) become `/name` editor drafts — `/prompts` lists them.
+- **Hooks** (§22): `~/.gg/hooks.toml` runs one-shot `pre_tool` /
+  `post_tool` / `run_end` shell commands with JSON on stdin; a `pre_tool`
+  hook may deny. Failures warn, never abort. `/hooks` lists; `--no-hooks`
+  skips.
 - **`@file` mentions**: `@src/main.rs` in the editor attaches the file's
   content to your message (text files, visible 50 KB cap); `user@host`
   stays literal.
@@ -91,7 +95,7 @@ left alone and an edited draft is kept where the warning says. An editor
 that returns at once (a GUI editor without `--wait`) leaves a short note
 instead of failing silently.
 
-`/new /resume /compact /skills /session /context /prompts /model
+`/new /resume /compact /skills /session /context /prompts /hooks /model
 /skill:<name> /quit` · `!cmd` runs shell with output entering the model's
 context (`!!` doesn't).
 
@@ -132,6 +136,46 @@ model = "deepseek-flash"
 # api_key = "…"  # or export DEEPSEEK_API_KEY
 ```
 
+Hooks are outside this precedence: they live in `~/.gg/hooks.toml` (user
+level only) and are never read from a project.
+
+## Hooks (§22)
+
+One-shot shell commands at three loop points: `pre_tool` (can deny),
+`post_tool` (observe), `run_end` (observe, clean finishes only). Each hook
+gets one JSON object on stdin; a `pre_tool` hook may answer
+
+```json
+{"decision":"deny","reason":"blocked by the user guard hook"}
+```
+
+A denial is a normal tool error the model reads and reacts to. A hook that
+crashes, times out, or prints garbage is a warning and the run continues
+(fail-open). Hooks share the bash tool's timeout and process-group kill.
+
+```toml
+# ~/.gg/hooks.toml
+[[hooks]]
+event = "pre_tool"              # pre_tool | post_tool | run_end
+tools = ["bash"]                # omit or ["*"] for all; exact names
+command = "~/.gg/hooks/guard-bash.sh"
+timeout_secs = 5                # default 10
+
+[[hooks]]
+event = "post_tool"
+tools = ["edit", "write"]
+command = "./scripts/format.sh"
+
+[[hooks]]
+event = "run_end"
+command = "notify-send gg 'run finished'"
+```
+
+There is no plugin runtime, no argument rewriting, and no approval prompt.
+A project `.gg/hooks.toml` is ignored with a startup warning — a cloned
+repository cannot add executable behavior. `--no-hooks` skips loading;
+`/hooks` lists what loaded. The full protocol is in design §22.
+
 ## Security stance
 
 > No permission gating: like pi, ganggang does not ask before tool calls.
@@ -140,7 +184,9 @@ model = "deepseek-flash"
 
 The `bash` tool runs with your user permissions, in the session's working
 directory. There is no sandbox and no approval prompt — by design. Point it
-at a container or VM when the work is untrusted.
+at a container or VM when the work is untrusted. Hooks (§22) run with the
+same permissions and are equally unsandboxed; a `pre_tool` deny is workflow
+policy, not a security boundary.
 
 ## Watch mode (development)
 
@@ -169,6 +215,7 @@ watch sessions sort below real conversations in `-c`/`/resume`.
 ```sh
 cargo fmt --all && cargo test && cargo clippy --all-targets -- -D warnings
 scripts/smoke.sh      # live acceptance against a running Strata (print mode)
+scripts/hooks-live.sh # hooks: deny path, observe paths, --no-hooks, project hooks
 scripts/tui-live.sh   # the TUI's terminal hand-off through tmux: Ctrl+G, !, tty state
 scripts/watch-live.sh # --watch: rebuild, re-exec, session continuity, draft carry
 ```

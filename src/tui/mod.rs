@@ -75,6 +75,8 @@ pub struct Discovered {
     pub skills: Arc<Vec<Skill>>,
     /// Prompt templates (M7.4) — `/<name>` inserts the body.
     pub prompts: Arc<Vec<crate::prompts::PromptTemplate>>,
+    /// User-level hooks (§22) — `/hooks` lists them.
+    pub hooks: Arc<crate::agent::hooks::Hooks>,
 }
 
 /// Why the TUI loop ended. `Restart` carries the exec plan for a `--watch`
@@ -106,7 +108,11 @@ pub async fn run(
     watch_cfg: Option<watch::Config>,
     draft: Option<String>,
 ) -> anyhow::Result<Exit> {
-    let Discovered { skills, prompts } = discovered;
+    let Discovered {
+        skills,
+        prompts,
+        hooks,
+    } = discovered;
     let _guard = term::Guard::new()?;
     let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
     let mut terminal =
@@ -311,6 +317,7 @@ pub async fn run(
                                         ui_tx: &ui_tx,
                                         skills: &skills,
                                         prompts: &prompts,
+                                        hooks: &hooks,
                                         cwd: &cwd,
                                         abort: &abort,
                                         config: &config,

@@ -137,6 +137,11 @@ pub(crate) fn display(path: &std::path::Path) -> String {
     out.display().to_string()
 }
 
+/// Names of the default registry's tools, in advertisement order. The
+/// config allowlist and hook matchers validate against this canonical
+/// list; registration and this constant move together (pinned by test).
+pub(crate) const NAMES: &[&str] = &["read", "bash", "edit", "write", "grep", "find", "ls"];
+
 /// The default tool set, anchored at the session cwd. The `--tools` flag and
 /// config allowlist filter this registry (M2.11).
 pub fn default_registry(cwd: PathBuf, bash_timeout_secs: u64) -> Registry {
@@ -211,6 +216,13 @@ mod tests {
             .await;
         assert!(!result.is_error);
         assert_eq!(result.output, "hello");
+    }
+
+    #[test]
+    fn the_default_registry_matches_the_canonical_name_list() {
+        let registry = default_registry(std::env::temp_dir(), 30);
+        let names: Vec<&str> = registry.tools().iter().map(|tool| tool.name()).collect();
+        assert_eq!(names, NAMES);
     }
 
     #[tokio::test]

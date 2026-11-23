@@ -13,9 +13,10 @@ use crate::prompts::PromptTemplate;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as UiLine, Span};
 
-/// Rows the popup shows at most. Nine is the whole built-in set;
-/// templates and skills flow in as the prefix narrows.
-const MAX_ROWS: usize = 10;
+/// Rows the popup shows at most. Eleven is the whole built-in set (the
+/// merged set includes `/hooks`, §22, and `/model`); templates and skills
+/// flow in as the prefix narrows.
+const MAX_ROWS: usize = 11;
 
 /// One popup row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +44,7 @@ const BUILTINS: &[(&str, &str, &str)] = &[
     ("/session", "", "session path, entries, token totals"),
     ("/context", "", "show the assembled system prompt"),
     ("/prompts", "", "list prompt templates"),
+    ("/hooks", "", "list loaded hooks"),
     ("/skill:", "<name> [args]", "run a skill now"),
     (
         "/model",
@@ -208,6 +210,7 @@ mod tests {
                 "/session",
                 "/context",
                 "/prompts",
+                "/hooks",
                 "/skill:<name> [args]",
                 "/model [provider/model]",
                 "/quit",
@@ -313,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn the_cap_keeps_the_list_at_nine_rows() {
+    fn the_cap_keeps_the_list_at_ten_rows() {
         let prompts: Vec<_> = (0..12)
             .map(|i| template(&format!("t{i:02}"), "filler"))
             .collect();

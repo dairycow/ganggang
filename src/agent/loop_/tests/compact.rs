@@ -54,6 +54,7 @@ async fn tiny_context_window_compacts_between_batches() {
         None,
         false,
         8_000, // < RESERVE: the trigger fires after every tool batch
+        Default::default(),
     );
 
     let mut events = Vec::new();
@@ -182,6 +183,7 @@ async fn summary_failure_warns_and_continues_un_compacted() {
         None,
         false,
         8_000,
+        Default::default(),
     );
 
     let mut events = Vec::new();
@@ -249,6 +251,7 @@ async fn trigger_without_a_cut_point_warns_once_per_run() {
         None,
         false,
         8_000,
+        Default::default(),
     );
 
     let (mut tx, mut rx) = tokio::sync::mpsc::channel(128);
@@ -318,6 +321,7 @@ async fn loop_compaction_persists_and_replays_from_the_file() {
         Some(store),
         false,
         8_000,
+        Default::default(),
     );
 
     for i in 0..3 {

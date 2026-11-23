@@ -5,6 +5,7 @@
 
 pub mod compaction;
 pub mod context;
+pub mod hooks;
 pub mod loop_;
 pub mod session;
 pub mod skills;
@@ -54,6 +55,9 @@ pub struct Agent {
     pub(super) replay_reasoning: bool,
     /// Stable per-agent session id for provider routing headers (e.g. OpenCode Go).
     pub(super) session_id: String,
+    /// User-level hooks (§22). Loaded once per process; a run consults them
+    /// at the tool and run boundaries.
+    pub(super) hooks: hooks::Hooks,
 }
 
 impl Agent {
@@ -72,6 +76,7 @@ impl Agent {
         store: Option<session::io::SessionStore>,
         stream: bool,
         context_window: u32,
+        hooks: hooks::Hooks,
     ) -> Self {
         let (agents_files, agents_warnings) = context::discover_agents_md(&cwd);
         let (skills, skill_warnings) = skills::discover(&cwd);
@@ -92,6 +97,7 @@ impl Agent {
             context_window,
             replay_reasoning: false,
             session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
+            hooks,
         }
     }
 

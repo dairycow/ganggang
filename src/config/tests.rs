@@ -17,12 +17,13 @@ fn nothing_set_leaves_defaults() {
 
 #[test]
 fn the_default_allowlist_names_every_registered_tool() {
-    // A name the registry answers to but the default allowlist omits is a
-    // tool the model can never call; the reverse is caught by validation.
-    assert_eq!(
-        Config::default().tools,
-        vec!["read", "bash", "edit", "write", "grep", "find", "ls"]
-    );
+    // The allowlist, hook validation, and the registry share one canonical
+    // name list (`agent::tools::NAMES`); registration is pinned to it.
+    let expected: Vec<String> = crate::agent::tools::NAMES
+        .iter()
+        .map(|name| name.to_string())
+        .collect();
+    assert_eq!(Config::default().tools, expected);
 }
 
 #[test]
