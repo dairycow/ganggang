@@ -40,7 +40,7 @@ pub(crate) const BUILTINS: &[(&str, &str, &str)] = &[
     (
         "/compact",
         " [instructions]",
-        "summarize and rebuild the context",
+        "summarise and rebuild the context",
     ),
     ("/skills", "", "list discovered skills"),
     ("/session", "", "session path, entries, token totals"),

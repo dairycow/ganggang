@@ -54,7 +54,7 @@ struct Cli {
     #[arg(long)]
     no_session: bool,
 
-    /// Output mode for one-shot runs (§15): `print` (default — final
+    /// Output mode for one-shot runs: `print` (default: final
     /// text to stdout) or `json` (session header, then one AgentEvent
     /// per line).
     #[arg(long = "mode", value_enum, default_value_t = Mode::Print)]
@@ -96,7 +96,7 @@ struct Cli {
     )]
     list_models: bool,
 
-    /// Skip user hooks for this run (§22), including the hooks file and the
+    /// Skip user hooks for this run, including the hooks file and the
     /// project-file warning.
     #[arg(long)]
     no_hooks: bool,

@@ -1,6 +1,6 @@
-# ganggang — contributor & agent guide
+# ganggang: contributor & agent guide
 
-A small agentic harness in Rust (`gg`). The spec is `design.html`; `TASKS.md` tracks the build.
+A small agentic harness in Rust (`gg`). `TASKS.md` tracks the build.
 
 ## Before every commit
 
@@ -12,11 +12,16 @@ cargo clippy --all-targets -- -D warnings
 
 Style: standard OSS Rust, `//!`/`///` docs, no `unwrap` outside tests, modules ≲300 lines.
 
+## Skills
+
+- `.agents/skills/style-guide/SKILL.md`: write and edit user-facing prose in concise, professional Australian English with no em dashes and no agentic filler.
+- `.agents/skills/gg-branding/SKILL.md`: apply the ganggang (gg) visual brand and gang-gang cockatoo theme to TUI views, HTML outputs, documentation sites, diagrams, and assets.
+
 ## Documentation is part of the change
 
 The user guide lives in `docs/` (mdBook) and is published to https://dairycow.github.io/ganggang/.
 
-- Changing a CLI flag, tool, provider, model, or slash command? Run `./scripts/sync-docs.sh` — it regenerates `docs/src/reference/*.md` (never edit those by hand). `cargo test` fails while they are stale.
+- Changing a CLI flag, tool, provider, model, or slash command? Run `./scripts/sync-docs.sh`: it regenerates `docs/src/reference/*.md` (never edit those by hand). `cargo test` fails while they are stale.
 - Changing user-visible behaviour (keys, config keys, env vars, hooks, session format, limits)? Update the matching page in `docs/src/guide/` in the same commit. `src/doc_sync/contracts.rs` fails the build when env vars, hook events, JSON events, or key actions go undocumented, when documented TOML stops validating, or when links break.
 - New page? Add it to `docs/src/SUMMARY.md`.
 - Update the README only for the short overview; the guide is the long form.
