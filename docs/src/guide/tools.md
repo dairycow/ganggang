@@ -19,7 +19,7 @@
 ## Choosing which tools are offered
 
 ```sh
-gg --tools read,grep,find,ls -p "review src/ for panics"   # read-only
+gg --tools read,outline,grep,find,ls -p "review src/ for panics"   # read-only
 ```
 
 or `tools = [...]` in [config](configuration.md). The flag overrides the config.

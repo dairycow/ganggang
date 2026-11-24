@@ -46,8 +46,12 @@ fn bold_pairs_mark_ranges_and_unpaired_tails_stay_plain() {
     assert_eq!(bold, vec![(0, 5), (12, 16)]);
 
     let (text, bold) = strip_bold("a**unpaired");
-    assert_eq!(text, "aunpaired");
+    assert_eq!(text, "a**unpaired");
     assert!(bold.is_empty(), "no closing marker: no bold");
+
+    let (text, bold) = strip_bold("**/*.rs");
+    assert_eq!(text, "**/*.rs");
+    assert!(bold.is_empty());
 
     let (text, bold) = strip_bold("no markers");
     assert_eq!(text, "no markers");

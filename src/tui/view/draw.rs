@@ -91,6 +91,9 @@ fn wrapped(lines: &[RenderedLine], width: usize) -> Vec<RenderedLine> {
         }
         let start = i;
         while i < lines.len() && lines[i].table.is_some() {
+            if i > start && lines[i].table.as_ref().is_some_and(|row| row.header) {
+                break;
+            }
             i += 1;
         }
         let table: Vec<TableRow> = lines[start..i]
@@ -142,7 +145,7 @@ fn draw_transcript(
         }
     }
 
-    if bar {
+    if bar && total > text.height {
         let (thumb_style, track) = palette.scrollbar();
         // The thumb points at the first row on screen and is the view's
         // share of the track; why it is told these three figures (and not

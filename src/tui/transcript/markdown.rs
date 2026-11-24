@@ -77,7 +77,10 @@ fn push_table(
     let mut i = start + 2;
     while i < source.len() {
         let line = source[i];
-        if line.trim().is_empty() || line.trim_start().starts_with("```") {
+        if line.trim().is_empty()
+            || line.trim_start().starts_with("```")
+            || table_start(source, i).is_some()
+        {
             break;
         }
         let Some(cells) = split_row(line) else {
@@ -127,9 +130,14 @@ fn delimiter_aligns(line: &str) -> Option<Vec<Align>> {
     let cells = split_row(line)?;
     let mut aligns = Vec::with_capacity(cells.len());
     for cell in cells {
-        let left = cell.starts_with(':');
-        let right = cell.ends_with(':');
-        let body = cell.trim_start_matches(':').trim_end_matches(':');
+        let (left, after_left) = match cell.strip_prefix(':') {
+            Some(s) => (true, s),
+            None => (false, cell.as_str()),
+        };
+        let (right, body) = match after_left.strip_suffix(':') {
+            Some(s) => (true, s),
+            None => (false, after_left),
+        };
         if body.is_empty() || !body.chars().all(|ch| ch == '-') {
             return None;
         }
@@ -175,6 +183,9 @@ fn strip_bold(line: &str) -> (String, Vec<(usize, usize)>) {
             text.push_str(segment);
             bold.push((start, text.chars().count()));
         } else {
+            if unpaired_tail && i + 1 == segments.len() {
+                text.push_str("**");
+            }
             text.push_str(segment);
         }
     }

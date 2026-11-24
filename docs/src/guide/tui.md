@@ -53,10 +53,10 @@ The frame is themed on the gang-gang cockatoo, and the theme sets the full termi
 
 Assistant answers render a deliberately small markdown subset; your own messages and tool output stay literal.
 
-- Fenced code blocks render on a raised band with no inline formatting inside. An unclosed fence renders as code until the reply closes it, so streaming never shows raw markers.
-- `**bold**` spans render bold; unpaired markers render plain.
+- Fenced code blocks render on a raised band with no inline formatting inside. An unclosed fence renders as code until the reply closes it.
+- `**bold**` spans render bold; unpaired `**` markers stay literal.
 - `- ` and `* ` bullets become `• ` with their indent kept; ordered lists keep their numbers.
-- Pipe tables render as a grid with each column padded to its widest cell and aligned by the delimiter's colons (`:--` left, `--:` right, `:--:` centre). A table too wide for the transcript falls back to a bulleted list of `header: value` lines, so it never shears.
+- Pipe tables render as a grid with each column padded to its widest cell and aligned by the delimiter's colons (`:--` left, `--:` right, `:--:` centre); data cells strip `**` without bolding. A table too wide for the transcript falls back to a bulleted list of `header: value` lines.
 - Everything else, including headings, links and italics, renders as typed.
 
 ## Slash commands

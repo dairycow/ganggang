@@ -88,9 +88,11 @@ impl crate::tui::view::State {
         // Rows, not logical lines: wrapping only adds rows, so the line
         // count is the pre-render lower bound and the render pass
         // publishes the exact figure each frame.
-        let rows = self
-            .last_row_count
-            .max(self.transcript.render().len() as u16);
+        let rows = if self.last_view_rows > 0 {
+            self.last_row_count
+        } else {
+            self.transcript.render().len() as u16
+        };
         // The far end is the first row reaching the top of the view — one
         // row short of the count, the old rule, until a render has said
         // how tall the view is. Past it the text would sit still while

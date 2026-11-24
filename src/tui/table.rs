@@ -16,6 +16,10 @@ pub fn layout(rows: &[TableRow], width: usize) -> Vec<RenderedLine> {
     grid(rows, width).unwrap_or_else(|| list(rows))
 }
 
+fn display_width(s: &str) -> usize {
+    ratatui::text::Span::raw(s).width()
+}
+
 /// The grid, if its natural width fits `width`.
 fn grid(rows: &[TableRow], width: usize) -> Option<Vec<RenderedLine>> {
     let columns = rows.first()?.aligns.len();
@@ -25,7 +29,7 @@ fn grid(rows: &[TableRow], width: usize) -> Option<Vec<RenderedLine>> {
     let widths: Vec<usize> = (0..columns)
         .map(|column| {
             rows.iter()
-                .map(|row| cell(row, column).chars().count())
+                .map(|row| display_width(cell(row, column)))
                 .max()
                 .unwrap_or(0)
         })
@@ -43,18 +47,18 @@ fn grid(rows: &[TableRow], width: usize) -> Option<Vec<RenderedLine>> {
             .join(" │ ");
         let end = text.chars().count();
         let mut line = RenderedLine::new(text, LineKind::Table);
-        if row.header {
+        if row.header && end > 0 {
             line = line.with_marks(vec![(0, end, Mark::Bold)]);
         }
         out.push(line);
         if row.header {
             let text = separator(&widths, row);
             let end = text.chars().count();
-            out.push(RenderedLine::new(text, LineKind::Table).with_marks(vec![(
-                0,
-                end,
-                Mark::Args,
-            )]));
+            let mut sep = RenderedLine::new(text, LineKind::Table);
+            if end > 0 {
+                sep = sep.with_marks(vec![(0, end, Mark::Args)]);
+            }
+            out.push(sep);
         }
     }
     Some(out)
@@ -70,6 +74,19 @@ fn list(rows: &[TableRow]) -> Vec<RenderedLine> {
         .map(|row| row.cells.iter().map(String::as_str).collect())
         .unwrap_or_default();
     let mut out = Vec::new();
+    if !rows.iter().any(|row| !row.header) {
+        let joined: Vec<&str> = headers.iter().copied().filter(|h| !h.is_empty()).collect();
+        if !joined.is_empty() {
+            let text = joined.join(" · ");
+            let end = text.chars().count();
+            out.push(RenderedLine::new(text, LineKind::Table).with_marks(vec![(
+                0,
+                end,
+                Mark::Bold,
+            )]));
+        }
+        return out;
+    }
     for row in rows.iter().filter(|row| !row.header) {
         for (column, value) in row.cells.iter().enumerate() {
             let text = if column == 0 {
@@ -98,7 +115,7 @@ fn align(row: &TableRow, column: usize) -> Align {
 
 /// A cell padded to its column width, aligned as the delimiter asked.
 fn pad(cell: &str, width: usize, align: Align) -> String {
-    let missing = width.saturating_sub(cell.chars().count());
+    let missing = width.saturating_sub(display_width(cell));
     match align {
         Align::Left => format!("{cell}{}", " ".repeat(missing)),
         Align::Right => format!("{}{cell}", " ".repeat(missing)),
@@ -241,5 +258,23 @@ mod tests {
     #[test]
     fn an_empty_table_lays_out_nothing() {
         assert!(layout(&[], 40).is_empty());
+    }
+
+    #[test]
+    fn wide_cjk_cells_fall_back_to_list_and_header_only_stays_visible() {
+        let wide = vec![
+            row(&["col", "desc"], &[Align::Left, Align::Left], true),
+            row(&["日本語", "説明"], &[Align::Left, Align::Left], false),
+        ];
+        // Display width is 6 + 3 + 4 = 13 > 11, so it must fall back to list.
+        let lines = layout(&wide, 11);
+        assert_eq!(lines[0].text, "• 日本語");
+        assert_eq!(lines[1].text, "  desc: 説明");
+
+        let header_only = vec![row(&["name", "kind"], &[Align::Left, Align::Left], true)];
+        let lines = layout(&header_only, 6);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "name · kind");
+        assert_eq!(lines[0].marks, vec![(0, 11, Mark::Bold)]);
     }
 }

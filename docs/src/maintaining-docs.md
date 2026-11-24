@@ -40,6 +40,6 @@ The guide tracks `main`; crates.io tracks releases. Before `cargo publish`:
 3. Skim the README and this guide for anything newer than the release notes.
 4. `cargo publish --dry-run`, then `cargo publish`, then tag the release.
 
-`Cargo.toml` already carries `documentation = "https://dairycow.github.io/ganggang/"`, so each published version links to this guide from its crates.io page. `docs/`, `.github/`, `.agents/` and `AGENTS.md` are excluded from the published package.
+`Cargo.toml` already carries `documentation = "https://dairycow.github.io/ganggang/"`, so each published version links to this guide from its crates.io page. `docs/`, `scripts/`, `.github/`, `.agents/` and `AGENTS.md` are excluded from the published package.
 
 Contributors and coding agents get the same instructions from `AGENTS.md` at the repository root. User-facing prose follows `.agents/skills/style-guide/SKILL.md` (Australian English, no em dashes, no agentic filler), and visual surfaces follow `.agents/skills/gg-branding/SKILL.md`.
