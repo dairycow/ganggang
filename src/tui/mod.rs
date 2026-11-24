@@ -142,6 +142,10 @@ pub async fn run(
         prompts.clone(),
         history,
     );
+    state.set_thinking(
+        active_endpoint.reasoning_effort.as_deref(),
+        active_endpoint.reasoning_budget_tokens,
+    );
     if let Some(warning) = state.history.warning() {
         state.push_warning(&warning);
     }

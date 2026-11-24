@@ -46,6 +46,8 @@ pub enum UiEvent {
     ModelSwitched {
         label: String,
         context_window: u32,
+        reasoning_effort: Option<String>,
+        reasoning_budget_tokens: Option<u32>,
     },
 }
 
@@ -120,6 +122,8 @@ pub(super) async fn agent_task(
                             .send(UiEvent::ModelSwitched {
                                 label: endpoint.label(),
                                 context_window: endpoint.context_window,
+                                reasoning_effort: endpoint.reasoning_effort.clone(),
+                                reasoning_budget_tokens: endpoint.reasoning_budget_tokens,
                             })
                             .await;
                     }
@@ -226,8 +230,11 @@ pub(super) async fn apply(
         UiEvent::ModelSwitched {
             label,
             context_window,
+            reasoning_effort,
+            reasoning_budget_tokens,
         } => {
             state.set_model(&label, context_window);
+            state.set_thinking(reasoning_effort.as_deref(), reasoning_budget_tokens);
         }
         UiEvent::ShellDone {
             command,

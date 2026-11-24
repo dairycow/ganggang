@@ -31,6 +31,9 @@ pub const CTX_ERROR: u8 = 85;
 pub struct Footer {
     cwd_short: String,
     model: String,
+    /// The model's configured thinking level (`think high`) or, when only
+    /// a budget is set, its token cap (`think 4096t`).
+    thinking: Option<String>,
     tokens_in: u64,
     tokens_out: u64,
     /// Context usage of the last request vs the window, once known.
@@ -55,6 +58,7 @@ impl Footer {
         Self {
             cwd_short: shorten(cwd),
             model: model.to_string(),
+            thinking: None,
             tokens_in: 0,
             tokens_out: 0,
             context_pct: None,
@@ -150,6 +154,19 @@ impl Footer {
         self.model = model.to_string();
     }
 
+    /// The thinking level shown beside the model. Effort is the level when
+    /// configured (`medium`, `high`, `xhigh`); a budget alone is shown as
+    /// a token cap (`4096t`). Neither set: the model takes provider
+    /// defaults and the field is absent.
+    pub fn set_thinking(&mut self, effort: Option<&str>, budget_tokens: Option<u32>) {
+        let effort = effort.map(str::trim).filter(|e| !e.is_empty());
+        self.thinking = match (effort, budget_tokens.filter(|t| *t > 0)) {
+            (Some(effort), _) => Some(format!("think {effort}")),
+            (None, Some(tokens)) => Some(format!("think {tokens}t")),
+            (None, None) => None,
+        };
+    }
+
     /// The whole line at once, unstyled — what the footer's tests assert
     /// against, and the text behind [`spans`](Self::spans). Test-only by
     /// design: the view draws spans, and nothing in the program needs the
@@ -164,16 +181,16 @@ impl Footer {
             .join("")
     }
 
-    /// e.g. `gg …/projects/ganggang qwen3.8 ↑305 ↓81 ctx 4% ⠋ working`, and
-    /// with the throughput figures the backend reports,
+    /// e.g. `gg …/projects/ganggang qwen3.8 think medium ↑305 ↓81 ctx 4% ⠋ working`,
+    /// and with the throughput figures the backend reports,
     /// `… ↑305 ↓81 ctx 4% 62.4 t/s think 45% ⠋ working`.
     ///
     /// One row of spans, each already carrying the style its role means:
     /// the mark in the crest, the location in pale grey, the model in body
-    /// text, the totals in muted, the context number in muted (going gold
-    /// then red as the window fills), the throughput figures in muted, the
-    /// watch state in gold, and the status — ready, a turning spinner and
-    /// `working`, or `stopping…`.
+    /// text, the thinking level in muted, the totals in muted, the context
+    /// number in muted (going gold then red as the window fills), the
+    /// throughput figures in muted, the watch state in gold, and the status
+    /// — ready, a turning spinner and `working`, or `stopping…`.
     pub fn spans(&self, palette: &Palette) -> UiLine<'static> {
         let muted = Style::new().fg(palette.muted);
         let mut spans: Vec<Span<'static>> = vec![
@@ -185,9 +202,15 @@ impl Footer {
             Span::styled(self.cwd_short.clone(), muted),
             field(muted),
             Span::styled(self.model.clone(), Style::new().fg(palette.text)),
+        ];
+        if let Some(thinking) = &self.thinking {
+            spans.push(field(muted));
+            spans.push(Span::styled(thinking.clone(), muted));
+        }
+        spans.extend([
             field(muted),
             Span::styled(format!("↑{} ↓{}", self.tokens_in, self.tokens_out), muted),
-        ];
+        ]);
         if let Some(pct) = self.context_pct {
             spans.push(field(muted));
             spans.push(Span::styled(

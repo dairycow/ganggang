@@ -138,6 +138,28 @@ fn a_run_asked_to_stop_says_so_in_the_footer() {
 }
 
 #[test]
+fn the_model_s_thinking_level_sits_beside_its_name() {
+    let mut f = footer();
+    assert!(!text(&f).contains("think"), "unset: no field at all");
+
+    f.set_thinking(Some("high"), None);
+    let shown = text(&f);
+    assert!(shown.contains("qwen3.8 │ think high │ ↑305"), "{shown}");
+
+    // A budget alone is a cap, not a level.
+    f.set_thinking(None, Some(4096));
+    assert!(text(&f).contains("think 4096t"), "{}", text(&f));
+
+    // An effort wins over the budget: the level is what the user chose.
+    f.set_thinking(Some(" medium "), Some(4096));
+    assert!(text(&f).contains("think medium"), "{}", text(&f));
+
+    // Empty effort and zero budget mean the provider's defaults.
+    f.set_thinking(Some(""), Some(0));
+    assert!(!text(&f).contains("think"), "{}", text(&f));
+}
+
+#[test]
 fn watch_status_renders_only_when_watching() {
     let mut f = footer();
     assert!(!text(&f).contains("watch"));

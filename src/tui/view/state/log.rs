@@ -23,6 +23,11 @@ impl super::super::State {
         self.footer.set_thinking_pct(None);
     }
 
+    /// The active model's thinking level, shown beside its name.
+    pub fn set_thinking(&mut self, effort: Option<&str>, budget_tokens: Option<u32>) {
+        self.footer.set_thinking(effort, budget_tokens);
+    }
+
     pub fn push_user(&mut self, text: &str) {
         self.transcript.push_user(text);
     }

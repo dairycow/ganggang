@@ -381,6 +381,10 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
                 .await?;
             *active_endpoint = endpoint.clone();
             state.set_model(&endpoint.label(), endpoint.context_window);
+            state.set_thinking(
+                endpoint.reasoning_effort.as_deref(),
+                endpoint.reasoning_budget_tokens,
+            );
             state.push_info(&format!(
                 "switched to {} ({}, ctx {}k)",
                 endpoint.label(),
