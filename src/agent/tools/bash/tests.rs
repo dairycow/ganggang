@@ -58,7 +58,9 @@ async fn timeout_kills_the_whole_process_group_not_just_the_shell() {
     // A pipeline means bash forks children; killing only bash would
     // leave them running past the deadline. The marker doubles as the
     // (unique, valid) sleep duration so pgrep can find group members.
-    let marker = "617.319";
+    let pid = std::process::id();
+    let marker = format!("617.{pid}");
+    let pattern = format!(r"617\.{pid}");
     let tool = BashTool::new(std::env::temp_dir(), 1);
     let r = tool
         .execute(
@@ -76,7 +78,7 @@ async fn timeout_kills_the_whole_process_group_not_just_the_shell() {
     for _ in 0..20 {
         let alive = std::process::Command::new("pgrep")
             .arg("-f")
-            .arg(marker)
+            .arg(&pattern)
             .stdout(Stdio::null())
             .status()
             .unwrap()
@@ -96,7 +98,9 @@ async fn timeout_kills_the_whole_process_group_not_just_the_shell() {
 /// duration so pgrep can find group members.
 #[tokio::test]
 async fn cancellation_kills_the_whole_process_group_and_reports_it() {
-    let marker = "731.207";
+    let pid = std::process::id();
+    let marker = format!("731.{pid}");
+    let pattern = format!(r"731\.{pid}");
     let tool = BashTool::new(std::env::temp_dir(), 30);
     let flag = Arc::new(AtomicBool::new(false));
     let setter = {
@@ -139,7 +143,7 @@ async fn cancellation_kills_the_whole_process_group_and_reports_it() {
     for _ in 0..20 {
         let alive = std::process::Command::new("pgrep")
             .arg("-f")
-            .arg(marker)
+            .arg(&pattern)
             .stdout(Stdio::null())
             .status()
             .unwrap()
