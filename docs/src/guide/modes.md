@@ -1,4 +1,4 @@
-# Output Modes & Export
+# Output modes and export
 
 All modes share one agent core and persist a session by default (`--no-session` opts out).
 
@@ -15,11 +15,11 @@ echo "explain this" | gg -p -
 
 The final answer goes to **stdout**; progress (turn markers, formatted tool-call lines, per-turn token/throughput stats, a final run summary, and a spinner on a terminal) goes to **stderr**. A consumer that closes the pipe early (`… | head -c 5`) ends the run quietly.
 
-`Ctrl+C` aborts the run: an in-flight request or stream is cut within about 100 ms rather than left to finish, a running tool is stopped (a `bash` command loses its whole process group), and what had already streamed in is the answer on stdout. A second `Ctrl+C` exits immediately with status 130. `SIGTERM` triggers the same graceful abort, flushes output, and exits with status 143.
+`Ctrl+C` aborts the run: in-flight requests close within about 100 ms, running `bash` commands have their process group killed, and any partial text already streamed is printed to stdout. A second `Ctrl+C` exits immediately with status 130. `SIGTERM` triggers the same graceful abort, flushes output, and exits with status 143.
 
 ### Truncated responses
 
-A response can end before it is finished: the provider reports `finish_reason: "length"` (the answer hit `max_tokens`), or the stream ends without its sentinel (the request timed out, the connection dropped). Either way the partial answer is kept, a `warning:` line says what happened, and `gg` asks the model to continue from exactly where it stopped, at most 3 times per run and never past `--max-turns`. The pieces are joined, so stdout still holds one answer. A tool call cut off mid-arguments is never run; the model is told it was not executed.
+A response can end early if the provider returns `finish_reason: "length"` (the `max_tokens` limit) or the stream closes before its end marker (timeout or dropped connection). `gg` keeps the partial output, logs a `warning:` line, and asks the model to continue from where it stopped, up to 3 times per run and within `--max-turns`. Continuation chunks are joined into a single answer on stdout. Tool calls cut off mid-arguments are not executed and receive an error result.
 
 Transient transport failures are retried (see `max_retries` in [Configuration](configuration.md)); each retry is a `warning:` line on stderr.
 
@@ -39,7 +39,7 @@ Stdout carries the session header record first (when a session is kept), then on
 | `thinking` | `delta` | A fragment of reasoning (`reasoning_content`) |
 | `tool_call_started` | `name`, `id`, `args` | A tool call begins |
 | `tool_call_finished` | `name`, `id`, `output`, `is_error` | The tool's result |
-| `turn_ended` | `stop_reason`, optional `usage`, `timings`, `thinking_pct` | The model's turn finished. `stop_reason` is `stop` (a final answer), `tool_calls` (the turn wants tools), `length` (hit `max_tokens`: the answer is a prefix and will be continued), or `stream_cut` (the stream ended early: the same). A turn the user stopped emits no `turn_ended` |
+| `turn_ended` | `stop_reason`, optional `usage`, `timings`, `thinking_pct` | The model's turn finished. `stop_reason` is `stop` (a final answer), `tool_calls` (the model requested tools), `length` (hit `max_tokens`: the answer is a prefix and will be continued), or `stream_cut` (the stream closed early and will be continued). A turn the user stopped emits no `turn_ended` |
 | `run_ended` | `turns` | A clean finish |
 | `run_aborted` | | The run was aborted; emitted after a `warned` |
 | `warned` | `message` | A non-fatal problem (hook failure, compaction, a retried request, a truncated answer and whether it is being continued…) |
@@ -67,4 +67,4 @@ gg --export 3fa9c1d2              # → <session-file-stem>.html in the current 
 gg --export path/to/session.jsonl report.html
 ```
 
-`SESSION` is a file path or the id (or unique prefix) that `--resume` takes. The output is one self-contained, dark-themed HTML file: no scripts, no external references; tool calls and thinking collapse with native `<details>`. All conversation text is HTML-escaped. Exporting needs no model and no server.
+`SESSION` is a file path or the id (or unique prefix) that `--resume` takes. The output is one self-contained, dark-themed HTML file: no scripts, no external references; tool calls and thinking collapse with native `<details>`. All conversation text is HTML-escaped. Exporting runs offline without a model or server.

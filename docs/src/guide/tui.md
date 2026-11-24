@@ -2,7 +2,7 @@
 
 Running `gg` on a terminal opens a fullscreen interface in three regions: the **transcript** (markdown rendering, tool calls, optional thinking), the **composer** where you type, and a one-row **footer** with the active model, token totals, context %, and live throughput (`t/s`, `think %`) when the backend reports it. `SIGTERM` shuts down cleanly and restores the terminal.
 
-If stdin is not a terminal and you gave no prompt, `gg` exits with an error rather than hanging; use `gg -p "…"` for scripts.
+If stdin is not a terminal and no prompt is given, `gg` exits with an error; use `gg -p "…"` in scripts.
 
 ## Keys
 
@@ -12,7 +12,7 @@ If stdin is not a terminal and you gave no prompt, `gg` exits with an error rath
 | `Alt+Enter`, `Ctrl+J` | Newline (`Shift+Enter` too, where the terminal reports modified keys) |
 | `Backspace` | Delete before the cursor |
 | `←` / `→` | Move the cursor |
-| `↑` / `↓` | Drive the `/` suggestion list while it is open; otherwise recall prompts while the composer is empty or single-line, or move between its lines |
+| `↑` / `↓` | Navigate the `/` suggestion list while it is open; otherwise recall prompts while the composer is empty or single-line, or move between its lines |
 | `Ctrl+P` / `Ctrl+N` | Recall the previous / next prompt, whatever the composer holds |
 | `Ctrl+A`, `Home` | Start of line |
 | `Ctrl+E`, `End` | End of line |
@@ -29,20 +29,20 @@ If stdin is not a terminal and you gave no prompt, `gg` exits with an error rath
 | Mouse wheel | Scroll the transcript (3 rows a notch) |
 | `Ctrl+C` | Cancel: stop a run in flight, clear a typed draft, or, with nothing left to cancel, quit. A second press while a run is stopping quits at once |
 
-A run asked to stop shows `stopping…` in the footer while it winds down, and it winds down promptly: a generation still streaming is cut rather than left to finish, and what it had streamed stays in the transcript and in the session ([Stopping a run](tools.md#stopping-a-run)). `/quit` is the way out that cancels nothing. `SIGTERM` ends the TUI at once, with the same clean shutdown.
+When you stop a run, the footer shows `stopping…` while active streams close and running tools terminate. Partial output received before stopping stays in the transcript and session file ([Stopping a run](tools.md#stopping-a-run)). Use `/quit` to exit directly without cancelling a draft or run. `SIGTERM` shuts down cleanly.
 
 ## Prompt history
 
-Everything you submit (a prompt, a `!`/`!!` shell line, a slash command other than `/quit`) is remembered in `~/.gg/history.jsonl` (one JSON string per line, mode `0600`), newest 500 entries. `↑`/`↓` walk it while the composer is empty or holds a single line; `Ctrl+P`/`Ctrl+N` walk it whatever it holds. The first `↑` saves what you were typing, and `↓` past the newest gives it back. Recalled text is ordinary composer text: edit it and send it again. Without `HOME` the history lives in memory for the run only.
+Submitted prompts, `!`/`!!` commands, and slash commands (except `/quit`) are stored in `~/.gg/history.jsonl` (one JSON string per line, mode `0600`, newest 500 entries). Use `↑`/`↓` to browse history when the composer is empty or single-line, or `Ctrl+P`/`Ctrl+N` at any time. Pressing `↑` saves your current draft; pressing `↓` past the latest entry restores it. Recalled entries can be edited before sending. Without `HOME`, history is kept in memory for the current run only.
 
 ## Theme and layout
 
-The frame is themed on the gang-gang cockatoo, and the theme sets the whole screen: a charcoal background, warm off-white text, a scarlet crest for `gg`'s own marks (the `you │ ` prefix, the footer's `gg`, an aborted run, the scrollbar's thumb), orange-red for anything live (a tool call, the spinner, the composer's border while a run is in flight), pale-grey secondaries, wattle-gold warnings, and a raised slate band behind code, expanded tool output and the suggestion popup. On a terminal that claims 24-bit colour (`COLORTERM=truecolor` or `24bit`, or a `TERM` advertising direct colour) the palette is exact; anywhere else the same palette draws in xterm-256 colours.
+The frame is themed on the gang-gang cockatoo, and the theme sets the full terminal background: a charcoal background, warm off-white text, a scarlet crest for `gg`'s own marks (the `you │ ` prefix, the footer's `gg`, an aborted run, the scrollbar's thumb), orange-red for anything live (a tool call, the spinner, the composer's border while a run is in flight), pale-grey secondaries, wattle-gold warnings, and a raised slate band behind code, expanded tool output and the suggestion popup. On a terminal that supports 24-bit colour (`COLORTERM=truecolor` or `24bit`, or a `TERM` advertising direct colour) the palette is exact; anywhere else the same palette draws in xterm-256 colours.
 
 - **Composer**: a rounded box titled `compose`, one to eight text rows. It grows with the draft and then scrolls inside itself so the cursor stays visible; its border turns orange-red while a run is in flight and scarlet while one is stopping. The cursor's column is counted in characters, so a wide glyph (CJK, emoji) can leave it a cell left of where the terminal draws it.
 - **Footer**: one row of fields: `gg`, the directory, the model, `↑in ↓out`, `ctx N%` (gold past 60%, red past 85%), the throughput figures when the backend reports them, the `--watch` state, and the status: `○ ready`, a turning spinner and `working`, or `stopping…`.
-- **Transcript**: a scrollbar appears only when the content overflows, in a column reserved for it so no text hides under it. An empty session shows a short welcome block instead of a blank area.
-- **Mouse**: `gg` turns on mouse reporting while it runs so the wheel can scroll, reads the wheel and nothing else (a click or a drag does nothing), and turns it off when it exits, when it panics, and while `Ctrl+G` opens your editor. To select text with the terminal's own selection, hold `Shift` while dragging.
+- **Transcript**: a scrollbar appears only when the content overflows, in a dedicated column when content overflows. Empty sessions display a welcome block.
+- **Mouse**: `gg` turns on mouse reporting while it runs so the wheel can scroll, handles scroll-wheel events and ignores clicks and drags, and turns it off when it exits, when it panics, and while `Ctrl+G` opens your editor. To select text with the terminal's own selection, hold `Shift` while dragging.
 
 ### tmux
 
@@ -52,7 +52,7 @@ The frame is themed on the gang-gang cockatoo, and the theme sets the whole scre
 
 Typing `/` opens a suggestion list above the composer: the built-ins, your [prompt templates](context-skills-prompts.md#prompt-templates), and, once `/skill:` is typed, one row per skill. `↑`/`↓` move the highlight, `Tab` completes, and `Enter` still sends exactly what you typed.
 
-The command list is in [TUI Slash Commands](../reference/commands.md). Unknown commands are rejected with the valid set.
+The command list is in [TUI slash commands](../reference/commands.md). Unknown commands are rejected with the valid set.
 
 ## Shell lines: `!` and `!!`
 
@@ -63,17 +63,17 @@ Both share the bash tool's runner: 30-second timeout (the whole process group is
 
 ## `@file` mentions
 
-`@src/main.rs` in a message attaches the file's content below your text. Your line stays readable; attachments follow as fenced blocks.
+`@src/main.rs` in a message attaches the file's content below your text. Attached files are appended below your message as fenced code blocks.
 
 - A token counts as a mention when what follows `@` contains `/` or `.`, so `user@host` and a lone `@` stay literal. Trailing punctuation (`@file.txt,`) is not part of the path.
 - Paths resolve against the session directory; two spellings of the same file attach once.
-- Total attachment budget is 50 KiB per message. Over-budget files are truncated or skipped, binary files report their size, and missing files say so, always visibly in the attachment.
+- Total attachment budget is 50 KiB per message. Over-budget files are truncated or skipped, binary files report their size, and include a missing-file notice in the attachment.
 
 ## External editor
 
-`Ctrl+G` opens your draft in `$VISUAL`, else `$EDITOR`, else `nano`. Arguments are fine (`code --wait`). When the editor exits cleanly, what you saved replaces the composer; nothing is sent until you press `Enter`, and a run in flight keeps going behind the editor.
+`Ctrl+G` opens your draft in `$VISUAL`, else `$EDITOR`, else `nano`. Arguments are supported (for example, `code --wait`). When the editor exits cleanly, what you saved replaces the composer; nothing is sent until you press `Enter`, and a run in flight keeps going behind the editor.
 
-If the editor exits with an error, the composer is left alone and an edited draft is kept where the warning says. An editor that returns at once (a GUI editor without a wait flag) leaves a note suggesting one, such as `code --wait`.
+If the editor exits non-zero, the composer is unchanged and the edited draft path is reported in a warning. If a GUI editor exits immediately without saving, `gg` shows a reminder to pass a wait flag (such as `code --wait`).
 
 ## Clipboard
 
