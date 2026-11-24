@@ -1,6 +1,6 @@
 ---
 name: gg-branding
-description: "Apply the ganggang (gg) visual brand and gang-gang cockatoo theme to TUI views, HTML outputs, documentation sites, diagrams, and assets. Use whenever designing, styling, or updating any visual surface in this repository."
+description: "Apply the ganggang (gg) brand and gang-gang cockatoo theme to TUI views, HTML, docs sites, diagrams, and assets."
 ---
 
 # ganggang Brand Guide

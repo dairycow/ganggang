@@ -1,6 +1,6 @@
 ---
 name: style-guide
-description: "Write and edit ganggang user guides, README, CLI help text, release notes, and documentation in concise, professional Australian English with no em dashes and no agentic filler. Use whenever creating or revising any user-facing prose in this repository."
+description: "Write user-facing prose in concise, professional Australian English with no em dashes or filler."
 ---
 
 # ganggang Style Guide
