@@ -141,8 +141,9 @@ async fn output_is_capped_at_16_kib_with_a_visible_notice() {
     .await;
     assert!(!r.is_error, "{}", r.output);
     assert!(
-        r.output
-            .contains("output capped at 16384 bytes — narrow pattern or path"),
+        r.output.contains(
+            "output capped at 16384 bytes — use files_only: true or narrow pattern or path"
+        ),
         "{}",
         r.output.lines().last().unwrap_or("")
     );
@@ -391,5 +392,66 @@ async fn a_cancelled_walk_stops_promptly_and_says_it_is_partial() {
     assert!(
         searched > 0 && searched < total,
         "the walk must stop partway, covered {searched} of {total}"
+    );
+}
+
+/// A line-mode search that runs out points at `files_only` as the cheap way
+/// to keep the shape of a broad search; a files-only search already has it,
+/// so its note stays as it was.
+#[tokio::test]
+async fn truncation_hints_point_line_mode_at_files_only() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..8 {
+        std::fs::write(
+            dir.path().join(format!("f{i}.txt")),
+            format!("needle {i}\n"),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        dir.path().join("big.txt"),
+        (0..120)
+            .map(|i| format!("needle {i} {}", "x".repeat(300)))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+
+    let r = run(
+        dir.path(),
+        serde_json::json!({"pattern": "needle", "max_results": 5}),
+    )
+    .await;
+    assert!(
+        r.output.contains(
+            "[truncated: stopped after 5 matches — more may exist; use files_only: true or narrow pattern or path]"
+        ),
+        "{}",
+        r.output
+    );
+
+    let r = run(
+        dir.path(),
+        serde_json::json!({"pattern": "needle", "max_results": 5, "files_only": true}),
+    )
+    .await;
+    assert!(
+        r.output
+            .contains("[truncated: stopped after 5 matches — more may exist]"),
+        "{}",
+        r.output
+    );
+    assert!(!r.output.contains("use files_only: true"), "{}", r.output);
+
+    let r = run(
+        dir.path(),
+        serde_json::json!({"pattern": "needle", "path": "big.txt", "max_results": 5000}),
+    )
+    .await;
+    assert!(
+        r.output
+            .contains("bytes — use files_only: true or narrow pattern or path]"),
+        "{}",
+        r.output
     );
 }

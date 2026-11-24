@@ -289,3 +289,139 @@ async fn each_retry_leaves_one_notice_for_the_caller() {
     client.send("m", &[], 16, &[]).await.unwrap();
     assert!(client.take_notices().is_empty());
 }
+
+// ------------------------------------------------------- send_summary
+
+/// A one-request server: it records the JSON body it was sent and answers
+/// with a plain completion, so the summary tests can read the request back.
+struct Probe {
+    base_url: String,
+    body: std::sync::Arc<std::sync::Mutex<String>>,
+    handle: std::thread::JoinHandle<()>,
+}
+
+fn read_one_request(stream: &mut std::net::TcpStream) -> String {
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let mut raw: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        match std::io::Read::read(stream, &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                raw.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&raw).into_owned();
+                if let Some((head, rest)) = text.split_once("\r\n\r\n") {
+                    let want = head
+                        .lines()
+                        .find_map(|l| {
+                            let lower = l.to_ascii_lowercase();
+                            lower
+                                .strip_prefix("content-length:")
+                                .and_then(|v| v.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if rest.len() >= want {
+                        return rest.to_string();
+                    }
+                }
+            }
+        }
+    }
+    String::from_utf8_lossy(&raw).into_owned()
+}
+
+impl Probe {
+    fn spawn() -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let body = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let recorded = std::sync::Arc::clone(&body);
+        let handle = std::thread::spawn(move || {
+            let stream = match listener.incoming().next() {
+                Some(Ok(stream)) => stream,
+                _ => return,
+            };
+            let mut stream = stream;
+            let request = read_one_request(&mut stream);
+            *recorded
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = request;
+            let answer = r#"{"choices":[{"message":{"role":"assistant","content":"SUMMARY"}}]}"#;
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                    answer.len()
+                )
+                .as_bytes(),
+            );
+        });
+        Self {
+            base_url,
+            body,
+            handle,
+        }
+    }
+
+    fn request_body(self) -> String {
+        let _ = self.handle.join();
+        self.body
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
+
+/// The summarize call is the cheap one: heavy reasoning drops to `low`, the
+/// thinking budget and the output budget both cap, and an unconfigured
+/// client still sends neither reasoning field.
+#[tokio::test]
+async fn send_summary_downgrades_reasoning_and_caps_the_budgets() {
+    let probe = Probe::spawn();
+    let client = LlmClient::new(&probe.base_url)
+        .unwrap()
+        .with_reasoning_effort(Some("high".into()))
+        .with_reasoning_budget_tokens(Some(4096));
+    let messages = vec![ChatMessage {
+        role: "user".into(),
+        content: Some("summarize this".into()),
+        ..ChatMessage::default()
+    }];
+    let response = client
+        .send_summary("test-model", &messages, 16384)
+        .await
+        .unwrap();
+    assert_eq!(
+        response.choices[0].message.content.as_deref(),
+        Some("SUMMARY")
+    );
+    let body = probe.request_body();
+    assert!(body.contains(r#""reasoning_effort":"low""#), "{body}");
+    assert!(body.contains(r#""reasoning_budget_tokens":512"#), "{body}");
+    assert!(body.contains(r#""max_tokens":4096"#), "{body}");
+    assert!(!body.contains(r#""tools""#), "{body}");
+
+    let probe = Probe::spawn();
+    let client = LlmClient::new(&probe.base_url)
+        .unwrap()
+        .with_reasoning_effort(Some("medium".into()));
+    client
+        .send_summary("test-model", &messages, 1024)
+        .await
+        .unwrap();
+    let body = probe.request_body();
+    assert!(body.contains(r#""reasoning_effort":"low""#), "{body}");
+    assert!(body.contains(r#""max_tokens":1024"#), "{body}");
+
+    // Nothing configured: the fields stay absent, so a strict endpoint
+    // never sees one it did not ask for.
+    let probe = Probe::spawn();
+    let client = LlmClient::new(&probe.base_url).unwrap();
+    client
+        .send_summary("test-model", &messages, 16384)
+        .await
+        .unwrap();
+    let body = probe.request_body();
+    assert!(!body.contains("reasoning_effort"), "{body}");
+    assert!(!body.contains("reasoning_budget_tokens"), "{body}");
+    assert!(body.contains(r#""max_tokens":4096"#), "{body}");
+}

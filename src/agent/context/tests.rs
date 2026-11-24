@@ -192,3 +192,24 @@ fn build_system_prompt_with_date_pins_the_supplied_date() {
     let prompt = build_system_prompt_with_date(Path::new("/tmp/p"), &[], &[], "2026-01-02");
     assert!(prompt.contains("date: 2026-01-02"));
 }
+
+/// Wave 3: the preamble batches reads, sends the model to outline/grep
+/// before a big read, and re-reads after anything that moves line numbers.
+#[test]
+fn preamble_batches_reads_and_re_reads_after_compaction_or_formatting() {
+    let prompt = build_system_prompt(Path::new("/tmp/proj"), &[], &[]);
+    assert!(
+        prompt.contains("batch every independent read-only call"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("(outline, grep, read, find, ls)"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("over ~200 lines"), "{prompt}");
+    assert!(prompt.contains("`files_only: true`"), "{prompt}");
+    assert!(
+        prompt.contains("re-read the target lines before calling edit"),
+        "{prompt}"
+    );
+}

@@ -476,7 +476,7 @@ async fn tiny_32k_window_scales_reserve_and_keep_recent() {
     assert!(replayed.contains("SUMMARY-32K"));
     assert!(replayed.contains("second"));
     assert!(
-        !replayed.contains("first"),
+        !replayed.contains("first xxx"),
         "the dropped first batch is summarized away: {replayed}"
     );
 

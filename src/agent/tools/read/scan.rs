@@ -219,7 +219,18 @@ pub(super) fn read(
         if scan_capped {
             notes.push(format!("scan cap {MAX_SCAN_BYTES} bytes reached"));
         }
-        notes.push(format!("pass offset={} to continue", last_line + 1));
+        if offset.is_some() || limit.is_some() {
+            // The caller already chose this page, so the next one is what
+            // it is asking for.
+            notes.push(format!("pass offset={} to continue", last_line + 1));
+        } else {
+            // A default first page: the file is bigger than the caller
+            // assumed, and a whole second page is rarely the answer.
+            notes.push(format!(
+                "use outline or grep for targeted sections, or pass offset={} to continue",
+                last_line + 1
+            ));
+        }
         acc.out = format!("{}\n[truncated: {}]", acc.out, notes.join("; "));
     }
 

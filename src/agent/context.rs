@@ -29,8 +29,14 @@ edit and write over bash (cat/sed/grep/find/python3); reserve bash for \
 builds, tests, git and anything no tool covers. bash runs in cwd: never \
 `cd <cwd> &&`.
 - Every tool result stays in context on every future turn. Prefer grep and \
-targeted read over full-file reads, and batch independent read-only calls in \
-one turn.
+targeted read over full-file reads, and batch every independent read-only \
+call (outline, grep, read, find, ls) into one turn rather than one or two at \
+a time.
+- For a file over ~200 lines, run outline or grep first (grep with \
+`files_only: true` for a broad search), then read(offset, limit) on the \
+ranges you need.
+- After compaction or a formatting pass (`cargo fmt`), re-read the target \
+lines before calling edit: line numbers and text held in memory are stale.
 - Make the smallest exact edit; verify after code changes, then stop. No \
 redundant re-reads or re-runs.
 - A failed call is data: read the error, fix the approach, retry.

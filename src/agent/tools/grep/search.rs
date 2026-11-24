@@ -119,13 +119,25 @@ impl<'a> Search<'a> {
             ));
         }
         if self.byte_capped {
+            // `files_only` is the cheap way to keep the shape of a broad
+            // search; a line-mode search can only narrow it.
+            let hint = if self.files_only {
+                "narrow pattern or path"
+            } else {
+                "use files_only: true or narrow pattern or path"
+            };
             out.push_str(&format!(
-                "[truncated: output capped at {MAX_OUTPUT_BYTES} bytes — narrow pattern or path]\n"
+                "[truncated: output capped at {MAX_OUTPUT_BYTES} bytes — {hint}]\n"
             ));
         }
         if self.match_count >= self.cap {
+            let hint = if self.files_only {
+                ""
+            } else {
+                "; use files_only: true or narrow pattern or path"
+            };
             out.push_str(&format!(
-                "[truncated: stopped after {} matches — more may exist]\n",
+                "[truncated: stopped after {} matches — more may exist{hint}]\n",
                 self.cap
             ));
         }

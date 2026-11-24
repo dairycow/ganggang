@@ -4,15 +4,12 @@
 //! Two pi defaults (`RESERVE` and `KEEP_RECENT`), plus an optional lower
 //! `compact_threshold_tokens` ceiling for local-compute KV residency.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 
-use anyhow::Context;
 use tokio::sync::mpsc::Sender;
 
 use super::session::{self, Entry, Message, ReplayReasoning, Role, last_entry_id};
 use crate::events::AgentEvent;
-use crate::llm::client::LlmClient;
 use crate::llm::types::ChatMessage;
 
 /// Upper bound on the tokens held free in the context window: compaction
@@ -134,9 +131,6 @@ fn message_token_chars(m: &Message) -> usize {
             .map(|c| c.name.chars().count() + c.args.to_string().chars().count())
             .sum::<usize>()
 }
-
-/// The instruction §14 words for the summarize call.
-const SUMMARIZE_INSTRUCTION: &str = "summarize the conversation so far for continuation; preserve goals, decisions, file paths, open tasks";
 
 /// Index where the ACTIVE region starts: the entry the previous
 /// compaction kept from, or 0 when none has happened. Everything
@@ -267,86 +261,6 @@ pub(super) fn cut_point_with_budget(
     Some(last_entry_id(&entries[snapped]))
 }
 
-fn format_transcript_for_summary(dropped_wire: &[ChatMessage]) -> String {
-    let mut sections = Vec::with_capacity(dropped_wire.len());
-    for msg in dropped_wire {
-        match msg.role.as_str() {
-            "user" => {
-                let text = msg.content.as_deref().unwrap_or("").trim();
-                if !text.is_empty() {
-                    sections.push(format!("User:\n{text}"));
-                }
-            }
-            "assistant" => {
-                let mut part = String::from("Assistant:");
-                if let Some(reason) = msg.reasoning_content.as_deref().filter(|r| !r.is_empty()) {
-                    part.push_str(&format!("\n[thinking]\n{reason}"));
-                }
-                if let Some(text) = msg.content.as_deref().filter(|c| !c.is_empty()) {
-                    part.push_str(&format!("\n{text}"));
-                }
-                for tc in &msg.tool_calls {
-                    part.push_str(&format!(
-                        "\n[tool_call {}({})]",
-                        tc.function.name, tc.function.arguments
-                    ));
-                }
-                sections.push(part);
-            }
-            "tool" => {
-                let id = msg.tool_call_id.as_deref().unwrap_or("unknown");
-                let text = msg.content.as_deref().unwrap_or("");
-                sections.push(format!("Tool result ({id}):\n{text}"));
-            }
-            other => {
-                let text = msg.content.as_deref().unwrap_or("");
-                sections.push(format!("{other}:\n{text}"));
-            }
-        }
-    }
-    sections.join("\n\n")
-}
-
-/// One extra, non-streaming LLM call over a text-serialized transcript of
-/// the region being dropped — which already collapses anything older into the
-/// previous summary note, so nothing summarized before is lost. Returns
-/// `Ok(None)` if aborted mid-request.
-pub(super) async fn summarize(
-    client: &LlmClient,
-    model: &str,
-    max_tokens: u32,
-    dropped_wire: &[ChatMessage],
-    instructions: Option<&str>,
-    abort: &Arc<AtomicBool>,
-) -> anyhow::Result<Option<String>> {
-    let mut prompt = SUMMARIZE_INSTRUCTION.to_string();
-    if let Some(focus) = instructions.filter(|s| !s.trim().is_empty()) {
-        prompt.push_str(&format!("\nFocus: {focus}"));
-    }
-    let transcript = format_transcript_for_summary(dropped_wire);
-    prompt.push_str(&format!(
-        "\n\n<conversation>\n{transcript}\n</conversation>\n\nProvide the continuation summary now."
-    ));
-    let messages = vec![ChatMessage {
-        role: "user".to_string(),
-        content: Some(prompt),
-        ..ChatMessage::default()
-    }];
-    let response = tokio::select! {
-        biased;
-        _ = super::loop_::wait_for_abort(abort) => return Ok(None),
-        res = client.send(model, &messages, max_tokens, &[]) => res?,
-    };
-    response
-        .choices
-        .into_iter()
-        .next()
-        .and_then(|choice| choice.message.content)
-        .filter(|text| !text.trim().is_empty())
-        .context("summarize response had no content")
-        .map(Some)
-}
-
 /// What one compaction attempt did — the callers turn this into events
 /// (the loop) or interface feedback (`/compact`), each in their own
 /// voice. Failure is a variant, never an `Err`: §14 kills no runs.
@@ -442,10 +356,11 @@ impl super::Agent {
         if self.abort.load(Ordering::Acquire) {
             return Ok(CompactOutcome::Aborted);
         }
-        match summarize(
+        match summarize::summarize(
             &self.client,
             &self.model,
             self.max_tokens,
+            &self.cwd,
             &dropped_wire,
             instructions,
             &self.abort,
@@ -478,6 +393,11 @@ impl super::Agent {
         }
     }
 }
+
+/// The summarize call's own parts: the instruction, the transcript format,
+/// and the request. Kept apart from the trigger math and the cut-point walk
+/// above so each stays short.
+mod summarize;
 
 #[cfg(test)]
 mod tests;

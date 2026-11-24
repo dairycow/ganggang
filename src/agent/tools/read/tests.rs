@@ -265,3 +265,32 @@ async fn endless_file_with_offset_stops_bounded_without_loop_hint() {
     assert!(r.output.contains("scan cap"));
     assert!(!r.output.contains("offset=10"));
 }
+
+/// A default first page that runs into the line cap points at the cheaper
+/// ways in; a page the caller asked for keeps the bare continuation hint.
+#[tokio::test]
+async fn default_page_truncation_points_at_outline_and_grep() {
+    let dir = tempfile::tempdir().unwrap();
+    let body: String = (1..=900).map(|i| format!("line-{i}\n")).collect();
+    std::fs::write(dir.path().join("f.txt"), body).unwrap();
+
+    let r = run(dir.path(), serde_json::json!({"path": "f.txt"})).await;
+    assert!(
+        r.output
+            .contains("use outline or grep for targeted sections, or pass offset=401 to continue"),
+        "{}",
+        r.output
+    );
+
+    let r = run(
+        dir.path(),
+        serde_json::json!({"path": "f.txt", "offset": 401}),
+    )
+    .await;
+    assert!(
+        r.output.contains("pass offset=801 to continue"),
+        "{}",
+        r.output
+    );
+    assert!(!r.output.contains("use outline or grep"), "{}", r.output);
+}

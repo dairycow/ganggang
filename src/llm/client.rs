@@ -110,6 +110,66 @@ impl LlmClient {
         max_tokens: u32,
         tools: &[Value],
     ) -> anyhow::Result<ChatResponse> {
+        self.send_with_reasoning(
+            model,
+            messages,
+            max_tokens,
+            tools,
+            self.reasoning_effort.as_deref(),
+            self.reasoning_budget_tokens,
+        )
+        .await
+    }
+
+    /// The summarize call compaction makes: the same wire with cheaper
+    /// knobs. It carries no tools, its `max_tokens` is capped at
+    /// [`SUMMARY_MAX_TOKENS`], a heavy configured reasoning effort is sent
+    /// as `"low"`, and a configured token budget is capped at
+    /// [`SUMMARY_REASONING_BUDGET_TOKENS`].
+    ///
+    /// Reasoning is adjusted only where it was configured: an endpoint that
+    /// was never sent a reasoning field is not sent one here either, so
+    /// strict servers keep accepting the request.
+    pub async fn send_summary(
+        &self,
+        model: &str,
+        messages: &[ChatMessage],
+        max_tokens: u32,
+    ) -> anyhow::Result<ChatResponse> {
+        let effort = match self.reasoning_effort.as_deref() {
+            Some(effort)
+                if HEAVY_REASONING_EFFORTS
+                    .contains(&effort.trim().to_ascii_lowercase().as_str()) =>
+            {
+                Some("low")
+            }
+            other => other,
+        };
+        self.send_with_reasoning(
+            model,
+            messages,
+            max_tokens.clamp(1, SUMMARY_MAX_TOKENS),
+            &[],
+            effort,
+            self.reasoning_budget_tokens
+                .map(|budget| budget.min(SUMMARY_REASONING_BUDGET_TOKENS)),
+        )
+        .await
+    }
+
+    /// The non-streaming send both call paths share: build the request for
+    /// the endpoint's API, send it, parse the response. [`LlmClient::send`]
+    /// passes the client's own reasoning settings; [`LlmClient::send_summary`]
+    /// passes the cheaper pair.
+    async fn send_with_reasoning(
+        &self,
+        model: &str,
+        messages: &[ChatMessage],
+        max_tokens: u32,
+        tools: &[Value],
+        reasoning_effort: Option<&str>,
+        reasoning_budget_tokens: Option<u32>,
+    ) -> anyhow::Result<ChatResponse> {
         match self.api {
             ApiKind::OpenAiCompletions => {
                 let body = ChatRequest {
@@ -119,8 +179,8 @@ impl LlmClient {
                     tools,
                     stream: None,
                     stream_options: None,
-                    reasoning_effort: self.reasoning_effort.as_deref(),
-                    reasoning_budget_tokens: self.reasoning_budget_tokens,
+                    reasoning_effort,
+                    reasoning_budget_tokens,
                 };
                 let (url, request) = build_request(
                     self.apply_auth(
@@ -236,6 +296,16 @@ impl LlmClient {
 
 /// The whole-response timeout used when config says nothing.
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// The summarize call's output cap: a continuation summary is short, and a
+/// large `max_tokens` is what makes a small request slow.
+const SUMMARY_MAX_TOKENS: u32 = 4096;
+/// The summarize call's thinking cap, for endpoints that budget it in tokens.
+const SUMMARY_REASONING_BUDGET_TOKENS: u32 = 512;
+/// Configured reasoning efforts worth pulling down for a summarize call.
+/// `none` and `low` are already cheap, and an unconfigured client sends
+/// neither field at all.
+const HEAVY_REASONING_EFFORTS: [&str; 4] = ["medium", "high", "xhigh", "max"];
 
 fn is_opencode_url(base_url: &str) -> bool {
     let Some((_, rest)) = base_url.split_once("://") else {
