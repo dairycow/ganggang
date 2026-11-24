@@ -49,6 +49,16 @@ The frame is themed on the gang-gang cockatoo, and the theme sets the full termi
 
 `Alt+Enter` and `Ctrl+J` work as they are. `Shift+Enter` needs tmux's extended keys and a terminal that reports modified keys: add `set -g extended-keys on` (and, if you changed it, `set -g extended-keys-format csi-u`, the default) to `~/.tmux.conf`, reload, and restart `gg`. GNOME Terminal/VTE does not report `Shift+Enter` at all; use `Alt+Enter` there.
 
+## Markdown
+
+Assistant answers render a deliberately small markdown subset; your own messages and tool output stay literal.
+
+- Fenced code blocks render on a raised band with no inline formatting inside. An unclosed fence renders as code until the reply closes it, so streaming never shows raw markers.
+- `**bold**` spans render bold; unpaired markers render plain.
+- `- ` and `* ` bullets become `• ` with their indent kept; ordered lists keep their numbers.
+- Pipe tables render as a grid with each column padded to its widest cell and aligned by the delimiter's colons (`:--` left, `--:` right, `:--:` centre). A table too wide for the transcript falls back to a bulleted list of `header: value` lines, so it never shears.
+- Everything else, including headings, links and italics, renders as typed.
+
 ## Slash commands
 
 Typing `/` opens a suggestion list above the composer: the built-ins, your [prompt templates](context-skills-prompts.md#prompt-templates), and, once `/skill:` is typed, one row per skill. `↑`/`↓` move the highlight, `Tab` completes, and `Enter` still sends exactly what you typed.

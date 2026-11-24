@@ -138,6 +138,7 @@ impl Palette {
             K::User => Style::new().fg(self.text),
             K::Assistant => Style::new().fg(self.text),
             K::Code => Style::new().fg(self.code).bg(self.surface_alt),
+            K::Table => Style::new().fg(self.text),
             K::Tool | K::ToolError => Style::new().fg(self.accent_soft),
             K::Output => Style::new().fg(self.dim).bg(self.surface_alt),
             K::Info => Style::new().fg(self.dim),

@@ -267,7 +267,7 @@ impl Transcript {
 mod markdown;
 mod render;
 mod seed;
-pub use render::{LineKind, Mark, RenderedLine};
+pub use render::{Align, LineKind, Mark, RenderedLine, TableRow};
 
 #[cfg(test)]
 mod tests;

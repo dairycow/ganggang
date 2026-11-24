@@ -22,6 +22,8 @@ pub enum LineKind {
     Assistant,
     /// Inside a fenced code block (M7.6): a band of its own, no markdown.
     Code,
+    /// A laid-out markdown table row (grid or its narrow fallback).
+    Table,
     /// A tool call line, or a `!`/`!!` shell command line.
     Tool,
     /// A tool call that failed. The line reads like a call; the glyph in
@@ -61,6 +63,25 @@ pub enum Mark {
     Bad,
 }
 
+/// Column alignment from a pipe table's delimiter row (`:--` left,
+/// `--:` right, `:--:` centre; the default is left).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Align {
+    Left,
+    Right,
+    Center,
+}
+
+/// One row of a markdown pipe table before layout. The model carries the
+/// cells; the view lays them out at the terminal's width
+/// ([`table`](super::super::table)), so nothing here needs to know it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableRow {
+    pub cells: Vec<String>,
+    pub aligns: Vec<Align>,
+    pub header: bool,
+}
+
 /// One rendered line: text plus what it is, the spans that read
 /// differently, and — for markdown — nothing else.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +93,9 @@ pub struct RenderedLine {
     /// [`wrap_line`](super::super::line::wrap_line) clips them to rows,
     /// so the view can walk a line's chars once.
     pub marks: Vec<(usize, usize, Mark)>,
+    /// A table row awaiting layout; `text` stays empty until the view
+    /// turns the run of table rows into lines at a known width.
+    pub table: Option<TableRow>,
 }
 
 impl RenderedLine {
@@ -80,6 +104,7 @@ impl RenderedLine {
             text: text.into(),
             kind,
             marks: Vec::new(),
+            table: None,
         }
     }
 
@@ -87,6 +112,12 @@ impl RenderedLine {
     /// prefix, a status glyph).
     pub fn with_marks(mut self, marks: Vec<(usize, usize, Mark)>) -> Self {
         self.marks = marks;
+        self
+    }
+
+    /// Attach a table row's structure, to be laid out by the view.
+    pub fn with_table(mut self, row: TableRow) -> Self {
+        self.table = Some(row);
         self
     }
 }

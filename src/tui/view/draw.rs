@@ -19,7 +19,8 @@ use ratatui::widgets::{Clear, Fill, Paragraph, Scrollbar, ScrollbarOrientation, 
 use super::super::composer;
 use super::super::layout::{Areas, scrollbar_area, show_scrollbar, thumb, transcript_text};
 use super::super::line::{styled_line, wrap_line};
-use super::super::transcript::RenderedLine;
+use super::super::table;
+use super::super::transcript::{RenderedLine, TableRow};
 use super::State;
 use super::welcome;
 
@@ -76,9 +77,31 @@ pub fn render(frame: &mut Frame, state: &mut State) {
     draw_popup(frame, state, areas);
 }
 
-/// The transcript's rows at a known width.
+/// The transcript's rows at a known width. A run of table rows is laid
+/// out as one table — columns need their neighbours' widths — and every
+/// other line wraps on its own.
 fn wrapped(lines: &[RenderedLine], width: usize) -> Vec<RenderedLine> {
-    lines.iter().flat_map(|l| wrap_line(l, width)).collect()
+    let mut rows = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].table.is_none() {
+            rows.extend(wrap_line(&lines[i], width));
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < lines.len() && lines[i].table.is_some() {
+            i += 1;
+        }
+        let table: Vec<TableRow> = lines[start..i]
+            .iter()
+            .filter_map(|line| line.table.clone())
+            .collect();
+        for row in table::layout(&table, width) {
+            rows.extend(wrap_line(&row, width));
+        }
+    }
+    rows
 }
 
 /// The transcript: wrapped rows, bottom-anchored, a scrollbar in the
@@ -184,4 +207,47 @@ fn draw_popup(frame: &mut Frame, state: &mut State, areas: Areas) {
         area.width as usize,
     ));
     frame.render_widget(Paragraph::new(popup), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::transcript::{Align, LineKind};
+    use super::*;
+
+    fn table_row(cells: &[&str], header: bool) -> RenderedLine {
+        RenderedLine::new("", LineKind::Table).with_table(TableRow {
+            cells: cells.iter().map(|cell| cell.to_string()).collect(),
+            aligns: vec![Align::Left, Align::Left],
+            header,
+        })
+    }
+
+    fn texts(lines: &[RenderedLine]) -> Vec<&str> {
+        lines.iter().map(|line| line.text.as_str()).collect()
+    }
+
+    #[test]
+    fn a_run_of_table_rows_is_laid_out_once_at_the_draw_width() {
+        let lines = vec![
+            RenderedLine::new("intro", LineKind::Assistant),
+            table_row(&["name", "kind"], true),
+            table_row(&["a", "b"], false),
+            RenderedLine::new("after", LineKind::Assistant),
+        ];
+        let rows = wrapped(&lines, 40);
+        assert_eq!(rows[0].text, "intro");
+        assert_eq!(rows[0].kind, LineKind::Assistant);
+        assert_eq!(rows[1].text, "name │ kind");
+        assert!(rows[2].text.contains('┼'), "a rule under the header");
+        assert_eq!(rows[3].text, "a    │ b   ");
+        assert!(rows[1..4].iter().all(|row| row.kind == LineKind::Table));
+        assert_eq!(rows[4].text, "after");
+
+        let narrow = wrapped(&lines, 10);
+        assert_eq!(
+            texts(&narrow),
+            vec!["intro", "• a", "  kind: b", "after"],
+            "a table that does not fit becomes a list"
+        );
+    }
 }

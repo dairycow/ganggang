@@ -20,6 +20,7 @@ pub mod mentions;
 pub mod reader;
 pub mod shell;
 pub mod suggest;
+pub mod table;
 pub mod term;
 pub mod theme;
 pub mod tick;

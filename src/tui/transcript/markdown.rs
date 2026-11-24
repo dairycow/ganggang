@@ -1,27 +1,42 @@
 //! Minimal markdown rendering for assistant text (spec §15, M7.6):
-//! fenced code blocks, bold spans, and list markers — nothing else,
-//! hand-rolled. Line-oriented on purpose: the transcript re-renders each
-//! frame from the block's full accumulated text, so streaming needs no
-//! incremental bookkeeping and an unterminated fence simply renders as
-//! code until the stream closes it.
+//! fenced code blocks, bold spans, list markers, and pipe tables —
+//! nothing else, hand-rolled. Line-oriented on purpose: the transcript
+//! re-renders each frame from the block's full accumulated text, so
+//! streaming needs no incremental bookkeeping and an unterminated fence
+//! simply renders as code until the stream closes it.
+//!
+//! Tables need the terminal's width to align their columns, which this
+//! pass does not have, so it emits their cells as rows for the view to
+//! lay out ([`table`](super::super::table)). Until a table's delimiter row
+//! has arrived it renders as the literal lines it is.
 
-use super::render::{LineKind, Mark, RenderedLine};
+use super::render::{Align, LineKind, Mark, RenderedLine, TableRow};
 
 /// Split assistant text into rendered lines. A line whose trimmed form
 /// starts with ``` toggles code mode (the fence line itself carries no
 /// content; an info string like ```rust is ignored). `**` pairs bold
 /// their span; an unpaired trailing marker renders plain. `- `/`* `
 /// bullets become `• ` (indent preserved); ordered markers stay typed.
+/// A header row followed by a `|---|` delimiter row becomes table rows.
 pub(super) fn lines(text: &str) -> Vec<RenderedLine> {
+    let source: Vec<&str> = text.split('\n').collect();
     let mut out = Vec::new();
     let mut in_code = false;
-    for line in text.split('\n') {
+    let mut i = 0;
+    while i < source.len() {
+        let line = source[i];
         if line.trim_start().starts_with("```") {
             in_code = !in_code;
+            i += 1;
             continue;
         }
         if in_code {
             out.push(RenderedLine::new(line, LineKind::Code));
+            i += 1;
+            continue;
+        }
+        if let Some(aligns) = table_start(&source, i) {
+            i = push_table(&source, i, aligns, &mut out);
             continue;
         }
         let displayed = bulletize(line);
@@ -31,8 +46,100 @@ pub(super) fn lines(text: &str) -> Vec<RenderedLine> {
             .map(|(start, end)| (start, end, Mark::Bold))
             .collect();
         out.push(RenderedLine::new(plain, LineKind::Assistant).with_marks(marks));
+        i += 1;
     }
     out
+}
+
+/// The alignments of the table starting at `index`, if this line is a
+/// header with a matching delimiter row below it. The header and the
+/// delimiter must agree on their column count.
+fn table_start(source: &[&str], index: usize) -> Option<Vec<Align>> {
+    let header = split_row(source.get(index)?)?;
+    let aligns = delimiter_aligns(source.get(index + 1)?)?;
+    (header.len() == aligns.len()).then_some(aligns)
+}
+
+/// Emit the header and every data row of the table at `start`, returning
+/// the index after it. Rows end at a blank line, a fence, or a line with
+/// no pipe.
+fn push_table(
+    source: &[&str],
+    start: usize,
+    aligns: Vec<Align>,
+    out: &mut Vec<RenderedLine>,
+) -> usize {
+    out.push(table_row(
+        split_row(source[start]).unwrap_or_default(),
+        &aligns,
+        true,
+    ));
+    let mut i = start + 2;
+    while i < source.len() {
+        let line = source[i];
+        if line.trim().is_empty() || line.trim_start().starts_with("```") {
+            break;
+        }
+        let Some(cells) = split_row(line) else {
+            break;
+        };
+        out.push(table_row(cells, &aligns, false));
+        i += 1;
+    }
+    i
+}
+
+/// One table row, padded or truncated to the delimiter's column count so
+/// every row of a table lines up.
+fn table_row(mut cells: Vec<String>, aligns: &[Align], header: bool) -> RenderedLine {
+    cells.resize(aligns.len(), String::new());
+    // Emphasis markers come off as they do in prose; a cell is one line,
+    // so the layout applies the bold to its header row only.
+    let cells = cells.into_iter().map(|cell| strip_bold(&cell).0).collect();
+    RenderedLine::new(String::new(), LineKind::Table).with_table(TableRow {
+        cells,
+        aligns: aligns.to_vec(),
+        header,
+    })
+}
+
+/// The cells of a pipe row, or `None` when the line is not a row at all
+/// (no pipe). Outer pipes are optional; whitespace around cells is not
+/// content. Escaped pipes are not supported.
+fn split_row(line: &str) -> Option<Vec<String>> {
+    if !line.contains('|') {
+        return None;
+    }
+    let trimmed = line.trim();
+    let trimmed = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let trimmed = trimmed.strip_suffix('|').unwrap_or(trimmed);
+    Some(
+        trimmed
+            .split('|')
+            .map(|cell| cell.trim().to_string())
+            .collect(),
+    )
+}
+
+/// The alignments a delimiter row declares, or `None` when the line is
+/// not one. Every cell must be dashes with optional alignment colons.
+fn delimiter_aligns(line: &str) -> Option<Vec<Align>> {
+    let cells = split_row(line)?;
+    let mut aligns = Vec::with_capacity(cells.len());
+    for cell in cells {
+        let left = cell.starts_with(':');
+        let right = cell.ends_with(':');
+        let body = cell.trim_start_matches(':').trim_end_matches(':');
+        if body.is_empty() || !body.chars().all(|ch| ch == '-') {
+            return None;
+        }
+        aligns.push(match (left, right) {
+            (true, true) => Align::Center,
+            (_, true) => Align::Right,
+            _ => Align::Left,
+        });
+    }
+    Some(aligns)
 }
 
 /// `- ` / `* ` after leading whitespace becomes `• `. A `* ` marker must
@@ -75,95 +182,4 @@ fn strip_bold(line: &str) -> (String, Vec<(usize, usize)>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// (text, kind, marks) per rendered line — plain data, comparable.
-    type Flat = Vec<(String, LineKind, Vec<(usize, usize, Mark)>)>;
-
-    fn rendered(text: &str) -> Flat {
-        lines(text)
-            .into_iter()
-            .map(|l| (l.text, l.kind, l.marks))
-            .collect()
-    }
-
-    /// `(start, end)` as a bold mark, the shape the tests read.
-    fn b(start: usize, end: usize) -> (usize, usize, Mark) {
-        (start, end, Mark::Bold)
-    }
-
-    #[test]
-    fn fenced_code_renders_as_code_and_fence_lines_drop() {
-        let out = rendered("before\n```rust\nfn a() {}\n**not bold**\n```\nafter");
-        assert_eq!(
-            out,
-            vec![
-                ("before".into(), LineKind::Assistant, vec![]),
-                ("fn a() {}".into(), LineKind::Code, vec![]),
-                // Inside a fence, markers are literal — no stripping.
-                ("**not bold**".into(), LineKind::Code, vec![]),
-                ("after".into(), LineKind::Assistant, vec![]),
-            ]
-        );
-    }
-
-    #[test]
-    fn unterminated_fence_renders_the_rest_as_code() {
-        let out = rendered("intro\n```\ncode so far");
-        assert_eq!(out[0].0, "intro");
-        assert_eq!(out[1], ("code so far".into(), LineKind::Code, vec![]));
-    }
-
-    #[test]
-    fn bold_pairs_mark_ranges_and_unpaired_tails_stay_plain() {
-        let (text, bold) = strip_bold("**Note:** plain **tail**");
-        assert_eq!(text, "Note: plain tail");
-        assert_eq!(bold, vec![(0, 5), (12, 16)]);
-
-        let (text, bold) = strip_bold("a**unpaired");
-        assert_eq!(text, "aunpaired");
-        assert!(bold.is_empty(), "no closing marker: no bold");
-
-        let (text, bold) = strip_bold("no markers");
-        assert_eq!(text, "no markers");
-        assert!(bold.is_empty());
-
-        let (text, bold) = strip_bold("****");
-        assert_eq!(text, "");
-        assert!(bold.is_empty(), "empty bold span records nothing");
-    }
-
-    #[test]
-    fn bullets_become_dots_with_indent_and_ordered_stay_typed() {
-        assert_eq!(bulletize("- one"), "• one");
-        assert_eq!(bulletize("  * two"), "  • two");
-        // A bold span is not a bullet; an ordered list is already fine.
-        assert_eq!(bulletize("**bold** line"), "**bold** line");
-        assert_eq!(bulletize("1. three"), "1. three");
-        assert_eq!(bulletize("no list"), "no list");
-    }
-
-    #[test]
-    fn a_full_assistant_block_renders_through_the_pass() {
-        let out = rendered("- item\n  - nested\n1. first\n**key:** value");
-        assert_eq!(
-            out,
-            vec![
-                ("• item".into(), LineKind::Assistant, vec![]),
-                ("  • nested".into(), LineKind::Assistant, vec![]),
-                ("1. first".into(), LineKind::Assistant, vec![]),
-                ("key: value".into(), LineKind::Assistant, vec![b(0, 4)]),
-            ]
-        );
-    }
-
-    #[test]
-    fn an_extremely_long_fence_renders_without_panicking() {
-        let fence = format!("```\n{}", "line\n".repeat(10_000));
-        let out = lines(&fence);
-        // 10_000 "line" rows plus the empty tail after the last newline.
-        assert_eq!(out.len(), 10_001);
-        assert!(out.iter().all(|l| l.kind == LineKind::Code));
-    }
-}
+mod tests;
