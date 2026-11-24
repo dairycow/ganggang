@@ -1,6 +1,6 @@
 [package]
 name = "ganggang"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "A small, sharp agentic harness in Rust: one agent loop, tools, and a TUI."
 license = "MIT"
@@ -10,7 +10,7 @@ homepage = "https://github.com/dairycow/ganggang"
 documentation = "https://dairycow.github.io/ganggang/"
 keywords = ["agent", "ai", "cli", "tui"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = [".cargo/", ".claude/", ".github/", ".review-*.md", "AGENTS.md", ".agents/", "docs/", "TASKS.md", "GAP-ANALYSIS.md"]
+exclude = [".cargo/", ".claude/", ".github/", ".review-*.md", "AGENTS.md", ".agents/", "docs/", "scripts/", "TASKS.md", "GAP-ANALYSIS.md"]
 
 [[bin]]
 name = "gg"
