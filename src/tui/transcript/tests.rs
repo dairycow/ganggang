@@ -93,8 +93,8 @@ fn tool_round_trip_collapses_calls_and_marks_errors() {
         vec![
             "you │ fix the test",
             "checking",
-            "▸ read {\"path\":\"Cargo.toml\"} ✓",
-            "▸ bash {\"command\":\"cargo test\"} ✗",
+            "▸ read Cargo.toml ✓",
+            "▸ bash cargo test ✗",
             "one test fails",
         ]
     );
@@ -111,7 +111,7 @@ fn an_unfinished_call_shows_no_status() {
         id: "c1".into(),
         args: json!({"command": "sleep 5"}),
     }]);
-    assert_eq!(texts(&t), vec!["▸ bash {\"command\":\"sleep 5\"}"]);
+    assert_eq!(texts(&t), vec!["▸ bash sleep 5"]);
 }
 
 /// The abort script: warnings and the marker render dim.
@@ -200,31 +200,16 @@ fn toggle_expand_cycles_last_collapsed_then_collapses_all() {
     ]);
 
     t.toggle_expand(); // last collapsed = c2
-    assert_eq!(
-        texts(&t),
-        vec![
-            "▸ read {\"path\":\"a\"} ✓",
-            "▾ read {\"path\":\"b\"} ✓",
-            "  second"
-        ]
-    );
+    assert_eq!(texts(&t), vec!["▸ read a ✓", "▾ read b ✓", "  second"]);
 
     t.toggle_expand(); // now c1
     assert_eq!(
         texts(&t),
-        vec![
-            "▾ read {\"path\":\"a\"} ✓",
-            "  first",
-            "▾ read {\"path\":\"b\"} ✓",
-            "  second"
-        ]
+        vec!["▾ read a ✓", "  first", "▾ read b ✓", "  second"]
     );
 
     t.toggle_expand(); // all expanded → collapse all
-    assert_eq!(
-        texts(&t),
-        vec!["▸ read {\"path\":\"a\"} ✓", "▸ read {\"path\":\"b\"} ✓"]
-    );
+    assert_eq!(texts(&t), vec!["▸ read a ✓", "▸ read b ✓"]);
 }
 
 /// Expanded output is capped at 30 lines with a visible marker.
@@ -256,19 +241,20 @@ fn expanded_output_caps_at_30_lines_with_a_marker() {
     assert_eq!(lines[30], "  line 29");
 }
 
-/// Long args collapse to one ~60-char line with an ellipsis.
+/// Long args collapse to one line capped at 100 chars, marked with an
+/// ellipsis, so a call never eats the transcript with its arguments.
 #[test]
 fn long_args_collapse_with_an_ellipsis() {
-    let long = "x".repeat(200);
+    let long = format!("echo {}", "x".repeat(200));
     let t = script(&[AgentEvent::ToolCallStarted {
-        name: "write".into(),
+        name: "bash".into(),
         id: "c1".into(),
-        args: json!({"content": long}),
+        args: json!({"command": long}),
     }]);
     let rendered = texts(&t)[0].clone();
-    assert!(rendered.starts_with("▸ write {\"content\":\"xxxx"));
+    assert!(rendered.starts_with("▸ bash echo xxxx"));
     assert!(rendered.ends_with('…'));
-    assert!(rendered.chars().count() < 80, "{rendered}");
+    assert_eq!(rendered.chars().count(), "▸ bash ".chars().count() + 101);
 }
 
 #[test]

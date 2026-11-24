@@ -1,10 +1,13 @@
-//! One tool call's arguments, made legible for the `▸ name args` progress
-//! line: the useful field per tool rather than a wall of JSON, collapsed
-//! to one line and capped. The fallback is the raw JSON.
+//! One tool call's arguments, made legible for a `▸ name args` line: the
+//! useful field per tool rather than a wall of JSON, collapsed to one line
+//! and capped. The fallback is the raw JSON.
+//!
+//! Both surfaces that show a call — the TUI transcript and print mode —
+//! read this, so a `read` call reads the same wherever it is drawn.
 
-use super::one_line;
-
-pub(super) fn format_tool_args(name: &str, args: &serde_json::Value) -> String {
+/// The useful part of `args` for `name`, flattened to one line and capped
+/// at `cap` chars with an ellipsis.
+pub(crate) fn format_tool_args(name: &str, args: &serde_json::Value, cap: usize) -> String {
     let raw = match name {
         "bash" => match args["command"].as_str() {
             Some(cmd) => match args["timeout_secs"].as_u64() {
@@ -72,5 +75,63 @@ pub(super) fn format_tool_args(name: &str, args: &serde_json::Value) -> String {
         }
         _ => args.to_string(),
     };
-    one_line(&raw, 180)
+    one_line(&raw, cap)
+}
+
+/// Collapse to one line and cap the length, marking a cut with `…`.
+fn one_line(text: &str, cap: usize) -> String {
+    let flat: String = text
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .collect();
+    if flat.chars().count() <= cap {
+        flat
+    } else {
+        let cut: String = flat.chars().take(cap).collect();
+        format!("{cut}…")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn each_tool_reads_as_its_useful_field() {
+        assert_eq!(
+            format_tool_args("bash", &json!({"command": "cargo test"}), 100),
+            "cargo test"
+        );
+        assert_eq!(
+            format_tool_args("read", &json!({"path": "src/main.rs", "offset": 10}), 100),
+            "src/main.rs:10"
+        );
+        assert_eq!(
+            format_tool_args("edit", &json!({"path": "a.rs", "edits": [{}, {}]}), 100),
+            "a.rs (2 edit(s))"
+        );
+        assert_eq!(
+            format_tool_args("grep", &json!({"pattern": "fn main", "path": "src"}), 100),
+            "\"fn main\" in src"
+        );
+        assert_eq!(format_tool_args("ls", &json!({}), 100), ".");
+    }
+
+    #[test]
+    fn long_arguments_cut_with_an_ellipsis() {
+        let long = "x".repeat(200);
+        let rendered = format_tool_args("bash", &json!({"command": long}), 60);
+        assert!(rendered.starts_with("xxxx"));
+        assert!(rendered.ends_with('…'));
+        assert_eq!(rendered.chars().count(), 61);
+    }
+
+    #[test]
+    fn unknown_tools_fall_back_to_raw_json_on_one_line() {
+        assert_eq!(
+            format_tool_args("echo", &json!({"text": "first"}), 100),
+            "{\"text\":\"first\"}"
+        );
+    }
 }

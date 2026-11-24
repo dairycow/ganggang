@@ -259,17 +259,3 @@ fn capped_output(output: &str, cap: usize) -> Vec<RenderedLine> {
     }
     lines
 }
-
-/// Collapse to one line and cap the length, marking a cut with `…`.
-pub(super) fn one_line(text: &str, cap: usize) -> String {
-    let flat: String = text
-        .chars()
-        .map(|c| if c.is_whitespace() { ' ' } else { c })
-        .collect();
-    if flat.chars().count() <= cap {
-        flat
-    } else {
-        let cut: String = flat.chars().take(cap).collect();
-        format!("{cut}…")
-    }
-}

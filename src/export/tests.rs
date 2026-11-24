@@ -137,6 +137,10 @@ fn splices_results_into_their_calls_with_status() {
         .nth(1)
         .expect("read call rendered");
     assert!(
+        html.contains("<summary>▸ read x</summary>"),
+        "the summary shows the path, not its JSON: {html}"
+    );
+    assert!(
         call_block.contains("→ file body</pre></details>"),
         "result rides inside its call: {call_block}"
     );

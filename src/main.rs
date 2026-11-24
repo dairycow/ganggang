@@ -13,6 +13,7 @@ mod json_mode;
 mod llm;
 mod printers;
 mod prompts;
+mod tool_args;
 mod tui;
 
 use std::sync::Arc;

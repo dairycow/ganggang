@@ -8,10 +8,11 @@
 //! a terminal.
 
 use crate::events::AgentEvent;
+use crate::tool_args::format_tool_args;
 
-mod args;
-
-use args::format_tool_args;
+/// Args shown on a print-mode `▸ name args` line: long enough for a command
+/// to read, capped so progress stays line-oriented.
+const ARGS_CHARS: usize = 180;
 
 /// Spinner frames for streamed text (§15: progress to stderr only).
 const SPIN_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -199,7 +200,10 @@ impl Printer {
             }
             AgentEvent::ToolCallStarted { name, args, .. } => {
                 self.tool_calls += 1;
-                vec![format!("▸ {name} {}", format_tool_args(&name, &args))]
+                vec![format!(
+                    "▸ {name} {}",
+                    format_tool_args(&name, &args, ARGS_CHARS)
+                )]
             }
             AgentEvent::ToolCallFinished {
                 name,

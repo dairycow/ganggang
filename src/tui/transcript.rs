@@ -4,7 +4,7 @@
 //! dependency — rendering to lines is data, styling happens in the view.
 
 use crate::events::AgentEvent;
-use render::one_line;
+use crate::tool_args::format_tool_args;
 
 /// Max lines of tool output shown when a call is expanded.
 const EXPAND_LINES: usize = 30;
@@ -12,6 +12,9 @@ const EXPAND_LINES: usize = 30;
 const SHELL_LINES: usize = 20;
 /// Max lines of thinking shown per block when thinking display is on.
 const THINKING_LINES: usize = 30;
+/// Max chars of a call's arguments on its one transcript line. Long
+/// arguments wrap otherwise; the cut is marked with `…`.
+const ARGS_CHARS: usize = 100;
 
 #[derive(Debug, Default)]
 pub struct Transcript {
@@ -182,7 +185,7 @@ impl Transcript {
                 self.blocks.push(Block::ToolCall(ToolCall {
                     name: name.clone(),
                     id: id.clone(),
-                    args_display: one_line(&args.to_string(), 60),
+                    args_display: format_tool_args(name, args, ARGS_CHARS),
                     output: None,
                     is_error: false,
                     expanded: false,

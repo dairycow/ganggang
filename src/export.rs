@@ -12,6 +12,11 @@ use anyhow::{Context, bail};
 
 use crate::agent::session::io::{self, SessionHeader};
 use crate::agent::session::{Entry, Message, Role};
+use crate::tool_args::format_tool_args;
+
+/// Args shown in a call's summary line: the export keeps the useful field,
+/// not the raw JSON, and cuts long ones.
+const ARGS_CHARS: usize = 180;
 
 /// Resolve what `--export` was pointed at: an existing file path (as
 /// given) wins; otherwise the spec is a session id or unique id prefix
@@ -173,7 +178,7 @@ pub fn render_html(header: &SessionHeader, entries: &[Entry]) -> String {
                             "<details class=\"tool\"><summary>▸ {name} {args}\
                              {error_note}</summary>",
                             name = esc(&call.name),
-                            args = esc(&call.args.to_string()),
+                            args = esc(&format_tool_args(&call.name, &call.args, ARGS_CHARS)),
                         ));
                         if let Some(result) = results.get(call.id.as_str()) {
                             let status = if result.is_error { " ✗" } else { "" };

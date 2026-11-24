@@ -42,7 +42,7 @@ The frame is themed on the gang-gang cockatoo, and the theme sets the full termi
 
 - **Composer**: a rounded box titled `compose`, one to eight text rows. It grows with the draft and then scrolls inside itself so the cursor stays visible; its border turns orange-red while a run is in flight and scarlet while one is stopping. The cursor's column is counted in characters, so a wide glyph (CJK, emoji) can leave it a cell left of where the terminal draws it.
 - **Footer**: one row of fields: `gg`, the directory, the model, `↑in ↓out`, `ctx N%` (gold past 60%, red past 85%), the throughput figures when the backend reports them, the `--watch` state, and the status: `○ ready`, a turning spinner and `working`, or `stopping…`.
-- **Transcript**: a scrollbar appears only when the content overflows, in a dedicated column when content overflows. Empty sessions display a welcome block.
+- **Transcript**: tool calls collapse to one line: `▸ name` and the useful argument (a command, a path, a search pattern), cut with `…` past 100 characters; `Ctrl+O` expands a call's output. A scrollbar appears only when the content overflows, in a dedicated column. Empty sessions display a welcome block.
 - **Mouse**: `gg` turns on mouse reporting while it runs so the wheel can scroll, handles scroll-wheel events and ignores clicks and drags, and turns it off when it exits, when it panics, and while `Ctrl+G` opens your editor. To select text with the terminal's own selection, hold `Shift` while dragging.
 
 ### tmux
