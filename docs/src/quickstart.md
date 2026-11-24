@@ -1,4 +1,4 @@
-# Quick Start
+# Quick start
 
 ## Start the TUI
 
@@ -27,14 +27,14 @@ git diff | gg -p -     # '-' reads the prompt from stdin
 
 Progress goes to stderr, the final answer to stdout, so it pipes cleanly.
 
-## Pick up where you left off
+## Resume a session
 
 ```sh
 gg -c                  # continue the newest session for this directory
 gg --resume 3fa9       # a specific session, by id or prefix
 ```
 
-In the TUI, `/new` and `/resume` do the same. See [Sessions & Compaction](guide/sessions-compaction.md).
+In the TUI, `/new` and `/resume` do the same. See [Sessions and compaction](guide/sessions-compaction.md).
 
 ## Switch models
 
@@ -43,4 +43,4 @@ gg -P deepseek
 gg -m opencode-go/claude-haiku-5-5 -p "summarise this repo"
 ```
 
-In the TUI, `/model` lists models and `/model <n|provider|provider/model>` switches. Next: [Configuration & Providers](guide/configuration.md).
+In the TUI, `/model` lists models and `/model <n|provider|provider/model>` switches. Next: [Configuration and providers](guide/configuration.md).

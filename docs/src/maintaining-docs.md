@@ -1,10 +1,10 @@
-# Keeping Docs Up to Date
+# Keeping docs up to date
 
-ganggang moves fast, so documentation is enforced by the build rather than by memory. There are four layers.
+Documentation accuracy is enforced by automated checks in four layers.
 
 ## 1. Generated reference pages
 
-Everything under [Reference](reference/cli.md) is rendered from the code: the clap argument tree, the built-in provider table, the tool registry (names, descriptions, JSON schemas) and the slash-command catalogue. Nobody edits these by hand.
+Everything under [Reference](reference/cli.md) is rendered from the code: the clap argument tree, the built-in provider table, the tool registry (names, descriptions, JSON schemas) and the slash-command catalogue. Do not edit these files by hand.
 
 ```sh
 ./scripts/sync-docs.sh                 # regenerate, verify, build the book if mdbook is installed
@@ -18,7 +18,7 @@ A plain `cargo test` **fails** when a generated page is stale, with a message na
 `src/doc_sync/contracts.rs` ties the hand-written pages to the code:
 
 - every `GG_*` variable in the source and every provider key variable appears in [Configuration](guide/configuration.md);
-- every hook event, every JSON-stream event type and every TUI key action must be named in its page. The tests use exhaustive `match`es, so adding an enum variant is a compile error until it is covered;
+- every hook event, every JSON-stream event type and every TUI key action must be named in its page. The tests use exhaustive `match` statements, so adding an enum variant is a compile error until it is covered;
 - every ` ```toml ` example tagged `# ~/.gg/config.toml` or `# ~/.gg/hooks.toml` is parsed and validated by the real loaders;
 - every page is listed in `SUMMARY.md` and every relative link resolves;
 - `Cargo.toml` and the README point at the published guide.
@@ -40,6 +40,6 @@ The guide tracks `main`; crates.io tracks releases. Before `cargo publish`:
 3. Skim the README and this guide for anything newer than the release notes.
 4. `cargo publish --dry-run`, then `cargo publish`, then tag the release.
 
-`Cargo.toml` already carries `documentation = "https://dairycow.github.io/ganggang/"`, so each published version links to this guide from its crates.io page. `docs/`, `.github/` and `AGENTS.md` are excluded from the published package.
+`Cargo.toml` already carries `documentation = "https://dairycow.github.io/ganggang/"`, so each published version links to this guide from its crates.io page. `docs/`, `.github/`, `.agents/` and `AGENTS.md` are excluded from the published package.
 
 Contributors and coding agents get the same instructions from `AGENTS.md` at the repository root. User-facing prose follows `.agents/skills/style-guide/SKILL.md` (Australian English, no em dashes, no agentic filler), and visual surfaces follow `.agents/skills/gg-branding/SKILL.md`.

@@ -24,7 +24,7 @@ pub(super) fn cli_reference() -> String {
     let mut cmd = crate::Cli::command().term_width(88);
     let usage = cmd.render_help().to_string();
     let mut out = format!(
-        "{HEADER}\n# CLI Reference\n\nEvery `gg` flag, generated from the argument parser.\n\n"
+        "{HEADER}\n# CLI reference\n\nEvery `gg` flag, generated from the argument parser.\n\n"
     );
     out.push_str("## Help output\n\n```text\n");
     out.push_str(usage.trim_end());
@@ -89,7 +89,7 @@ pub(super) fn cli_reference() -> String {
 pub(super) fn providers_reference() -> String {
     let providers = crate::config::providers::builtin_providers();
     let mut out = format!(
-        "{HEADER}\n# Providers & Models\n\nBuilt-in provider presets, generated from the provider table. `zai-coding-plan` is an alias for `glm-coding-plan`. Custom providers are covered in [Configuration](../guide/configuration.md).\n\n"
+        "{HEADER}\n# Providers and models\n\nBuilt-in provider presets, generated from the provider table. `zai-coding-plan` is an alias for `glm-coding-plan`. Custom providers are covered in [Configuration](../guide/configuration.md).\n\n"
     );
     out.push_str("| Provider | Default model | Wire API | API key variable | Base URL | Max tokens | Context window |\n|---|---|---|---|---|---|---|\n");
     for p in providers.values() {
@@ -141,7 +141,7 @@ fn schema_type(prop: &serde_json::Value) -> String {
 pub(super) fn tools_reference() -> String {
     let registry = crate::agent::tools::default_registry(std::path::PathBuf::from("."), 30);
     let mut out = format!(
-        "{HEADER}\n# Built-in Tools\n\nThe tool surface the model sees, generated from the registry (advertisement order). Behaviour and limits are explained in [Tools](../guide/tools.md).\n\n"
+        "{HEADER}\n# Built-in tools\n\nThe tool surface the model sees, generated from the registry (advertisement order). Behaviour and limits are explained in [Tools](../guide/tools.md).\n\n"
     );
     out.push_str("| Tool | Description |\n|---|---|\n");
     for tool in registry.tools() {
@@ -184,7 +184,7 @@ pub(super) fn tools_reference() -> String {
 
 pub(super) fn commands_reference() -> String {
     let mut out = format!(
-        "{HEADER}\n# TUI Slash Commands\n\nGenerated from the command catalogue that drives the `/` suggestion popup.\n\n"
+        "{HEADER}\n# TUI slash commands\n\nGenerated from the command catalogue that drives the `/` suggestion popup.\n\n"
     );
     out.push_str("| Command | Arguments | Description |\n|---|---|---|\n");
     for (name, args, description) in crate::tui::suggest::BUILTINS {

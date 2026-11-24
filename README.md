@@ -1,8 +1,8 @@
 # ganggang
 
-A small, sharp agentic harness in Rust. One agent loop, seven tools, and a terminal UI, modelled on [pi](https://github.com/earendil-works/pi) and built to be read.
+A small, sharp agentic harness in Rust. One agent loop, seven tools, and a terminal UI, modelled on [pi](https://github.com/earendil-works/pi).
 
-**[Read the User Guide](https://dairycow.github.io/ganggang/)**
+**[Read the user guide](https://dairycow.github.io/ganggang/)**
 
 `gg` defaults to a local [Strata](https://github.com/Niko1221/Strata) server: no cloud, no accounts, no telemetry. It also speaks OpenAI Chat Completions and Anthropic Messages endpoints, with built-in provider presets and custom `[providers.<name>]` configs.
 
@@ -20,7 +20,7 @@ cargo build --release
 ./target/release/gg -p "…"     # one-shot print mode
 ```
 
-Backend: start Strata and check it answers.
+Start Strata and verify its health endpoint:
 
 ```sh
 strata launch
@@ -33,11 +33,11 @@ curl -s 127.0.0.1:8080/health
 - **Tools**: `read`, `bash`, `edit`, `write`, plus `grep`, `find` and `ls` for search. Every truncation is visible in the output, and tool failures are returned to the model as values rather than crashing the run.
 - **Skills**: drop an Agent Skills `SKILL.md` directory into `~/.agents/skills/` or `.agents/skills/`. Names and descriptions are advertised in the system prompt; the model reads the instructions when a task matches. `/skill:<name>` forces one.
 - **Prompt templates**: `~/.gg/prompts/*.md` (frontmatter `name` and `description`) become `/name` editor drafts. `/prompts` lists them.
-- **Hooks**: `~/.gg/hooks.toml` runs one-shot `pre_tool`, `post_tool` and `run_end` shell commands with JSON on stdin; a `pre_tool` hook may deny. Failures warn and never abort. `/hooks` lists; `--no-hooks` skips.
+- **Hooks**: `~/.gg/hooks.toml` runs one-shot `pre_tool`, `post_tool` and `run_end` shell commands with JSON on stdin; a `pre_tool` hook may deny. Hook failures log a warning and do not abort the run. `/hooks` lists; `--no-hooks` skips.
 - **`@file` mentions**: `@src/main.rs` in the editor attaches the file's content to your message (text files, visible 50 KiB cap); `user@host` stays literal.
-- **Context files**: `~/.gg/AGENTS.md` plus `AGENTS.md` from the repo root to the cwd ride along as context.
+- **Context files**: `~/.gg/AGENTS.md` plus `AGENTS.md` from the repo root to the cwd are loaded into the system prompt.
 - **Sessions**: append-only JSONL under `~/.gg/sessions/`. `gg -c` continues the newest for the directory; `--resume <id|prefix>` picks one; `--session-file <path>` targets an exact file; `--no-session` opts out. Torn tails and interrupted tool calls are repaired on resume.
-- **Compaction**: when context nears the window, older history is summarised in one extra call and kept as a `Compaction` entry. Raw history is never destroyed. `/compact [instructions]` runs it on demand.
+- **Compaction**: when context nears the window, older history is summarised in one extra call and kept as a `Compaction` entry. Original history stays in the file. `/compact [instructions]` runs it on demand.
 - **Interfaces**: fullscreen TUI with markdown rendering and thinking behind Ctrl+T, pipeable print mode (`-p`), JSON mode (`--mode json`), and `--export <session> [out.html]` for a self-contained HTML transcript.
 
 ## Configuration
@@ -65,7 +65,7 @@ model = "deepseek-flash"
 
 ## Security
 
-No permission gating: like pi, ganggang does not ask before tool calls. The `bash` tool runs with your user permissions in the session's working directory, with no sandbox and no approval prompt. Run it where the bash tool is allowed to be (a container or VM for untrusted work). Hooks run with the same permissions and are equally unsandboxed; a `pre_tool` deny is workflow policy, not a security boundary.
+Like pi, `gg` does not prompt for tool permissions. The `bash` tool and hooks run unsandboxed with your user permissions in the working directory. Run `gg` in a container or VM for untrusted work. A `pre_tool` deny is workflow policy, not a security boundary.
 
 ## Development
 
