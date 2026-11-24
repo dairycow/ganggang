@@ -161,6 +161,51 @@ async fn negative_offset_larger_than_the_file_reads_it_all() {
 }
 
 #[tokio::test]
+async fn negative_offset_byte_cap_keeps_the_last_lines_and_reports_true_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let pad = "x".repeat(380);
+    let body: String = (1..=200).map(|i| format!("{i:03} {pad}\n")).collect();
+    std::fs::write(dir.path().join("f.txt"), body).unwrap();
+
+    let r = run(
+        dir.path(),
+        serde_json::json!({"path": "f.txt", "offset": -200}),
+    )
+    .await;
+    assert!(!r.is_error, "{}", r.output);
+    assert!(r.output.contains("200| "), "the final line must survive");
+    assert!(
+        r.output.len() < MAX_BYTES + 200,
+        "byte capped: {}",
+        r.output.len()
+    );
+
+    let lines: Vec<&str> = r.output.lines().collect();
+    let note = lines.last().copied().unwrap();
+    let content = &lines[..lines.len() - 1];
+    let first = content[0].split('|').next().unwrap().trim();
+    let last = content.last().unwrap().split('|').next().unwrap().trim();
+    assert_eq!(
+        note,
+        format!(
+            "[truncated: byte cap {MAX_BYTES} reached; showing last {} lines ({first}-{last})]",
+            content.len()
+        )
+    );
+}
+
+#[tokio::test]
+async fn negative_offset_on_endless_file_returns_scan_cap_error() {
+    let r = run(
+        std::path::Path::new("/dev"),
+        serde_json::json!({"path": "zero", "offset": -10}),
+    )
+    .await;
+    assert!(r.is_error);
+    assert!(r.output.contains("scan cap"), "{}", r.output);
+}
+
+#[tokio::test]
 async fn missing_file_is_an_error_result() {
     let dir = tempfile::tempdir().unwrap();
     let r = run(dir.path(), serde_json::json!({"path": "nope.txt"})).await;

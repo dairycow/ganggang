@@ -69,6 +69,13 @@ impl<'a> Search<'a> {
         self.match_count >= self.cap || self.byte_capped
     }
 
+    #[cfg(test)]
+    /// Force the state a walk reaches when its first output line did not
+    /// fit, so `report` can be tested without a 16 KiB line.
+    pub(super) fn force_byte_capped(&mut self) {
+        self.byte_capped = true;
+    }
+
     pub(super) fn stopped(&mut self) -> bool {
         if self.cancel.is_cancelled() {
             self.cancelled = true;
@@ -105,7 +112,7 @@ impl<'a> Search<'a> {
                 self.files_searched
             ));
         }
-        if out.is_empty() {
+        if out.is_empty() && !self.byte_capped {
             out.push_str(&format!(
                 "(no matches in {} file(s))\n",
                 self.files_searched

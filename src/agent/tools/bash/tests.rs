@@ -212,6 +212,21 @@ async fn long_multibyte_output_stays_valid_utf8() {
     assert!(r.output.len() < OUTPUT_CAP + 100, "{}", r.output.len());
 }
 
+#[test]
+fn interior_non_utf8_bytes_do_not_truncate_head_or_tail() {
+    let head = b"HEAD_START\xffHEAD_AFTER";
+    assert!(
+        prefix_string(head).contains("HEAD_AFTER"),
+        "valid output after an interior bad byte must survive"
+    );
+
+    let tail = b"TAIL_BEFORE\xffTAIL_END";
+    assert!(
+        suffix_string(tail).contains("TAIL_END"),
+        "valid output after an interior bad byte must survive"
+    );
+}
+
 #[tokio::test]
 async fn an_endless_stream_is_bounded_and_reports_partial_output() {
     // /dev/zero never EOFs: the capped read loop keeps 10 KiB and

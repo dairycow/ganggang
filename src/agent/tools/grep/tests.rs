@@ -153,6 +153,28 @@ async fn output_is_capped_at_16_kib_with_a_visible_notice() {
     );
 }
 
+#[test]
+fn a_byte_capped_first_file_does_not_claim_no_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let cancel = Cancel::none();
+    let mut search = super::search::Search::new(
+        dir.path(),
+        regex::Regex::new("needle").unwrap(),
+        None,
+        0,
+        50,
+        false,
+        &cancel,
+    );
+    // The state a walk reaches when its first output line did not fit.
+    search.force_byte_capped();
+
+    let r = search.report();
+    assert!(!r.is_error, "{}", r.output);
+    assert!(!r.output.contains("(no matches"), "{}", r.output);
+    assert!(r.output.contains("output capped"), "{}", r.output);
+}
+
 #[tokio::test]
 async fn files_only_reports_each_file_with_its_match_count() {
     let dir = tempfile::tempdir().unwrap();

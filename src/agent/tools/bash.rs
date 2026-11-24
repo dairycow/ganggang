@@ -99,29 +99,34 @@ impl Capture {
     }
 }
 
-/// The longest valid UTF-8 prefix of `bytes`.
+/// The longest valid UTF-8 prefix of `bytes`, trimming only an
+/// incomplete character split at the end.
 fn prefix_string(bytes: &[u8]) -> String {
-    match std::str::from_utf8(bytes) {
-        Ok(s) => s.to_string(),
-        Err(e) => String::from_utf8_lossy(&bytes[..e.valid_up_to()]).into_owned(),
+    let mut bytes = bytes;
+    if !bytes.is_empty() {
+        let mut start = bytes.len() - 1;
+        let floor = start.saturating_sub(3);
+        while start > floor && (bytes[start] & 0xC0) == 0x80 {
+            start -= 1;
+        }
+        if let Err(e) = std::str::from_utf8(&bytes[start..])
+            && e.valid_up_to() == 0
+            && e.error_len().is_none()
+        {
+            bytes = &bytes[..start];
+        }
     }
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 /// The longest valid UTF-8 suffix of `bytes`, dropping a leading partial
 /// character left by the split.
 fn suffix_string(bytes: &[u8]) -> String {
     let mut skip = 0;
-    while skip < bytes.len() {
-        match std::str::from_utf8(&bytes[skip..]) {
-            Ok(s) => return s.to_string(),
-            Err(e) if e.valid_up_to() == 0 => skip += 1,
-            Err(e) => {
-                let end = skip + e.valid_up_to();
-                return String::from_utf8_lossy(&bytes[skip..end]).into_owned();
-            }
-        }
+    while skip < bytes.len().min(3) && (bytes[skip] & 0xC0) == 0x80 {
+        skip += 1;
     }
-    String::new()
+    String::from_utf8_lossy(&bytes[skip..]).into_owned()
 }
 
 /// Render the captured bytes: everything when it fits, otherwise the head,
