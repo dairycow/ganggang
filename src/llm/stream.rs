@@ -30,45 +30,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
-use serde::Deserialize;
 
 use super::types::{ChatMessage, ChatResponse, Choice, Timings, ToolCall, Usage};
+
+mod chunk;
+
+use chunk::StreamChunk;
 
 /// One SSE chunk, permissive like every wire type (§8): `choices` is empty
 /// on the usage-only final chunk, `delta` can be `{}` on the chunk that
 /// carries `finish_reason`.
-#[derive(Debug, Deserialize)]
-struct StreamChunk {
-    #[serde(default)]
-    choices: Vec<StreamChoice>,
-    #[serde(default)]
-    usage: Option<Usage>,
-    #[serde(default)]
-    timings: Option<Timings>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamChoice {
-    #[serde(default)]
-    index: u32,
-    #[serde(default)]
-    delta: StreamDelta,
-    #[serde(default)]
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct StreamDelta {
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    reasoning_content: Option<String>,
-    #[serde(default)]
-    reasoning: Option<String>,
-    #[serde(default)]
-    tool_calls: Vec<StreamToolCall>,
-}
-
 /// What one stream fragment carries, classified at the read: visible
 /// text or thinking. The loop maps these straight onto `AgentEvent`
 /// variants; everything downstream stays kind-agnostic.
@@ -76,23 +47,6 @@ struct StreamDelta {
 pub enum Delta {
     Text(String),
     Thinking(String),
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamToolCall {
-    index: u32,
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    function: Option<StreamFunction>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct StreamFunction {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    arguments: Option<String>,
 }
 
 /// Folds parsed chunks into a `ChatResponse`. `feed` returns the text

@@ -1,98 +1,16 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::Context;
-use serde::Deserialize;
 use serde_json::Value;
 
 use super::anthropic;
-use super::retry::{self, Backoff, Verdict};
+use super::retry::Backoff;
 use super::stream::{self, StreamOutcome};
 use super::types::{ChatMessage, ChatRequest, ChatResponse, StreamOptions};
 use super::{ApiKind, AuthStyle};
-
-/// Permissive `/health` response from local servers (e.g. Strata).
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct HealthInfo {
-    #[serde(default)]
-    pub max_context: Option<u32>,
-    #[serde(default)]
-    pub kv_resident: Option<u32>,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub service: Option<String>,
-}
-
-/// Derive `<base>/health` from an OpenAI-style `base_url` (stripping a
-/// trailing `/` and `/v1`).
-pub(crate) fn health_url(base_url: &str) -> String {
-    let trimmed = base_url.trim_end_matches('/');
-    let root = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
-    format!("{root}/health")
-}
-
-/// True when `base_url` points to a loopback host (`127.0.0.1`, `localhost`,
-/// `[::1]`, etc.) without being fooled by URL userinfo.
-pub(crate) fn is_local_url(base_url: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(base_url) else {
-        return false;
-    };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    let bare = host
-        .strip_prefix('[')
-        .and_then(|s| s.strip_suffix(']'))
-        .unwrap_or(host);
-    bare.parse::<std::net::IpAddr>()
-        .is_ok_and(|ip| ip.is_loopback())
-}
-
-/// Probe `/health` on local/Strata endpoints to fill `context_window` and
-/// `compact_threshold_tokens` when not explicitly configured.
-pub async fn maybe_probe_local_health(endpoint: &mut crate::config::Endpoint) {
-    if endpoint.context_window_explicit && endpoint.compact_threshold_explicit {
-        return;
-    }
-    if endpoint.provider != "strata" && !is_local_url(&endpoint.base_url) {
-        return;
-    }
-    let Some(info) = probe_health(&endpoint.base_url).await else {
-        return;
-    };
-    if !endpoint.context_window_explicit
-        && let Some(max_ctx) = info.max_context.filter(|&c| c > 0)
-    {
-        endpoint.context_window = max_ctx;
-    }
-    if !endpoint.compact_threshold_explicit
-        && let Some(kv) = info.kv_resident.filter(|&c| c > 0)
-    {
-        endpoint.compact_threshold_tokens = Some(kv);
-    }
-}
-
-/// Best-effort probe of `/health` with short timeouts (500ms connect, 2s
-/// total). Returns `None` on any error, non-2xx status, or invalid JSON.
-pub async fn probe_health(base_url: &str) -> Option<HealthInfo> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_millis(500))
-        .timeout(Duration::from_secs(2))
-        .build()
-        .ok()?;
-    let url = health_url(base_url);
-    let resp = client.get(&url).send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    resp.json::<HealthInfo>().await.ok()
-}
 
 /// One client per process, reused across every turn of the agent loop.
 /// reqwest::Client owns a connection pool; building it per request throws that
@@ -155,85 +73,6 @@ impl LlmClient {
             .with_api_key(endpoint.api_key.clone())
             .with_reasoning_effort(endpoint.reasoning_effort.clone())
             .with_reasoning_budget_tokens(endpoint.reasoning_budget_tokens))
-    }
-
-    pub fn with_api(mut self, api: ApiKind) -> Self {
-        self.api = api;
-        self
-    }
-
-    pub fn with_auth(mut self, auth: AuthStyle) -> Self {
-        self.auth = auth;
-        self
-    }
-
-    /// Attach an API key, sent according to [`AuthStyle`].
-    pub fn with_api_key(mut self, api_key: Option<String>) -> Self {
-        self.api_key = api_key;
-        self
-    }
-
-    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
-        self.reasoning_effort = effort;
-        self
-    }
-
-    pub fn with_reasoning_budget_tokens(mut self, budget: Option<u32>) -> Self {
-        self.reasoning_budget_tokens = budget.filter(|&n| n > 0);
-        self
-    }
-
-    pub fn with_session_id(mut self, session_id: String) -> Self {
-        self.session_id = session_id;
-        self
-    }
-
-    /// Set the retry budget (`max_retries` from config / `GG_MAX_RETRIES`).
-    pub fn with_retry(mut self, max_retries: u32) -> Self {
-        self.retry.max_retries = max_retries;
-        self
-    }
-
-    /// The retry budget this client was built with — carried over when an
-    /// endpoint switch rebuilds it.
-    pub fn max_retries(&self) -> u32 {
-        self.retry.max_retries
-    }
-
-    /// Set the whole-response timeout (config `request_timeout_secs` /
-    /// `GG_REQUEST_TIMEOUT`). It replaces the old fixed 300 s, which
-    /// guillotined long generations mid-stream.
-    pub fn with_request_timeout(mut self, secs: u64) -> Self {
-        self.request_timeout = Duration::from_secs(secs.max(1));
-        self
-    }
-
-    /// The whole-response timeout this client was built with — carried over
-    /// when an endpoint switch rebuilds it, like the retry budget.
-    pub fn request_timeout_secs(&self) -> u64 {
-        self.request_timeout.as_secs()
-    }
-
-    /// The retries made since this was last asked, oldest first — one line
-    /// each, saying what failed, which retry is coming and how long it
-    /// waits. For the caller to pass on to the user through whatever
-    /// interface it owns; nothing is printed here.
-    pub fn take_notices(&self) -> Vec<String> {
-        let mut notices = self.notices.lock().unwrap_or_else(|e| e.into_inner());
-        std::mem::take(&mut *notices)
-    }
-
-    /// Test seam: decide like production, never sleep.
-    #[cfg(test)]
-    fn with_retry_delay(mut self, base: Duration) -> Self {
-        self.retry.base_delay = base;
-        self
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_session_header(mut self, header: Option<String>) -> Self {
-        self.session_header = header;
-        self
     }
 
     fn apply_auth(&self, mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -393,196 +232,10 @@ impl LlmClient {
             }
         }
     }
-
-    /// One request, retried until the budget or the failure's nature says
-    /// stop. The final error is the last attempt's, so what the provider
-    /// actually said is what the user reads.
-    async fn post(
-        &self,
-        url: &str,
-        request: reqwest::Request,
-    ) -> anyhow::Result<reqwest::Response> {
-        self.attempts(url, request, None).await
-    }
-
-    /// The retry loop both call paths share. `abort` is the streaming
-    /// path's stop request: it ends the wait for the response head and the
-    /// wait before a retry with [`ABORTED`], and rules out another
-    /// attempt. `None` is the non-streaming path, whose caller races the
-    /// whole call against the same flag instead.
-    async fn attempts(
-        &self,
-        url: &str,
-        request: reqwest::Request,
-        abort: Option<&AtomicBool>,
-    ) -> anyhow::Result<reqwest::Response> {
-        let mut nth = 0u32;
-        loop {
-            let outcome = match abort {
-                // A stop request is honoured before the attempt: a request
-                // the user has already disowned is not sent again.
-                Some(flag) if flag.load(Ordering::Relaxed) => {
-                    return Err(anyhow::anyhow!(ABORTED));
-                }
-                // Otherwise wait for the head — but not past the stop
-                // request. Dropping the future cancels the in-flight
-                // request, so the connection closes and the wait ends.
-                Some(flag) => {
-                    let attempt = self.attempt(url, replay(&request)?);
-                    match stream::until_abort(flag, attempt).await {
-                        Some(outcome) => outcome,
-                        None => return Err(anyhow::anyhow!(ABORTED)),
-                    }
-                }
-                None => self.attempt(url, replay(&request)?).await,
-            };
-            match outcome {
-                Ok(response) => return Ok(response),
-                Err(failure) => {
-                    let Some(wait) = self.retry_in(&failure, nth, url) else {
-                        return Err(failure.error);
-                    };
-                    // The wait before a retry belongs to the stop request
-                    // too: a `Retry-After` can be half a minute, and the
-                    // user who asked for no more requests should not sit
-                    // it out.
-                    match abort {
-                        Some(flag) => {
-                            if stream::until_abort(flag, tokio::time::sleep(wait))
-                                .await
-                                .is_none()
-                            {
-                                return Err(anyhow::anyhow!(ABORTED));
-                            }
-                        }
-                        None => tokio::time::sleep(wait).await,
-                    }
-                    nth += 1;
-                }
-            }
-        }
-    }
-
-    /// One HTTP attempt: send, and classify the response head. Bodies are
-    /// the caller's business — but an error body is read here, because the
-    /// providers put the real reason in it and a retry warning and the final
-    /// error both want it.
-    async fn attempt(
-        &self,
-        url: &str,
-        request: reqwest::Request,
-    ) -> Result<reqwest::Response, Failure> {
-        let response = match self.http.execute(request).await {
-            Ok(response) => response,
-            Err(err) => {
-                // The kind decides the retry; the transport's own words are
-                // the reason shown, so a timeout and a refused connection
-                // do not read the same.
-                let reason = if err.is_timeout() {
-                    "timed out"
-                } else if err.is_connect() {
-                    "connection failed"
-                } else {
-                    "request failed"
-                };
-                return Err(Failure {
-                    retry: retry::classify_err(&err),
-                    reason: reason.to_string(),
-                    error: anyhow::Error::from(err).context(format!("POST {url}")),
-                });
-            }
-        };
-        let status = response.status();
-        if status.is_success() {
-            return Ok(response);
-        }
-        let retry_after = retry::parse_retry_after(
-            response
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok()),
-        );
-        let body = response.text().await.unwrap_or_default();
-        Err(Failure {
-            retry: retry::classify_status(status, retry_after),
-            reason: status.to_string(),
-            error: anyhow::anyhow!("POST {url} {}", status_detail(status, &body)),
-        })
-    }
-
-    /// The retry decision for one failed attempt: `None` ends the call,
-    /// otherwise the wait before the retry — and a line for the user, kept
-    /// until the caller asks for it, that says what failed and what is
-    /// being done about it.
-    fn retry_in(&self, failure: &Failure, nth: u32, url: &str) -> Option<Duration> {
-        let wait = failure.retry.retry_delay(&self.retry, nth)?;
-        self.notices
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(format!(
-                "POST {url}: {} — retry {} of {} in {} ms",
-                failure.reason,
-                nth + 1,
-                self.retry.max_retries,
-                wait.as_millis()
-            ));
-        Some(wait)
-    }
-}
-
-/// A failed attempt: how (or whether) it may be retried, the short reason
-/// for the retry warning, and the error to fail with if it is not.
-struct Failure {
-    retry: Verdict,
-    reason: String,
-    error: anyhow::Error,
 }
 
 /// The whole-response timeout used when config says nothing.
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
-
-/// What a streaming call reports when the run's stop request ended it
-/// before a response head arrived. It names itself as the user's stop, so
-/// the error and the `[aborted by user]` entry the loop records for a
-/// stopped run read as one event. Never retried.
-const ABORTED: &str = "aborted by user";
-
-/// Finish a request once, so every attempt replays the identical bytes.
-/// `RequestBuilder::send` consumes the builder, and a retry has to be the
-/// same request — same body, same headers — not a re-derivation of it.
-/// The timeout rides the request (not the client) so the setting is a
-/// number this function can be tested on.
-fn build_request(
-    builder: reqwest::RequestBuilder,
-    timeout: Duration,
-) -> anyhow::Result<(String, reqwest::Request)> {
-    let request = builder
-        .timeout(timeout)
-        .build()
-        .context("building request")?;
-    let url = request.url().to_string();
-    Ok((url, request))
-}
-
-/// Clone a request for another attempt. reqwest replays in-memory bodies,
-/// which is all this client ever sends (JSON); the error is here for the
-/// day that stops being true.
-fn replay(request: &reqwest::Request) -> anyhow::Result<reqwest::Request> {
-    request
-        .try_clone()
-        .context("the request body cannot be replayed for a retry")
-}
-
-/// The `failed (status): body` tail of an error message. The body is
-/// capped, not dropped: providers put the actionable reason in it.
-fn status_detail(status: reqwest::StatusCode, body: &str) -> String {
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        return format!("failed ({status})");
-    }
-    let excerpt: String = trimmed.chars().take(1024).collect();
-    format!("failed ({status}): {excerpt}")
-}
 
 fn is_opencode_url(base_url: &str) -> bool {
     let Some((_, rest)) = base_url.split_once("://") else {
@@ -601,7 +254,10 @@ fn is_opencode_url(base_url: &str) -> bool {
 #[cfg(test)]
 mod stream_tests;
 
-#[cfg(test)]
-mod health_tests;
+mod attempt;
+mod builder;
+
+use attempt::build_request;
+
 #[cfg(test)]
 mod tests;

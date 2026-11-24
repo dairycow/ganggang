@@ -3,6 +3,7 @@
 //! than assumed. `Connection: close` on every response keeps connections
 //! and responses in step, retries included.
 
+use super::attempt::replay;
 use super::*;
 use std::io::{Read, Write};
 use std::net::TcpListener;

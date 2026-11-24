@@ -1,5 +1,6 @@
 pub mod anthropic;
 pub mod client;
+pub mod health;
 mod retry;
 pub mod stream;
 pub mod types;

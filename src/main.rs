@@ -245,7 +245,7 @@ async fn main() -> anyhow::Result<()> {
         cfg.apply_max_turns_cli(cli.max_turns);
         let mut endpoint = cfg.active_endpoint();
         endpoint.require_auth()?;
-        crate::llm::client::maybe_probe_local_health(&mut endpoint).await;
+        crate::llm::health::maybe_probe_local_health(&mut endpoint).await;
         cfg.context_window = endpoint.context_window;
         cfg.compact_threshold_tokens = endpoint.compact_threshold_tokens;
         if let Some(p) = cfg.providers.get_mut(&cfg.provider) {
@@ -476,7 +476,7 @@ async fn open_agent(cli: &Cli, abort: Arc<AtomicBool>) -> anyhow::Result<Agent> 
     cfg.apply_max_turns_cli(cli.max_turns);
     let mut endpoint = cfg.active_endpoint();
     endpoint.require_auth()?;
-    crate::llm::client::maybe_probe_local_health(&mut endpoint).await;
+    crate::llm::health::maybe_probe_local_health(&mut endpoint).await;
     let cwd = std::env::current_dir()?;
     let (hooks, hook_warnings) = agent::hooks::load(&cwd, cli.no_hooks)?;
     for warning in &hook_warnings {

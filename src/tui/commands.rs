@@ -364,7 +364,7 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
             };
             let mut endpoint = config.resolve_switch(&target)?;
             endpoint.require_auth()?;
-            crate::llm::client::maybe_probe_local_health(&mut endpoint).await;
+            crate::llm::health::maybe_probe_local_health(&mut endpoint).await;
             let _ = crate::llm::client::LlmClient::from_endpoint(&endpoint)?;
             input_tx
                 .send(super::AgentInput::SwitchEndpoint(endpoint.clone()))
