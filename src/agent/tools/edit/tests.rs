@@ -1,5 +1,6 @@
 //! Tests for [`super`]: atomic multi-edit, near-match line-numbered errors,
-//! ambiguous line numbers, compact hunk confirmation, and the 512 KiB cap.
+//! ambiguous line numbers, `replace_all`, compact hunk confirmation, and the
+//! 512 KiB cap.
 
 use super::*;
 
@@ -215,6 +216,100 @@ async fn empty_old_text_blank_miss_many_ambiguous_and_long_line_cap() {
     .await;
     assert!(!ok_long.is_error);
     assert!(ok_long.output.contains('…'), "{}", ok_long.output);
+}
+
+#[tokio::test]
+async fn replace_all_rewrites_every_occurrence_and_reports_the_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("f.txt");
+    std::fs::write(&f, "x\na\nx\nb\nx\n").unwrap();
+
+    let r = edit_file(
+        dir.path(),
+        serde_json::json!({"path": "f.txt", "edits": [
+            {"old_text": "x", "new_text": "y", "replace_all": true}
+        ]}),
+    )
+    .await;
+    assert!(!r.is_error, "{}", r.output);
+    assert!(
+        r.output.contains("@@ line 1 (3 occurrence(s), -1 +1) @@"),
+        "{}",
+        r.output
+    );
+    assert_eq!(written(&f), "y\na\ny\nb\ny\n");
+}
+
+#[tokio::test]
+async fn replace_all_with_no_match_fails_atomically() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("f.txt");
+    std::fs::write(&f, "a\nb\n").unwrap();
+
+    let r = edit_file(
+        dir.path(),
+        serde_json::json!({"path": "f.txt", "edits": [
+            {"old_text": "a", "new_text": "A"},
+            {"old_text": "nope", "new_text": "N", "replace_all": true}
+        ]}),
+    )
+    .await;
+    assert!(r.is_error);
+    assert!(r.output.contains("edit 2 failed"), "{}", r.output);
+    assert!(r.output.contains("not found"), "{}", r.output);
+    assert_eq!(written(&f), "a\nb\n", "first edit must not persist");
+}
+
+#[tokio::test]
+async fn an_ambiguous_match_error_suggests_replace_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("f.txt");
+    std::fs::write(&f, "x\na\nx\n").unwrap();
+
+    let r = edit_file(
+        dir.path(),
+        serde_json::json!({"path": "f.txt", "edits": [
+            {"old_text": "x", "new_text": "y"}
+        ]}),
+    )
+    .await;
+    assert!(r.is_error);
+    assert!(
+        r.output
+            .contains("pass replace_all: true to replace all 2 occurrences"),
+        "{}",
+        r.output
+    );
+    assert_eq!(written(&f), "x\na\nx\n");
+}
+
+#[tokio::test]
+async fn a_miss_that_differs_only_in_indentation_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("f.txt");
+    std::fs::write(&f, "fn main() {\n    body();\n}\n").unwrap();
+
+    let r = edit_file(
+        dir.path(),
+        serde_json::json!({"path": "f.txt", "edits": [
+            {"old_text": "fn main() {\n  body();\n}", "new_text": "G"}
+        ]}),
+    )
+    .await;
+    assert!(r.is_error);
+    assert!(
+        r.output
+            .contains("first difference at line 2 (whitespace differs)"),
+        "{}",
+        r.output
+    );
+    assert!(
+        r.output
+            .contains(r#"expected "  body();" vs actual "    body();""#),
+        "{}",
+        r.output
+    );
+    assert_eq!(written(&f), "fn main() {\n    body();\n}\n");
 }
 
 #[tokio::test]

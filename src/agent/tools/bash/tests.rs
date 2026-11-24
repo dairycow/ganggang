@@ -349,6 +349,51 @@ fn workaround_hint_leaves_normal_commands_alone() {
     }
 }
 
+/// A heredoc body is not shell code, but it is still the python program the
+/// command runs, so file-touching code inside it counts.
+#[test]
+fn workaround_hint_reads_python_heredoc_bodies() {
+    let cwd = Path::new("/work/dir");
+    let command = "python3 - <<'PY'\nfrom pathlib import Path\nPath('a.txt').write_text('x')\nPY\n";
+    assert_eq!(
+        hint::workaround_hint(command, cwd),
+        Some("use native read, edit or write instead of inline python in bash"),
+        "{command}"
+    );
+}
+
+/// A heredoc that only prints stays unhinted, and inline `perl -i` gets the
+/// `edit` nudge while ordinary `perl` use does not.
+#[test]
+fn workaround_hint_separates_inline_perl_edits_from_ordinary_perl() {
+    let cwd = Path::new("/work/dir");
+    let hinted = [
+        ("perl -0pi -e 's/foo/bar/' src/a.rs"),
+        ("perl -pi.bak -e 's/foo/bar/' src/a.rs"),
+        ("perl -i -pe 's/foo/bar/' src/a.rs"),
+    ];
+    for command in hinted {
+        assert_eq!(
+            hint::workaround_hint(command, cwd),
+            Some("use native edit (supports replace_all: true) instead of inline perl in bash"),
+            "{command}"
+        );
+    }
+    for command in [
+        "python3 - <<'PY'\nprint(1+1)\nPY\n",
+        "python3 -c 'print(1)' && echo hi <<'EOF'\nPath('a')\nEOF\n",
+        "perl -e 'print 1'",
+        "perl -I/tmp/lib script.pl",
+        "perl -i -I/tmp/expr script.pl",
+    ] {
+        assert_eq!(
+            hint::workaround_hint(command, cwd),
+            None,
+            "no hint expected for {command}"
+        );
+    }
+}
+
 /// The tool appends the nudge after the output, keeping the exit code and
 /// the error flag of the command itself.
 #[tokio::test]

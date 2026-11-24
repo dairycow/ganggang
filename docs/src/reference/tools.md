@@ -8,7 +8,7 @@ The tool surface the model sees, generated from the registry (advertisement orde
 |---|---|
 | `read` | Read a text file as 1-based numbered lines (N\| text). Returns up to 400 lines or 24 KiB by default, with truncation noted; an explicit limit caps at 2000 lines. A negative offset reads the last N lines. Lines over 500 characters are cut. |
 | `bash` | Run a shell command in bash; returns merged stdout+stderr and the exit code. Output keeps the start and end when over 10 KiB. Nonzero exits are errors that still include the output; a timeout or abort reports any partial output. |
-| `edit` | Apply exact-match edits: each old_text must appear exactly once, and any miss or ambiguity writes nothing. |
+| `edit` | Apply exact-match edits: each old_text must appear exactly once unless the edit sets replace_all: true, and any miss or ambiguity writes nothing. |
 | `write` | Create or overwrite a file. Refuses paths outside the working directory unless force is true; reports bytes written. |
 | `grep` | Search file contents by regex, or literal text with fixed_strings. Respects .gitignore and skips .git, target, node_modules and binaries. Results are grouped by file; supports glob, case_insensitive, context lines and files_only; caps at max_results (default 50) and 16 KiB of output. |
 | `find` | Find files and directories by glob (e.g. "*.rs", "**/*.md"). Respects .gitignore and skips .git, target and node_modules by default (include_ignored: true to include them). Sorted and capped at max_results (default 50). |
@@ -36,7 +36,7 @@ Run a shell command in bash; returns merged stdout+stderr and the exit code. Out
 
 ## `edit`
 
-Apply exact-match edits: each old_text must appear exactly once, and any miss or ambiguity writes nothing.
+Apply exact-match edits: each old_text must appear exactly once unless the edit sets replace_all: true, and any miss or ambiguity writes nothing.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
