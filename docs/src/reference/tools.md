@@ -13,6 +13,7 @@ The tool surface the model sees, generated from the registry (advertisement orde
 | `grep` | Search file contents by regex, or literal text with fixed_strings. Respects .gitignore and skips .git, target, node_modules and binaries. Results are grouped by file; supports glob, case_insensitive, context lines and files_only; caps at max_results (default 50) and 16 KiB of output. |
 | `find` | Find files and directories by glob (e.g. "*.rs", "**/*.md"). Respects .gitignore and skips .git, target and node_modules by default (include_ignored: true to include them). Sorted and capped at max_results (default 50). |
 | `ls` | List one directory level: directories (name/) then files with byte size, alphabetical. Not recursive; use find for deeper paths. Hidden entries included; unreadable entries are noted, not fatal. |
+| `outline` | Return a compact structural outline of a file: symbol or heading signatures with 1-based line ranges, so you can jump straight to read(offset, limit). Supports Rust, Python, JS/TS, Go, C/C++/Java/C#, shell, Markdown and TOML. |
 
 ## `read`
 
@@ -85,3 +86,12 @@ List one directory level: directories (name/) then files with byte size, alphabe
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `path` | string | no | Directory to list (default: the working directory) |
+
+## `outline`
+
+Return a compact structural outline of a file: symbol or heading signatures with 1-based line ranges, so you can jump straight to read(offset, limit). Supports Rust, Python, JS/TS, Go, C/C++/Java/C#, shell, Markdown and TOML.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `max_entries` | integer | no | Maximum entries to return (default 200, max 500) |
+| `path` | string | yes | File path relative to the working directory |

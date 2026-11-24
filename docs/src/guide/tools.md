@@ -1,10 +1,10 @@
 # Tools
 
-`gg` provides seven built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. Parameters and descriptions are in the generated [Built-in tools](../reference/tools.md) reference; this page covers behaviour and limits.
+`gg` provides eight built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `outline`. Parameters and descriptions are in the generated [Built-in tools](../reference/tools.md) reference; this page covers behaviour and limits.
 
 ## Principles
 
-- Mutating tools (`bash`, `edit`, `write`) run **one at a time**, in the order the model called them. Contiguous runs of 2+ read-only tools (`read`, `grep`, `find`, `ls`) execute **in parallel** (up to 8 in flight) while preserving call order in events and session history.
+- Mutating tools (`bash`, `edit`, `write`) run **one at a time**, in the order the model called them. Contiguous runs of 2+ read-only tools (`read`, `grep`, `find`, `ls`, `outline`) execute **in parallel** (up to 8 in flight) while preserving call order in events and session history.
 - Tool failures are returned to the model as tool results so it can recover. Only transport and session I/O errors abort a run.
 - Truncated outputs include an explicit truncation marker.
 
@@ -13,7 +13,7 @@
 `Esc` or `Ctrl+C` (or `SIGTERM`) aborts an active run immediately:
 
 - A `bash` command has its whole process group killed; the model is told `command aborted by user and killed`, followed by any output received before the kill.
-- A `grep` or `find` walk stops and returns what it found so far, as an error saying the results are partial. A call that had not started does not start.
+- A `grep` or `find` walk stops and returns what it found so far, as an error saying the results are partial. A call that had not started does not start. An `outline` scan stops and reports `aborted by user`.
 - Aborted tool calls do not trigger `post_tool` [hooks](hooks.md).
 
 ## Choosing which tools are offered
@@ -28,9 +28,13 @@ or `tools = [...]` in [config](configuration.md). The flag overrides the config.
 
 Reads a text file with 1-based line numbers (`N| text`). The default page is 400 lines or 24 KiB, whichever comes first, with a `[truncated: ...]` note. `offset` (1-based line) and `limit` stream sequentially so you can page cleanly past 50 KiB; `limit` caps at 2000 lines. A line longer than 500 characters is cut with `…` so a minified file cannot fill the page. A negative `offset` (for example `offset: -30`) reads the last 30 lines and keeps their real line numbers. Non-UTF-8 files are refused.
 
+## `outline`
+
+Returns a file's structure as one line per symbol or heading: `12-48: impl Point`, indented by nesting, so you can jump straight to `read(offset, limit)` instead of reading the whole file. The first line is `<path> (<n> lines)`. Scanners cover Rust, Python, JS/TS, Go, C/C++/Java/C#, shell, Markdown and TOML, with a keyword fallback for other text; Rust comments and string bodies are skipped, so braces inside them do not count. Files over 1 MiB, binary files and non-UTF-8 files are refused. Up to 200 entries by default (`max_entries`, capped at 500) and at most 12 KiB of output, each with a visible `[truncated: ...]` notice. Signatures longer than 140 characters are cut with `…`. A file with no recognised symbols says so and points at `read`.
+
 ## `bash`
 
-Runs `bash -c` in the session directory with your permissions. stdout and stderr are merged in arrival order. Output over 10 KiB keeps the first quarter and the last three quarters, with a `[... N bytes omitted ...]` marker between; the command runs to completion so its exit code is accurate. A non-zero exit is reported as an error result. A per-call `timeout_secs` is clamped to `bash_timeout_secs` (default 30). On timeout the **whole process group** is killed, and output received before the kill is returned after `[partial output]`.
+Runs `bash -c` in the session directory with your permissions. stdout and stderr are merged in arrival order. Output over 10 KiB keeps the first quarter and the last three quarters, with a `[... N bytes omitted ...]` marker between; the command runs to completion so its exit code is accurate. A non-zero exit is reported as an error result. A per-call `timeout_secs` is clamped to `bash_timeout_secs` (default 30). On timeout the **whole process group** is killed, and output received before the kill is returned after `[partial output]`. A command that re-implements a native tool (`cat`, `head`, `sed`, `grep`, `find`, `ls`, or inline python touching files) gets a `[hint: ...]` line after its output pointing at the native tool; pipelines such as `cargo test | tail -20` are untouched.
 
 ## `edit`
 

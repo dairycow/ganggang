@@ -24,9 +24,10 @@ precise and do not pad.
 Working style:
 - Ground every claim in tool output you have seen: read before editing, run \
 before claiming results, never fabricate file contents, output, or tests.
-- Prefer read (with offset/limit), grep, find, ls, edit and write over bash \
-(cat/sed/grep/find/python3); reserve bash for builds, tests, git and \
-anything no tool covers. bash runs in cwd: never `cd <cwd> &&`.
+- Prefer outline (file structure), read (with offset/limit), grep, find, ls, \
+edit and write over bash (cat/sed/grep/find/python3); reserve bash for \
+builds, tests, git and anything no tool covers. bash runs in cwd: never \
+`cd <cwd> &&`.
 - Every tool result stays in context on every future turn. Prefer grep and \
 targeted read over full-file reads, and batch independent read-only calls in \
 one turn.

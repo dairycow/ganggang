@@ -20,6 +20,7 @@ mod edit;
 mod find;
 mod grep;
 mod ls;
+mod outline;
 mod read;
 mod write;
 
@@ -261,7 +262,9 @@ pub(crate) fn resolve_walk_root(root: &std::path::Path) -> (PathBuf, bool) {
 /// Names of the default registry's tools, in advertisement order. The
 /// config allowlist and hook matchers validate against this canonical
 /// list; registration and this constant move together (pinned by test).
-pub(crate) const NAMES: &[&str] = &["read", "bash", "edit", "write", "grep", "find", "ls"];
+pub(crate) const NAMES: &[&str] = &[
+    "read", "bash", "edit", "write", "grep", "find", "ls", "outline",
+];
 
 /// The default tool set, anchored at the session cwd. The `--tools` flag and
 /// config allowlist filter this registry (M2.11).
@@ -276,7 +279,8 @@ pub fn default_registry(cwd: PathBuf, bash_timeout_secs: u64) -> Registry {
     registry.register(Box::new(write::WriteTool::new(cwd.clone())));
     registry.register(Box::new(grep::GrepTool::new(cwd.clone())));
     registry.register(Box::new(find::FindTool::new(cwd.clone())));
-    registry.register(Box::new(ls::LsTool::new(cwd)));
+    registry.register(Box::new(ls::LsTool::new(cwd.clone())));
+    registry.register(Box::new(outline::OutlineTool::new(cwd)));
     registry
 }
 
