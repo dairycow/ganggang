@@ -13,51 +13,33 @@
 //! (verified live) also emits `: keep-alive` comment lines, a final
 //! `choices: []` chunk carrying `usage`, and `timings` objects that are
 //! parsed into [`ChatResponse::timings`].
+//!
+//! A body that ends before its sentinel is salvage, not loss (GAP 2): the
+//! user has already watched most of an answer stream in, so
+//! [`drain_sse`] reports what assembled plus `complete: false` and lets
+//! the loop continue the answer instead of throwing the turn away.
+//!
+//! A stop request is a different animal (GAP 3's in-flight half): nobody
+//! waits for it, so the read watches the run's abort flag while it reads
+//! and comes back with the partial and `aborted: true`.
 
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use anyhow::Context;
-use serde::Deserialize;
 
 use super::types::{ChatMessage, ChatResponse, Choice, Timings, ToolCall, Usage};
+
+mod chunk;
+
+use chunk::StreamChunk;
 
 /// One SSE chunk, permissive like every wire type (§8): `choices` is empty
 /// on the usage-only final chunk, `delta` can be `{}` on the chunk that
 /// carries `finish_reason`.
-#[derive(Debug, Deserialize)]
-struct StreamChunk {
-    #[serde(default)]
-    choices: Vec<StreamChoice>,
-    #[serde(default)]
-    usage: Option<Usage>,
-    #[serde(default)]
-    timings: Option<Timings>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamChoice {
-    #[serde(default)]
-    index: u32,
-    #[serde(default)]
-    delta: StreamDelta,
-    #[serde(default)]
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct StreamDelta {
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    reasoning_content: Option<String>,
-    #[serde(default)]
-    reasoning: Option<String>,
-    #[serde(default)]
-    tool_calls: Vec<StreamToolCall>,
-}
-
 /// What one stream fragment carries, classified at the read: visible
 /// text or thinking. The loop maps these straight onto `AgentEvent`
 /// variants; everything downstream stays kind-agnostic.
@@ -65,23 +47,6 @@ struct StreamDelta {
 pub enum Delta {
     Text(String),
     Thinking(String),
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamToolCall {
-    index: u32,
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    function: Option<StreamFunction>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct StreamFunction {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    arguments: Option<String>,
 }
 
 /// Folds parsed chunks into a `ChatResponse`. `feed` returns the text
@@ -191,6 +156,54 @@ impl Assembler {
     }
 }
 
+/// What a finished stream produced: the assembled response, and whether
+/// the wire said so.
+///
+/// `complete` is true only when the protocol's sentinel (`[DONE]`,
+/// `message_stop`) arrived. A cut body that assembled text, thinking or
+/// tool calls still comes back `Ok` — discarding an answer the user has
+/// already watched stream in is the wrong trade (GAP 2) — and the loop
+/// uses the flag to ask for the rest. A cut that assembled *nothing* is
+/// an error: there is nothing to salvage and nothing to continue from.
+///
+/// `aborted` says who stopped it: the user, not the wire. A user
+/// abort always comes back `Ok` — empty partial included — and the loop
+/// must read it as "the run is over", never as "this answer is short, ask
+/// for the rest".
+#[derive(Debug, PartialEq)]
+pub struct StreamOutcome {
+    pub response: ChatResponse,
+    pub complete: bool,
+    /// The run's stop request ended the read.
+    pub aborted: bool,
+}
+
+/// How often a stream read looks at the abort flag: responsive enough
+/// that a stop request feels immediate, cheap enough to be noise. The
+/// request timeout is minutes, so this is the only thing between the user
+/// and a generation that has another ten minutes to run.
+pub(super) const ABORT_POLL: Duration = Duration::from_millis(100);
+
+/// Await a future, giving up when the run's stop request says so.
+///
+/// Dropping the future mid-way drops the `&mut Response` it borrowed, and
+/// with it the connection: the read is really over, not merely abandoned.
+pub(super) async fn until_abort<T>(abort: &AtomicBool, fut: impl Future<Output = T>) -> Option<T> {
+    tokio::select! {
+        value = fut => Some(value),
+        _ = wait_for_abort(abort) => None,
+    }
+}
+
+/// Resolve once the run's stop request is set — polled, not signalled:
+/// the flag is a plain `AtomicBool` every layer already holds, and making
+/// it wake anyone would mean a channel on the hot path of every run.
+async fn wait_for_abort(abort: &AtomicBool) {
+    while !abort.load(Ordering::Relaxed) {
+        tokio::time::sleep(ABORT_POLL).await;
+    }
+}
+
 /// Byte-level line splitter. Network chunks do not respect line (or UTF-8
 /// character) boundaries, so partial bytes are held back until their line
 /// completes; decoding happens per complete line only, which is what keeps
@@ -227,20 +240,33 @@ impl LineBuffer {
 /// through `on_delta` as they arrive, and assemble the final
 /// `ChatResponse`.
 ///
-/// A stream that ends without the `[DONE]` sentinel is a transport
-/// error (§17: every truncation is visible, never silently accepted):
-/// Strata serves SSE with `Connection: close` and no framing checksum,
-/// so a mid-generation server death arrives as a clean EOF that would
-/// otherwise pass for a complete answer.
+/// A stream that ends without the `[DONE]` sentinel is reported, never
+/// silently accepted (§17) and never thrown away (GAP 2): Strata serves
+/// SSE with `Connection: close` and no framing checksum, so a
+/// mid-generation server death arrives as a clean EOF. What assembled so
+/// far comes back with `complete: false`; only an empty partial — nothing
+/// text, thinking or tool-call shaped — is an error worth failing the run
+/// for. (An `Err` also stays the verdict for malformed chunks: a provider
+/// whose JSON does not parse is not a salvageable truncation.)
+///
+/// A stop request cuts the read short by the same route and is
+/// never an error: what assembled so far comes back with `aborted: true`,
+/// and an empty partial is fine — the user asked for nothing more.
 pub(super) async fn drain_sse(
     mut response: reqwest::Response,
+    abort: &AtomicBool,
     mut on_delta: impl FnMut(Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
-) -> anyhow::Result<ChatResponse> {
+) -> anyhow::Result<StreamOutcome> {
     let mut lines = LineBuffer::new();
     let mut assembler = Assembler::default();
     let mut done = false;
+    let mut aborted = false;
     while !done {
-        let Some(bytes) = response.chunk().await.context("reading SSE stream")? else {
+        let Some(bytes) = until_abort(abort, response.chunk()).await else {
+            aborted = true;
+            break;
+        };
+        let Some(bytes) = bytes.context("reading SSE stream")? else {
             break;
         };
         for line in lines.feed(&bytes) {
@@ -263,13 +289,42 @@ pub(super) async fn drain_sse(
             }
         }
     }
-    if !done {
-        anyhow::bail!(
-            "SSE stream ended without [DONE] — the connection was cut mid-generation \
-             (partial output discarded; retry the run)"
+    let response = assembler.finish();
+    if !(done || aborted) {
+        anyhow::ensure!(
+            salvageable(&response),
+            "SSE stream ended without [DONE] and assembled nothing — the connection was \
+             cut before the model produced anything (nothing to salvage; retry the run)"
         );
     }
-    Ok(assembler.finish())
+    Ok(StreamOutcome {
+        response,
+        complete: done,
+        aborted,
+    })
+}
+
+/// Whether an assembled response is worth keeping when its stream was
+/// cut: any visible text, thinking, or tool call counts.
+pub(super) fn salvageable(response: &ChatResponse) -> bool {
+    response.choices.iter().any(|choice| {
+        choice
+            .message
+            .content
+            .as_deref()
+            .is_some_and(|text| !text.is_empty())
+            || choice
+                .message
+                .reasoning_content
+                .as_deref()
+                .is_some_and(|text| !text.is_empty())
+            || choice
+                .message
+                .reasoning
+                .as_deref()
+                .is_some_and(|text| !text.is_empty())
+            || !choice.message.tool_calls.is_empty()
+    })
 }
 
 #[cfg(test)]

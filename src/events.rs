@@ -7,6 +7,15 @@
 use serde::Serialize;
 use serde_json::Value;
 
+/// `TurnEnded::stop_reason` values that mean "this turn fell short of an
+/// answer": the provider ran out of tokens, or the stream ended before
+/// its sentinel. The loop's `cut` module emits them; interfaces match on
+/// them (print mode accumulates a continued answer rather than letting
+/// the next turn replace the last one). Both are ordinary `String`
+/// payloads — no new event variant is needed to say it.
+pub const STOP_LENGTH: &str = "length";
+pub const STOP_STREAM_CUT: &str = "stream_cut";
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {

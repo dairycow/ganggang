@@ -8,15 +8,21 @@
 pub mod agent_task;
 pub mod clipboard;
 pub mod commands;
+pub mod composer;
 pub mod external;
 pub mod footer;
+pub mod history;
 pub mod input;
 pub mod keys;
+pub mod layout;
+pub mod line;
 pub mod mentions;
 pub mod reader;
 pub mod shell;
 pub mod suggest;
 pub mod term;
+pub mod theme;
+pub mod tick;
 pub mod transcript;
 pub mod view;
 pub mod watch;
@@ -31,12 +37,14 @@ use crate::agent::Agent;
 use crate::agent::skills::Skill;
 use agent_task::{AgentInput, UiEvent, agent_task};
 use clipboard::osc52_sequence;
-use commands::{CmdCtx, Submission, classify_submission, handle_command};
+use commands::{CmdCtx, Command, Submission, classify_submission, handle_command};
 use external::Outcome;
-use keys::{KeyAction, classify};
+use history::Arrow;
+use keys::{KeyAction, WHEEL_ROWS, Wheel, classify, classify_wheel};
 use reader::KeyReader;
 use shell::spawn_shell;
-use view::{State, render};
+use tick::Tick;
+use view::{Cancel, State, render};
 
 /// Lines per PageUp/PageDown press. Half-a-screen would be ideal but the
 /// loop does not know the height at key time; a fixed step pages through
@@ -122,13 +130,21 @@ pub async fn run(
     let mut active_endpoint = config.active_endpoint();
     let initial_endpoint = active_endpoint.clone();
     let boot = first;
+    // Prompt history, read once: the loop must not re-read a file it is
+    // also appending to, and a load that skipped lines is worth one line
+    // of feedback before anything else is on the screen.
+    let history = history::History::load();
     let mut state = State::new(
         &cwd,
         &active_endpoint.label(),
         active_endpoint.context_window,
         skills.clone(),
         prompts.clone(),
+        history,
     );
+    if let Some(warning) = state.history.warning() {
+        state.push_warning(&warning);
+    }
     state.session_path = boot.session_path.clone();
     state.sessions_disabled = boot.sessions_disabled;
     // A resumed session shows its past immediately, not after the first
@@ -170,6 +186,7 @@ pub async fn run(
     // agent events keep folding into the transcript, so a run in flight
     // neither stalls nor bursts on return.
     let mut editor: Option<external::Running> = None;
+    let mut tick = Tick::new();
     #[cfg(unix)]
     let mut sigterm =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
@@ -220,20 +237,53 @@ pub async fn run(
                 .map_err(|e| anyhow::anyhow!("drawing: {e}"))?;
         }
 
+        // The spinner's clock, in line with the footer before the loop
+        // waits: armed while a run is live, disarmed the moment it ends.
+        tick.sync(tokio::time::Instant::now(), state.spinning());
         tokio::select! {
+            // The footer's spinner. Armed only while a run is live, so an
+            // idle view never wakes — and never redraws — on a timer; and
+            // a fixed deadline rather than a fresh wait each pass, so a
+            // stream of deltas cannot keep pushing the next frame back.
+            _ = until(tick.deadline()) => {
+                state.tick_spinner();
+                tick.fired(tokio::time::Instant::now());
+            }
             key = keys.recv() => {
                 let Some(event) = key else { break };
                 match event {
                     crossterm::event::Event::Key(key) => match classify(key) {
-                        KeyAction::Quit => {
-                            // Ask the in-flight run (if any) to stop; the
-                            // flush-per-append session file makes a hard exit
-                            // mid-run safe by construction (§13).
-                            abort.store(true, Ordering::Release);
-                            break;
-                        }
+                        // Ctrl+C (gap §5): never an unconditional quit —
+                        // the run is asked to stop, a draft is cleared, and
+                        // only a third kind of press ends the TUI. The rule
+                        // itself is [`State::interrupt`]; what the view
+                        // cannot do (set the abort flag, leave the loop) is
+                        // done here. A hard exit mid-run is safe by
+                        // construction: the session file flushes per append
+                        // (§13).
+                        KeyAction::Interrupt => match state.interrupt() {
+                            // All this does to the agent is set the flag:
+                            // the running tool notices it (GAP 3) and the
+                            // loop reports the run as aborted.
+                            Cancel::Stopping => {
+                                abort.store(true, Ordering::Release);
+                                state.push_info("stopping — Ctrl+C again to quit");
+                            }
+                            Cancel::ForceQuit => {
+                                abort.store(true, Ordering::Release);
+                                break;
+                            }
+                            Cancel::DraftCleared => {
+                                state.push_info("draft cleared — Ctrl+C again to quit")
+                            }
+                            Cancel::Quit => break,
+                        },
+                        // Esc keeps its meaning: the run's abort key, and it
+                        // marks the run stopping so the footer shows the
+                        // cancel took. Idle, it does nothing.
                         KeyAction::Abort if state.busy => {
                             abort.store(true, Ordering::Release);
+                            state.set_stopping(true);
                         }
                         KeyAction::CopyAnswer => copy_last_answer(&mut state),
                         // Ctrl+R: a rebuild request from the user. The
@@ -283,9 +333,11 @@ pub async fn run(
                         // in the editor for resubmission, with a line
                         // saying why nothing happened.
                         KeyAction::Send if state.busy => {
-                            state.push_info(
-                                "busy — a run is in flight; your input stays in the editor",
-                            );
+                            state.push_info(if state.stopping() {
+                                "stopping — the run is still winding down; your input stays in the editor"
+                            } else {
+                                "busy — a run is in flight; your input stays in the editor"
+                            });
                         }
                         KeyAction::Send if !state.busy => {
                             let Some(text) = state.editor.take_submission() else {
@@ -296,6 +348,11 @@ pub async fn run(
                             }
                             match classify_submission(&text) {
                                 Submission::Plain(prompt) => {
+                                    // Everything the editor hands over is
+                                    // history — prompts, shell lines,
+                                    // commands — except the way out, which
+                                    // a next session has no use for.
+                                    state.history.record(&text);
                                     // `@path` mentions (M7.5) carry file
                                     // content to the model; the transcript
                                     // keeps the readable line the user
@@ -313,10 +370,14 @@ pub async fn run(
                                     }
                                 }
                                 Submission::Shell { command, to_context } => {
+                                    state.history.record(&text);
                                     state.begin_run();
                                     spawn_shell(command, cwd.clone(), to_context, ui_tx.clone());
                                 }
                                 Submission::Command(command) => {
+                                    if !matches!(command, Command::Quit) {
+                                        state.history.record(&text);
+                                    }
                                     let ctx = CmdCtx {
                                         state: &mut state,
                                         factory: &factory,
@@ -351,14 +412,32 @@ pub async fn run(
                         KeyAction::ToggleThinking => state.toggle_thinking(),
                         KeyAction::ScrollUp => state.scroll_up(SCROLL_STEP),
                         KeyAction::ScrollDown => state.scroll_down(SCROLL_STEP),
-                        // Suggestion-popup keys act on the popup while it
-                        // is open. Closed, ↑/↓ move the composer's cursor
-                        // (PageUp/Down own paging, and Tab is not a
-                        // composer key).
-                        KeyAction::SuggestPrev if state.suggest_open() => state.suggest_prev(),
-                        KeyAction::SuggestNext if state.suggest_open() => state.suggest_next(),
-                        KeyAction::SuggestPrev => state.editor.move_up(),
-                        KeyAction::SuggestNext => state.editor.move_down(),
+                        // ↑/↓ belong to the suggestion popup while it is
+                        // open; otherwise they recall history (from an empty
+                        // or single-line composer) or move between the
+                        // composer's lines — the rule itself is
+                        // [`history::history_for`].
+                        KeyAction::SuggestPrev => match state.arrow(true) {
+                            Arrow::SuggestPrev => state.suggest_prev(),
+                            Arrow::Prev => state.recall_prev(),
+                            Arrow::LineUp => state.editor.move_up(),
+                            // ↓'s half of the table: not reachable from ↑.
+                            Arrow::SuggestNext | Arrow::Next | Arrow::LineDown | Arrow::Nothing => {}
+                        },
+                        KeyAction::SuggestNext => match state.arrow(false) {
+                            Arrow::SuggestNext => state.suggest_next(),
+                            Arrow::Next => state.recall_next(),
+                            Arrow::LineDown => state.editor.move_down(),
+                            Arrow::Nothing => {}
+                            // ↑'s half of the table: not reachable from ↓.
+                            Arrow::SuggestPrev | Arrow::Prev | Arrow::LineUp => {}
+                        },
+                        // Ctrl+P / Ctrl+N: history whatever the composer
+                        // holds, a three-line draft included (readline's
+                        // muscle memory). While the popup is open the arrows
+                        // are its, so these keys stand down.
+                        KeyAction::HistoryPrev if !state.suggest_open() => state.recall_prev(),
+                        KeyAction::HistoryNext if !state.suggest_open() => state.recall_next(),
                         KeyAction::SuggestComplete if state.suggest_open() => {
                             state.complete_suggestion()
                         }
@@ -369,6 +448,15 @@ pub async fn run(
                     crossterm::event::Event::Paste(text) => {
                         state.editor.insert_paste(&text);
                     }
+                    // The mouse is for the wheel, and for nothing else: a
+                    // press, a drag, or a hold is ignored outright (see
+                    // [`classify_wheel`]), so a stray click can never move a
+                    // cursor or a selection.
+                    crossterm::event::Event::Mouse(mouse) => match classify_wheel(mouse) {
+                        Some(Wheel::Up) => state.scroll_up(WHEEL_ROWS),
+                        Some(Wheel::Down) => state.scroll_down(WHEEL_ROWS),
+                        None => {}
+                    },
                     _ => {}
                 }
             }
@@ -480,6 +568,14 @@ pub async fn run(
     }
 }
 
+/// Wait for the spinner's next frame; a disarmed clock never comes due.
+async fn until(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Wait for SIGTERM on Unix; pends forever if unavailable.
 #[cfg(unix)]
 async fn wait_sigterm(sig: &mut Option<tokio::signal::unix::Signal>) {
@@ -524,5 +620,7 @@ fn copy_last_answer(state: &mut State) {
     }
 }
 
+#[cfg(test)]
+mod render_tests;
 #[cfg(test)]
 mod tests;

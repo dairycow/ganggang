@@ -374,7 +374,7 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
             let mut endpoint =
                 config.resolve_switch_with_discovered(&target, &state.pending_models)?;
             endpoint.require_auth()?;
-            crate::llm::client::maybe_probe_local_health(&mut endpoint).await;
+            crate::llm::health::maybe_probe_local_health(&mut endpoint).await;
             let _ = crate::llm::client::LlmClient::from_endpoint(&endpoint)?;
             input_tx
                 .send(super::AgentInput::SwitchEndpoint(endpoint.clone()))
@@ -429,6 +429,7 @@ fn swap_agent(
 
 #[cfg(test)]
 mod tests {
+    use super::super::history::History;
     use super::*;
 
     #[test]
@@ -585,6 +586,7 @@ mod tests {
             131_072,
             std::sync::Arc::new(vec![]),
             std::sync::Arc::new(vec![]),
+            History::default(),
         );
         let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
         let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
@@ -640,6 +642,7 @@ mod tests {
             131_072,
             std::sync::Arc::new(vec![]),
             std::sync::Arc::new(vec![]),
+            History::default(),
         );
         let (mut input_tx2, _rx2) = tokio::sync::mpsc::channel(4);
         let ctx = CmdCtx {
@@ -678,6 +681,7 @@ mod tests {
             131_072,
             Arc::new(vec![]),
             Arc::new(vec![]),
+            History::default(),
         );
         let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
         let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
@@ -750,6 +754,7 @@ mod tests {
             131_072,
             Arc::new(vec![]),
             Arc::new(vec![]),
+            History::default(),
         );
         let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
         let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
@@ -859,6 +864,7 @@ mod tests {
             active_endpoint.context_window,
             Arc::new(vec![]),
             Arc::new(vec![]),
+            History::default(),
         );
         let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
         let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);

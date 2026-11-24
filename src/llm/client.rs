@@ -1,165 +1,16 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::Context;
-use serde::Deserialize;
 use serde_json::Value;
 
 use super::anthropic;
-use super::stream;
+use super::retry::Backoff;
+use super::stream::{self, StreamOutcome};
 use super::types::{ChatMessage, ChatRequest, ChatResponse, StreamOptions};
 use super::{ApiKind, AuthStyle};
-
-/// Permissive `/health` response from local servers (e.g. Strata).
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct HealthInfo {
-    #[serde(default)]
-    pub max_context: Option<u32>,
-    #[serde(default)]
-    pub kv_resident: Option<u32>,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub service: Option<String>,
-}
-
-/// Derive `<base>/health` from an OpenAI-style `base_url` (stripping a
-/// trailing `/` and `/v1`).
-pub(crate) fn health_url(base_url: &str) -> String {
-    let trimmed = base_url.trim_end_matches('/');
-    let root = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
-    format!("{root}/health")
-}
-
-/// True when `base_url` points to a loopback host (`127.0.0.1`, `localhost`,
-/// `[::1]`, etc.) without being fooled by URL userinfo.
-pub(crate) fn is_local_url(base_url: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(base_url) else {
-        return false;
-    };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    let bare = host
-        .strip_prefix('[')
-        .and_then(|s| s.strip_suffix(']'))
-        .unwrap_or(host);
-    bare.parse::<std::net::IpAddr>()
-        .is_ok_and(|ip| ip.is_loopback())
-}
-
-enum HealthProbe {
-    Ok(HealthInfo),
-    HttpOther,
-    Unreachable,
-}
-
-/// Probe `/health` on local/Strata endpoints to fill `context_window`,
-/// `compact_threshold_tokens`, and (for Strata) the currently loaded model
-/// when not explicitly configured, falling back to `/v1/models` if needed.
-pub async fn maybe_probe_local_health(endpoint: &mut crate::config::Endpoint) {
-    if endpoint.provider != "strata" && !is_local_url(&endpoint.base_url) {
-        return;
-    }
-    if endpoint.context_window_explicit
-        && endpoint.compact_threshold_explicit
-        && endpoint.model_explicit
-    {
-        return;
-    }
-    let mut got_ctx = false;
-    let mut got_model = false;
-    match probe_health_detail(&endpoint.base_url).await {
-        HealthProbe::Unreachable => return,
-        HealthProbe::Ok(info) => {
-            if !endpoint.context_window_explicit
-                && let Some(max_ctx) = info.max_context.filter(|&c| c > 0)
-            {
-                endpoint.context_window = max_ctx;
-                got_ctx = true;
-            }
-            if !endpoint.compact_threshold_explicit
-                && let Some(kv) = info.kv_resident.filter(|&c| c > 0)
-            {
-                endpoint.compact_threshold_tokens = Some(kv);
-            }
-            if !endpoint.model_explicit
-                && (endpoint.provider == "strata" || info.service.as_deref() == Some("strata"))
-                && let Some(m) = info
-                    .model
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-            {
-                endpoint.model = m.to_string();
-                got_model = true;
-            }
-        }
-        HealthProbe::HttpOther => {}
-    }
-
-    let need_strata_model = !endpoint.model_explicit && endpoint.provider == "strata" && !got_model;
-    let need_ctx = !endpoint.context_window_explicit && !got_ctx;
-    if (need_strata_model || need_ctx) && endpoint.api == ApiKind::OpenAiCompletions {
-        let Some(models) =
-            super::discovery::probe_models(&endpoint.base_url, endpoint.api_key.as_deref()).await
-        else {
-            return;
-        };
-        if need_strata_model {
-            let picked = models
-                .iter()
-                .find(|m| m.status.as_deref() == Some("loaded"))
-                .or_else(|| (models.len() == 1).then(|| &models[0]));
-            if let Some(m) = picked {
-                endpoint.model = m.id.clone();
-            }
-        }
-        if need_ctx {
-            let matched = models.iter().find(|m| m.id == endpoint.model).or_else(|| {
-                (endpoint.provider == "strata" && models.len() == 1).then(|| &models[0])
-            });
-            if let Some(ctx) = matched.and_then(|m| m.context_window).filter(|&c| c > 0) {
-                endpoint.context_window = ctx;
-            }
-        }
-    }
-}
-
-async fn probe_health_detail(base_url: &str) -> HealthProbe {
-    let Ok(client) = reqwest::Client::builder()
-        .connect_timeout(Duration::from_millis(500))
-        .timeout(Duration::from_secs(2))
-        .build()
-    else {
-        return HealthProbe::Unreachable;
-    };
-    let url = health_url(base_url);
-    let Ok(resp) = client.get(&url).send().await else {
-        return HealthProbe::Unreachable;
-    };
-    if !resp.status().is_success() {
-        return HealthProbe::HttpOther;
-    }
-    match resp.json::<HealthInfo>().await {
-        Ok(info) => HealthProbe::Ok(info),
-        Err(_) => HealthProbe::HttpOther,
-    }
-}
-
-/// Best-effort probe of `/health` with short timeouts (500ms connect, 2s
-/// total). Returns `None` on any error, non-2xx status, or invalid JSON.
-#[cfg(test)]
-pub async fn probe_health(base_url: &str) -> Option<HealthInfo> {
-    match probe_health_detail(base_url).await {
-        HealthProbe::Ok(info) => Some(info),
-        HealthProbe::HttpOther | HealthProbe::Unreachable => None,
-    }
-}
 
 /// One client per process, reused across every turn of the agent loop.
 /// reqwest::Client owns a connection pool; building it per request throws that
@@ -174,6 +25,15 @@ pub struct LlmClient {
     reasoning_budget_tokens: Option<u32>,
     session_id: String,
     session_header: Option<String>,
+    /// The retry budget for transient transport failures (§ client docs).
+    retry: Backoff,
+    /// The whole-response timeout carried on every request — response head
+    /// AND body, so it bounds a stream too. Generations longer than a few
+    /// minutes are the reason it is a setting (GAP 2), not a constant.
+    request_timeout: Duration,
+    /// Retries made since the caller last asked ([`Self::take_notices`]).
+    /// The client does not print them: in the TUI stderr is the screen.
+    notices: std::sync::Mutex<Vec<String>>,
 }
 
 impl LlmClient {
@@ -184,9 +44,10 @@ impl LlmClient {
             http: reqwest::Client::builder()
                 // reqwest has NO timeout by default: a wedged model server would
                 // hang gg forever. Two separate ones matter — connecting is a
-                // different failure from a slow response.
+                // different failure from a slow response. The whole-response
+                // timeout is set per request instead (see `request_timeout`),
+                // so it can be re-derived per attempt and configured.
                 .connect_timeout(Duration::from_secs(10))
-                .timeout(Duration::from_secs(300))
                 .user_agent(concat!("ganggang/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .context("building http client")?,
@@ -199,6 +60,9 @@ impl LlmClient {
             reasoning_budget_tokens: None,
             session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
             session_header,
+            retry: Backoff::default(),
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            notices: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -209,43 +73,6 @@ impl LlmClient {
             .with_api_key(endpoint.api_key.clone())
             .with_reasoning_effort(endpoint.reasoning_effort.clone())
             .with_reasoning_budget_tokens(endpoint.reasoning_budget_tokens))
-    }
-
-    pub fn with_api(mut self, api: ApiKind) -> Self {
-        self.api = api;
-        self
-    }
-
-    pub fn with_auth(mut self, auth: AuthStyle) -> Self {
-        self.auth = auth;
-        self
-    }
-
-    /// Attach an API key, sent according to [`AuthStyle`].
-    pub fn with_api_key(mut self, api_key: Option<String>) -> Self {
-        self.api_key = api_key;
-        self
-    }
-
-    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
-        self.reasoning_effort = effort;
-        self
-    }
-
-    pub fn with_reasoning_budget_tokens(mut self, budget: Option<u32>) -> Self {
-        self.reasoning_budget_tokens = budget.filter(|&n| n > 0);
-        self
-    }
-
-    pub fn with_session_id(mut self, session_id: String) -> Self {
-        self.session_id = session_id;
-        self
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_session_header(mut self, header: Option<String>) -> Self {
-        self.session_header = header;
-        self
     }
 
     fn apply_auth(&self, mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -272,6 +99,10 @@ impl LlmClient {
     /// taking ownership: the caller keeps growing the session, and the
     /// registry stays the single source of tool schemas. An empty `tools`
     /// slice omits the key from the request entirely.
+    ///
+    /// Transient transport failures are retried with bounded exponential
+    /// backoff ([`retry`]); a 4xx other than 408/429 fails at once, because
+    /// a second identical request gets a second identical no.
     pub async fn send(
         &self,
         model: &str,
@@ -281,7 +112,6 @@ impl LlmClient {
     ) -> anyhow::Result<ChatResponse> {
         match self.api {
             ApiKind::OpenAiCompletions => {
-                let url = format!("{}/chat/completions", self.base_url);
                 let body = ChatRequest {
                     model,
                     messages,
@@ -292,31 +122,31 @@ impl LlmClient {
                     reasoning_effort: self.reasoning_effort.as_deref(),
                     reasoning_budget_tokens: self.reasoning_budget_tokens,
                 };
-                let request = self.apply_auth(self.http.post(&url).json(&body));
-                let resp = request
-                    .send()
-                    .await
-                    .with_context(|| format!("POST {url}"))?;
-                let resp = check_status(resp, &url).await?;
+                let (url, request) = build_request(
+                    self.apply_auth(
+                        self.http
+                            .post(format!("{}/chat/completions", self.base_url))
+                            .json(&body),
+                    ),
+                    self.request_timeout,
+                )?;
+                let resp = self.post(&url, request).await?;
                 resp.json()
                     .await
                     .context("response was not JSON matching ChatResponse")
             }
             ApiKind::AnthropicMessages => {
-                let url = anthropic::messages_url(&self.base_url);
                 let body = anthropic::build_request(model, messages, max_tokens, tools, false);
-                let request = self
-                    .apply_auth(
+                let (url, request) = build_request(
+                    self.apply_auth(
                         self.http
-                            .post(&url)
+                            .post(anthropic::messages_url(&self.base_url))
                             .header("anthropic-version", anthropic::ANTHROPIC_VERSION),
                     )
-                    .json(&body);
-                let resp = request
-                    .send()
-                    .await
-                    .with_context(|| format!("POST {url}"))?;
-                let resp = check_status(resp, &url).await?;
+                    .json(&body),
+                    self.request_timeout,
+                )?;
+                let resp = self.post(&url, request).await?;
                 let raw: Value = resp
                     .json()
                     .await
@@ -329,22 +159,35 @@ impl LlmClient {
     /// Streaming variant of [`LlmClient::send`] (spec §15, M5): the request
     /// carries `stream: true`, deltas (text and thinking, M7.3) are
     /// delivered through `on_delta` as they arrive, and the return value
-    /// is the response the chunks assembled into — identical to what
+    /// is the response the chunks assembled plus whether the wire said the
+    /// stream finished ([`StreamOutcome`], GAP 2) — the response is what
     /// [`LlmClient::send`] would have returned, so callers do not change
-    /// shape. The client's 300 s request timeout still applies, now
-    /// spanning the whole streamed body (§17: everything that can hang
-    /// has a number).
+    /// shape. The whole-response timeout applies here too, now spanning the
+    /// whole streamed body (§17: everything that can hang has a number).
+    ///
+    /// `abort` is the running agent's stop request: the stream
+    /// read polls it, so Esc does not have to wait for a generation to
+    /// finish. An aborted read returns what assembled so far with
+    /// `aborted: true` — never an error, never a retry.
+    ///
+    /// Retrying follows the same rules as [`LlmClient::send`] for the
+    /// request itself: a 500 before a single byte of SSE is worth another
+    /// attempt. Once the response head is in, the error is returned as it
+    /// is — replaying a stream that already delivered a delta would show
+    /// the user the same text twice (§17: never silently duplicate output).
+    /// A stop request ends the retry loop outright: the user asked for no
+    /// more requests, and none is made.
     pub async fn send_stream(
         &self,
         model: &str,
         messages: &[ChatMessage],
         max_tokens: u32,
         tools: &[Value],
+        abort: &AtomicBool,
         on_delta: impl FnMut(stream::Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
-    ) -> anyhow::Result<ChatResponse> {
-        match self.api {
+    ) -> anyhow::Result<StreamOutcome> {
+        let (url, request) = match self.api {
             ApiKind::OpenAiCompletions => {
-                let url = format!("{}/chat/completions", self.base_url);
                 let body = ChatRequest {
                     model,
                     messages,
@@ -357,48 +200,42 @@ impl LlmClient {
                     reasoning_effort: self.reasoning_effort.as_deref(),
                     reasoning_budget_tokens: self.reasoning_budget_tokens,
                 };
-                let request = self.apply_auth(self.http.post(&url).json(&body));
-                let resp = request
-                    .send()
-                    .await
-                    .with_context(|| format!("POST {url}"))?;
-                let resp = check_status(resp, &url).await?;
-                stream::drain_sse(resp, on_delta).await
+                build_request(
+                    self.apply_auth(
+                        self.http
+                            .post(format!("{}/chat/completions", self.base_url))
+                            .json(&body),
+                    ),
+                    self.request_timeout,
+                )?
             }
             ApiKind::AnthropicMessages => {
-                let url = anthropic::messages_url(&self.base_url);
                 let body = anthropic::build_request(model, messages, max_tokens, tools, true);
-                let request = self
-                    .apply_auth(
+                build_request(
+                    self.apply_auth(
                         self.http
-                            .post(&url)
+                            .post(anthropic::messages_url(&self.base_url))
                             .header("anthropic-version", anthropic::ANTHROPIC_VERSION),
                     )
-                    .json(&body);
-                let resp = request
-                    .send()
-                    .await
-                    .with_context(|| format!("POST {url}"))?;
-                let resp = check_status(resp, &url).await?;
-                anthropic::stream::drain_sse(resp, on_delta).await
+                    .json(&body),
+                    self.request_timeout,
+                )?
+            }
+        };
+        // The stop request is part of the send: it ends the wait for the
+        // response head and rules out a retry.
+        let response = self.attempts(&url, request, Some(abort)).await?;
+        match self.api {
+            ApiKind::OpenAiCompletions => stream::drain_sse(response, abort, on_delta).await,
+            ApiKind::AnthropicMessages => {
+                anthropic::stream::drain_sse(response, abort, on_delta).await
             }
         }
     }
 }
 
-async fn check_status(resp: reqwest::Response, url: &str) -> anyhow::Result<reqwest::Response> {
-    if resp.status().is_success() {
-        return Ok(resp);
-    }
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        anyhow::bail!("POST {url} failed ({status})");
-    }
-    let excerpt: String = trimmed.chars().take(1024).collect();
-    anyhow::bail!("POST {url} failed ({status}): {excerpt}");
-}
+/// The whole-response timeout used when config says nothing.
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 
 fn is_opencode_url(base_url: &str) -> bool {
     let Some((_, rest)) = base_url.split_once("://") else {
@@ -412,246 +249,15 @@ fn is_opencode_url(base_url: &str) -> bool {
     host == "opencode.ai" || host.ends_with(".opencode.ai")
 }
 
+/// Streaming retry tests: the request half retries, the body half never
+/// does, and a cut body is salvage rather than loss (GAP 2).
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::sync::{Arc, Mutex};
+mod stream_tests;
 
-    #[test]
-    fn opencode_url_detection() {
-        assert!(is_opencode_url(
-            "https://opencode.ai/inference/go/openai/v1"
-        ));
-        assert!(is_opencode_url(
-            "https://opencode.ai/inference/go/anthropic"
-        ));
-        assert!(!is_opencode_url("https://api.deepseek.com"));
-        assert!(!is_opencode_url("http://127.0.0.1:8080/v1"));
-        assert!(!is_opencode_url("https://notopencode.ai/v1"));
-    }
+mod attempt;
+mod builder;
 
-    #[tokio::test]
-    async fn session_header_is_sent_when_configured() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let seen = Arc::new(Mutex::new(String::new()));
-        let seen_clone = seen.clone();
+use attempt::build_request;
 
-        std::thread::spawn(move || {
-            let (mut s, _) = listener.accept().unwrap();
-            let mut buf = [0u8; 4096];
-            let n = s.read(&mut buf).unwrap();
-            *seen_clone.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).to_string();
-            let body = r#"{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#;
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            s.write_all(resp.as_bytes()).unwrap();
-        });
-
-        let client = LlmClient::new(&format!("http://{addr}"))
-            .unwrap()
-            .with_session_header(Some("x-opencode-session".into()))
-            .with_session_id("sess-123".into());
-        let _ = client.send("m", &[], 16, &[]).await.unwrap();
-        let raw = seen.lock().unwrap().to_ascii_lowercase();
-        assert!(raw.contains("x-opencode-session: sess-123"), "{raw}");
-        assert!(raw.contains("x-opencode-client: ganggang"), "{raw}");
-        assert!(raw.contains("user-agent: ganggang/"), "{raw}");
-    }
-
-    #[tokio::test]
-    async fn reasoning_effort_and_budget_are_sent_when_configured() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let seen = Arc::new(Mutex::new(String::new()));
-        let seen_clone = seen.clone();
-
-        std::thread::spawn(move || {
-            let (mut s, _) = listener.accept().unwrap();
-            let mut buf = [0u8; 4096];
-            let n = s.read(&mut buf).unwrap();
-            *seen_clone.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).to_string();
-            let body = r#"{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#;
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            s.write_all(resp.as_bytes()).unwrap();
-        });
-
-        let client = LlmClient::new(&format!("http://{addr}"))
-            .unwrap()
-            .with_reasoning_effort(Some("medium".into()))
-            .with_reasoning_budget_tokens(Some(4096));
-        let _ = client.send("m", &[], 16, &[]).await.unwrap();
-        let raw = seen.lock().unwrap().clone();
-        let body = raw.split("\r\n\r\n").nth(1).unwrap();
-        let v: serde_json::Value = serde_json::from_str(body).unwrap();
-        assert_eq!(v["reasoning_effort"], "medium");
-        assert_eq!(v["reasoning_budget_tokens"], 4096);
-    }
-
-    #[test]
-    fn health_url_and_local_url_detection() {
-        assert_eq!(
-            health_url("http://127.0.0.1:8080/v1"),
-            "http://127.0.0.1:8080/health"
-        );
-        assert_eq!(
-            health_url("http://localhost:8080/"),
-            "http://localhost:8080/health"
-        );
-        assert!(is_local_url("http://127.0.0.1:8080/v1"));
-        assert!(is_local_url("http://127.0.0.2:8080/v1"));
-        assert!(is_local_url("http://localhost:8080/v1"));
-        assert!(is_local_url("http://[::1]:8080/v1"));
-        assert!(is_local_url("http://[0:0:0:0:0:0:0:1]:8080/v1"));
-        assert!(!is_local_url("https://api.deepseek.com"));
-        assert!(!is_local_url("http://localhost:pass@evil.com/v1"));
-        assert!(!is_local_url("http://127.0.0.1@evil.com/v1"));
-    }
-
-    #[tokio::test]
-    async fn maybe_probe_local_health_updates_unexplicit_fields() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            let (mut s, _) = listener.accept().unwrap();
-            let mut buf = [0u8; 1024];
-            let _ = s.read(&mut buf);
-            let body = r#"{"max_context":262144,"kv_resident":98304}"#;
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            s.write_all(resp.as_bytes()).unwrap();
-        });
-        let mut ep = crate::config::Config::default().active_endpoint();
-        ep.base_url = format!("http://{addr}/v1");
-        ep.context_window_explicit = false;
-        ep.compact_threshold_explicit = false;
-        maybe_probe_local_health(&mut ep).await;
-        assert_eq!(ep.context_window, 262_144);
-        assert_eq!(ep.compact_threshold_tokens, Some(98_304));
-    }
-
-    #[tokio::test]
-    async fn probe_health_parses_strata_and_handles_failures() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            for body in [
-                (
-                    "200 OK",
-                    r#"{"status":"ok","max_context":262144,"kv_resident":65536,"model":"qwen3.8","service":"strata"}"#,
-                ),
-                ("404 Not Found", "nope"),
-                ("200 OK", "{not json"),
-            ] {
-                let (mut s, _) = listener.accept().unwrap();
-                let mut buf = [0u8; 1024];
-                let _ = s.read(&mut buf);
-                let resp = format!(
-                    "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.0,
-                    body.1.len(),
-                    body.1
-                );
-                s.write_all(resp.as_bytes()).unwrap();
-            }
-        });
-
-        let base = format!("http://{addr}/v1");
-        let info = probe_health(&base).await.expect("valid health");
-        assert_eq!(info.max_context, Some(262_144));
-        assert_eq!(info.kv_resident, Some(65_536));
-        assert_eq!(info.service.as_deref(), Some("strata"));
-
-        assert!(probe_health(&base).await.is_none());
-        assert!(probe_health(&base).await.is_none());
-    }
-
-    #[tokio::test]
-    async fn maybe_probe_local_health_adopts_strata_model_unless_explicit() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            for _ in 0..2 {
-                let (mut s, _) = listener.accept().unwrap();
-                let mut buf = [0u8; 1024];
-                let _ = s.read(&mut buf);
-                let body =
-                    r#"{"max_context":32768,"model":"inkling-2-mini-sq-15","service":"strata"}"#;
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                s.write_all(resp.as_bytes()).unwrap();
-            }
-        });
-
-        let mut ep = crate::config::Config::default().active_endpoint();
-        ep.base_url = format!("http://{addr}/v1");
-        ep.model_explicit = false;
-        ep.context_window_explicit = false;
-        maybe_probe_local_health(&mut ep).await;
-        assert_eq!(ep.model, "inkling-2-mini-sq-15");
-        assert_eq!(ep.context_window, 32_768);
-
-        let mut explicit_ep = crate::config::Config::default().active_endpoint();
-        explicit_ep.base_url = format!("http://{addr}/v1");
-        explicit_ep.model = "my-forced-model".into();
-        explicit_ep.model_explicit = true;
-        maybe_probe_local_health(&mut explicit_ep).await;
-        assert_eq!(explicit_ep.model, "my-forced-model");
-    }
-
-    #[tokio::test]
-    async fn maybe_probe_local_health_falls_back_to_v1_models_for_ctx_and_strata() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            for _ in 0..4 {
-                let (mut s, _) = listener.accept().unwrap();
-                let mut buf = [0u8; 2048];
-                let n = s.read(&mut buf).unwrap();
-                let req = String::from_utf8_lossy(&buf[..n]);
-                let body = if req.starts_with("GET /health ") {
-                    r#"{"status":"ok"}"#
-                } else {
-                    r#"{"data":[{"id":"gemma4-26b-200k","status":{"value":"loaded","args":["llama-server","--ctx-size","200000"]}}]}"#
-                };
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                s.write_all(resp.as_bytes()).unwrap();
-            }
-        });
-
-        let mut custom_ep = crate::config::Config::default().active_endpoint();
-        custom_ep.provider = "llama-cpp".into();
-        custom_ep.model = "gemma4-26b-200k".into();
-        custom_ep.model_explicit = true;
-        custom_ep.context_window_explicit = false;
-        custom_ep.base_url = format!("http://{addr}/v1");
-        maybe_probe_local_health(&mut custom_ep).await;
-        assert_eq!(custom_ep.model, "gemma4-26b-200k");
-        assert_eq!(custom_ep.context_window, 200_000);
-
-        let mut strata_ep = crate::config::Config::default().active_endpoint();
-        strata_ep.base_url = format!("http://{addr}/v1");
-        strata_ep.model_explicit = false;
-        strata_ep.context_window_explicit = false;
-        maybe_probe_local_health(&mut strata_ep).await;
-        assert_eq!(strata_ep.model, "gemma4-26b-200k");
-        assert_eq!(strata_ep.context_window, 200_000);
-    }
-}
+#[cfg(test)]
+mod tests;

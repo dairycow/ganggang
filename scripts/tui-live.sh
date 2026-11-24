@@ -11,7 +11,9 @@
 # Every case gets a tmux server of its own, on a socket under this script's
 # temp directory — never the user's server. tmux options are server-wide
 # (tmux 3.8: even `set-window-option -t <window>` changes them for every
-# session), and one case here turns `extended-keys` on.
+# session), and one case here turns `extended-keys` on. gg itself runs
+# under a home of this run's own (see launch.sh), so nothing it writes
+# reaches the user's ~/.gg.
 set -u
 
 GG=$(readlink -f "${GG:-$PWD/target/release/gg}")   # like smoke.sh: run from the repo root. Canonical: gg_pid() compares /proc/<pid>/exe with it as a string, and a `..` in the path matches nothing.
@@ -26,12 +28,15 @@ EXT_KEYS=off                       # the case's tmux server: off as tmux ships i
 printf 'set -g default-terminal "tmux-256color"\n' > "$WORK/tmux.conf"
 
 # Pane modes tmux keeps for the pane's program: alternate screen, mouse
-# reporting (standard / button / UTF-8), keypad and cursor-key application,
-# key encoding (VT10x = legacy), synchronized output, autowrap, origin.
-MODES='alt=#{alternate_on} mouse=#{mouse_standard_flag}/#{mouse_button_flag}/#{mouse_utf8_flag} keypad=#{keypad_flag}/#{keypad_cursor_flag} keymode=#{pane_key_mode} sync=#{synchronized_output_flag} wrap=#{wrap_flag} origin=#{origin_flag}'
-OFF="mouse=0/0/0 keypad=0/0 keymode=VT10x sync=0 wrap=1 origin=0"
+# reporting (standard / button / any-event / UTF-8 / SGR), keypad and
+# cursor-key application, key encoding (VT10x = legacy), synchronized
+# output, autowrap, origin. All five mouse flags, because gg's own request
+# is any-event tracking plus SGR (1003 and 1006): a check that looked at
+# the other three would pass with gg's mouse reporting left on.
+MODES='alt=#{alternate_on} mouse=#{mouse_standard_flag}/#{mouse_button_flag}/#{mouse_all_flag}/#{mouse_utf8_flag}/#{mouse_sgr_flag} keypad=#{keypad_flag}/#{keypad_cursor_flag} keymode=#{pane_key_mode} sync=#{synchronized_output_flag} wrap=#{wrap_flag} origin=#{origin_flag}'
+OFF="mouse=0/0/0/0/0 keypad=0/0 keymode=VT10x sync=0 wrap=1 origin=0"
 WANT_MODES="alt=0 $OFF"            # once gg has quit
-WANT_RUNNING="alt=1 $OFF"          # while gg runs: on the alternate screen, nothing else on
+WANT_RUNNING="alt=1 mouse=0/0/1/0/1 keypad=0/0 keymode=VT10x sync=0 wrap=1 origin=0"   # while gg runs: the alternate screen and gg's own mouse reporting, nothing else
 pass=0; fail=0; skipped=0; before_drafts=""; first_drafts=""; CASE_GGPID=""
 
 cleanup() {
@@ -72,7 +77,18 @@ wait_nvim() { # nvim's empty-buffer tildes: the editor has the screen
   done
   return 1
 }
-composer() { pane | tail -5 | head -4 | sed 's/ *$//'; }   # the editor box's text rows
+wait_footer() { # until the footer — the pane's last row — shows $1 (up to $2 s)
+  local deadline=$((SECONDS + $2))
+  while ((SECONDS < deadline)); do
+    if pane | tail -1 | grep -qF -- "$1"; then return 0; fi
+    sleep 0.2
+  done
+  return 1
+}
+# The composer's own text rows: whatever sits between its rounded rules. The
+# box's height follows the draft (one row to eight), so counting rows from the
+# bottom would grab a border; the ` compose ` title names the block instead.
+composer() { pane | awk '/╭ compose/{f=1;next} /^╰/{f=0} f' | sed 's/^│ //; s/[[:space:]]*│[[:space:]]*$//; s/[[:space:]]*$//'; }
 line() { composer | head -1; }
 draft_dirs() { find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'gg-draft-*' -type d 2>/dev/null | sort; }
 draft_files() { find "${TMPDIR:-/tmp}" -maxdepth 2 -path '*/gg-draft-*/*' 2>/dev/null | sort; }
@@ -84,7 +100,7 @@ wait_log() { # until the fake editor's log has a line starting with $1
   done
   return 1
 }
-check_modes() { # check_modes <label> — while gg runs: no mode a crashed editor switched on is still on
+check_modes() { # check_modes <label> — while gg runs: no mode a crashed editor switched on is still on, and gg's own are
   local now want; now=$(t display-message -p -t "$S" "$MODES")
   # With extended keys on, gg's own request puts the pane in tmux's
   # mode 1 (the keys it needs are reported as CSI-u); off, the request
@@ -108,10 +124,18 @@ gg_pid() { # this session's gg — a match on the binary alone would be any gg o
 
 # What the pane's terminal looks like once gg has quit. This is where an
 # editor that never put the terminal back would show: gg has to leave the
-# shell a cooked tty with no modes left on, whatever the editor did.
+# shell a cooked tty with no alternate screen and no modes left on,
+# whatever the editor did.
 quit_and_check() { # quit_and_check <label>
   local label=$1 deadline
+  # Ctrl+C cancels rather than quits: with a draft it clears it, with a run
+  # in flight it stops the run, and the SECOND press ends gg. Press once,
+  # and again only if the run is still there — one press is enough when the
+  # composer was already empty.
   keys C-c
+  deadline=$((SECONDS + 4))
+  while ((SECONDS < deadline)); do grep -q '^gg-exit=' "$WORK/gg-exit.log" 2>/dev/null && break; sleep 0.1; done
+  if ! grep -q '^gg-exit=' "$WORK/gg-exit.log" 2>/dev/null; then keys C-c; fi
   deadline=$((SECONDS + 10))
   while ((SECONDS < deadline)); do grep -q '^gg-exit=' "$WORK/gg-exit.log" 2>/dev/null && break; sleep 0.1; done
   if grep -q '^gg-exit=0$' "$WORK/gg-exit.log" 2>/dev/null; then ok "$label.1" "gg exited cleanly"
@@ -144,7 +168,7 @@ start() { # start <EDITOR value> <FAKE_MODE> [FAKE_SLEEP]
   t new-session -d -s "$S" -x 150 -y 40 "bash -c '$WORK/launch.sh $WORK $GG \"$1\" ${2:-ok} ${3:-}'"
   t set-window-option -t "$S" extended-keys "$EXT_KEYS"
   t kill-session -t boot
-  wait_for "○ ready" 15 || { echo "gg did not start:"; show; exit 1; }
+  wait_footer "○ ready" 15 || { echo "gg did not start:"; show; exit 1; }
   CASE_GGPID=$(gg_pid)
 }
 no_leak() { # no_leak <label>  (while gg runs: nothing left from an earlier session)
@@ -192,6 +216,11 @@ cat > "$WORK/launch.sh" <<'LAUNCH'
 # panes, so everything travels as arguments.)
 base=$1
 export EDITOR="$3" FAKE_MODE="$4" FAKE_SLEEP="${5:-}" FAKE_LOG="$base/fake.log"
+# gg's home is this run's own, like hooks-live.sh's: nothing it writes —
+# the prompt history, above all, since every line this test submits is a
+# submission — reaches the user's ~/.gg, and nothing of the user's config,
+# hooks, skills or templates changes what the test sees.
+export HOME="$base/home"; mkdir -p "$HOME"
 cd "$base/scratch" || exit 1
 "$2" --no-session 2> "$base/gg-err.log"
 status=$?
@@ -225,7 +254,7 @@ elif ! grep -qE '(^|[[:space:]])isig[[:space:]]' "$WORK/fake.log"; then bad A4 "
 else ok A4 "the editor started on a cooked, signal-capable tty"; fi
 no_leak A5
 keys Enter; wait_for 'you │ hello + editedQR' 5 || bad A6 "the edited draft did not submit" "$(show)"
-wait_for "○ ready" 90 && ok A6 "the edited draft submits like typed text" || bad A6 "run did not finish" "$(show)"
+wait_footer "○ ready" 90 && ok A6 "the edited draft submits like typed text" || bad A6 "run did not finish" "$(show)"
 finish A7
 
 if command -v nvim >/dev/null; then
@@ -283,13 +312,13 @@ no_leak F3; finish F4
 
 echo "== G: Ctrl+G while a run is in flight — the run continues behind the editor"
 start "$FAKE" slow 10
-keys -l 'Count from 1 up to 25, one number per line, no other text.'; keys Enter; wait_for '● working' 10
+keys -l 'Count from 1 up to 25, one number per line, no other text.'; keys Enter; wait_footer ' working' 10
 keys -l 'draft text'; wait_for 'draft text' 3; keys C-g
 wait_log 'draft='
 grep -qF 'draft=[draft text]' "$WORK/fake.log" && ok G1 "the editor got the composer's text while busy" || bad G1 "editor log" "$(grep -E '^(draft=|start)' "$WORK/fake.log")"
 wait_for 'draft while busy' 25 || show
 [[ "$(line)" == "draft while busy" ]] && ok G2 "composer is the saved draft" || bad G2 "composer" "$(composer)"
-wait_for "○ ready" 120 && ok G3 "the run finished, the footer is back to ready" || bad G3 "run did not finish" "$(show)"
+wait_footer "○ ready" 120 && ok G3 "the run finished, the footer is back to ready" || bad G3 "run did not finish" "$(show)"
 numbers=$(pane | grep -cE '^ *[0-9]{1,2} *$')
 ((numbers >= 20)) && ok G4 "the answer's $numbers number lines streamed in behind the editor" || bad G4 "expected the answer's number lines" "$(show)"
 pane | grep -q 'run failed' && bad G5 "the run failed" "$(show)" || ok G5 "no run failure"
@@ -299,10 +328,10 @@ echo "== H: the ! shell lines still fold back into the view"
 start "$FAKE" instant
 keys -l "!!printf 'SHELL-%s\n' LOCAL"; keys Enter
 wait_for 'SHELL-LOCAL' 10 && ok H1 "a !! line shows its output locally" || bad H1 "transcript" "$(show)"
-wait_for "○ ready" 5 && ok H2 "back to ready" || bad H2 "still busy" "$(show)"
+wait_footer "○ ready" 5 && ok H2 "back to ready" || bad H2 "still busy" "$(show)"
 keys -l "!printf 'SHELL-%s\n' CONTEXT"; keys Enter
 wait_for 'SHELL-CONTEXT' 10 && ok H3 "a ! line shows its output" || bad H3 "transcript" "$(show)"
-wait_for "○ ready" 90 && ok H4 "the run it starts finishes" || bad H4 "run did not finish" "$(show)"
+wait_footer "○ ready" 90 && ok H4 "the run it starts finishes" || bad H4 "run did not finish" "$(show)"
 finish H5
 
 echo "== I: editor returns at once (a GUI editor without a wait flag) — a hint, composer intact"
@@ -361,7 +390,7 @@ killed_nvim_case() { # killed_nvim_case <label> <extended-keys: off|on>
   [[ "$(line)" == "before7" ]] && ok "$L.3" "a numpad key types its digit" || bad "$L.3" "composer" "$(composer)"
   keys -l 'Q'; wait_for 'before7Q' 3 || true
   [[ "$(line)" == "before7Q" ]] && ok "$L.4" "typing works" || bad "$L.4" "composer" "$(composer)"
-  finish "$L.5"                                    # .1: Ctrl+C still quits gg
+  finish "$L.5"                                    # .1: Ctrl+C twice still quits gg
   EXT_KEYS=off
 }
 if command -v nvim >/dev/null; then
@@ -372,10 +401,13 @@ fi
 echo "== N: composer keys — Ctrl+J/Alt+Enter/Shift+Enter break lines; Ctrl+A/E/K/U edit"
 EXT_KEYS=on                                       # Shift+Enter needs the pane in extended-key mode
 start "$FAKE" instant
+# The composer's rows, not the whole pane: an exact whole-line match
+# scoped to the box cannot land on a transcript row by accident.
+rows() { composer; }
 keys -l 'one'; keys C-j; keys -l 'two'; wait_for 'two' 5
-pane | grep -qx 'one' && pane | grep -qx 'two' && ok N1 "Ctrl+J broke the line" || bad N1 "Ctrl+J" "$(show)"
+rows | grep -qx 'one' && rows | grep -qx 'two' && ok N1 "Ctrl+J broke the line" || bad N1 "Ctrl+J" "$(show)"
 keys M-Enter; keys -l 'three'; wait_for 'three' 5
-pane | grep -qx 'three' && ok N2 "Alt+Enter broke the line" || bad N2 "Alt+Enter" "$(show)"
+rows | grep -qx 'three' && ok N2 "Alt+Enter broke the line" || bad N2 "Alt+Enter" "$(show)"
 keys C-a; keys -l 'X'; wait_for 'Xthree' 5 && ok N3 "Ctrl+A put the cursor at the line start" || bad N3 "Ctrl+A" "$(show)"
 keys C-e; keys -l '!'; wait_for 'Xthree!' 5 && ok N4 "Ctrl+E put the cursor at the line end" || bad N4 "Ctrl+E" "$(show)"
 keys C-k; sleep 0.4
@@ -383,7 +415,7 @@ pane | grep -q 'Xthree!' && ok N5 "Ctrl+K at the end of the last line is a no-op
 keys C-u; sleep 0.4
 pane | grep -q 'Xthree!' && bad N6 "Ctrl+U did not clear the line" "$(show)" || ok N6 "Ctrl+U killed back to the line start"
 keys S-Enter; keys -l 'four'; wait_for 'four' 5
-pane | grep -qx 'four' && ok N7 "Shift+Enter broke the line (extended keys on)" || bad N7 "Shift+Enter" "$(show)"
+rows | grep -qx 'four' && ok N7 "Shift+Enter broke the line (extended keys on)" || bad N7 "Shift+Enter" "$(show)"
 pane | grep -q 'you │' && bad N8 "an unsubmitted draft was sent" "$(show)" || ok N8 "nothing was submitted"
 EXT_KEYS=off
 finish N9

@@ -6,9 +6,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifi
 
 use super::agent_task::usage_totals;
 use super::footer::Footer;
+use super::history::{Arrow, History};
 use super::keys::{KeyAction, classify};
 use super::transcript::LineKind;
-use super::view::State;
+use super::view::{Cancel, State};
 use crate::agent::session::{Entry, Message, Role};
 use crate::events::AgentEvent;
 
@@ -90,10 +91,11 @@ fn readline_keys_edit_the_composer_and_arrows_move_the_cursor() {
 }
 
 #[test]
-fn ctrl_c_quits_ctrl_o_expands_ctrl_t_thinks_esc_aborts_pages_scroll() {
+fn ctrl_c_interrupts_ctrl_o_expands_ctrl_t_thinks_esc_aborts_pages_scroll() {
     assert_eq!(
         classify(key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-        KeyAction::Quit
+        KeyAction::Interrupt,
+        "Ctrl+C is muscle memory: it cancels, it does not quit"
     );
     assert_eq!(
         classify(key(KeyCode::Char('o'), KeyModifiers::CONTROL)),
@@ -141,6 +143,112 @@ fn ctrl_r_requests_a_watch_rebuild_and_plain_r_is_text() {
     );
 }
 
+/// Ctrl+P / Ctrl+N: history recall that does not care what the composer
+/// holds (arrows do — a multi-line composer keeps its line cursor).
+#[test]
+fn ctrl_p_and_ctrl_n_recall_history_and_plain_letters_type() {
+    let ctrl = KeyModifiers::CONTROL;
+    assert_eq!(
+        classify(key(KeyCode::Char('p'), ctrl)),
+        KeyAction::HistoryPrev
+    );
+    assert_eq!(
+        classify(key(KeyCode::Char('n'), ctrl)),
+        KeyAction::HistoryNext
+    );
+    // tmux and terminals that report Meta dress these up; the control
+    // modifier is what counts.
+    assert_eq!(
+        classify(key(KeyCode::Char('p'), ctrl | KeyModifiers::SHIFT)),
+        KeyAction::HistoryPrev
+    );
+    assert_eq!(
+        classify(key(KeyCode::Char('p'), KeyModifiers::NONE)),
+        KeyAction::Insert('p'),
+        "plain letters stay text"
+    );
+    assert_eq!(
+        classify(key(KeyCode::Char('n'), KeyModifiers::ALT)),
+        KeyAction::Ignore,
+        "Alt+letter is not a history key"
+    );
+}
+
+/// The mouse is the wheel and nothing else: a notch scrolls three rows in
+/// the direction the transcript counts (up = older), and every other mouse
+/// event — a press, a release, a drag, a hold — means nothing at all. Which
+/// is also why a stray click cannot move a cursor or a selection.
+#[test]
+fn the_mouse_wheel_pages_three_rows_and_every_other_mouse_event_is_ignored() {
+    use super::keys::{WHEEL_ROWS, Wheel, classify_wheel};
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let at = |kind: MouseEventKind| MouseEvent {
+        kind,
+        column: 40,
+        row: 7,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert_eq!(
+        classify_wheel(at(MouseEventKind::ScrollUp)),
+        Some(Wheel::Up)
+    );
+    assert_eq!(
+        classify_wheel(at(MouseEventKind::ScrollDown)),
+        Some(Wheel::Down),
+        "down shows the newer rows"
+    );
+    assert_eq!(
+        WHEEL_ROWS, 3,
+        "a notch moves a chunk without losing the row being read"
+    );
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Right),
+        MouseEventKind::Moved,
+        MouseEventKind::ScrollLeft,
+        MouseEventKind::ScrollRight,
+    ] {
+        assert_eq!(classify_wheel(at(kind)), None, "{kind:?} means nothing");
+    }
+    // tmux and friends report a wheel notch with a modifier sometimes; the
+    // kind is what counts.
+    let shifted = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 1,
+        row: 1,
+        modifiers: KeyModifiers::SHIFT,
+    };
+    assert_eq!(classify_wheel(shifted), Some(Wheel::Down));
+}
+
+/// The wheel drives the transcript's scroll, the same clamp PageUp/PageDown
+/// obey: three rows a notch, never past the oldest row, never past newest.
+#[test]
+fn a_wheel_notch_scrolls_the_transcript_three_rows_at_a_time() {
+    let mut state = state_with_history(&[]);
+    for i in 0..100 {
+        state.apply(&AgentEvent::TurnStarted);
+        state.apply(&AgentEvent::AssistantText {
+            delta: format!("line {i}"),
+        });
+    }
+    assert_eq!(state.offset_for_test(), 0, "pinned to the newest");
+    state.scroll_up(super::keys::WHEEL_ROWS);
+    assert_eq!(state.offset_for_test(), 3);
+    state.scroll_up(super::keys::WHEEL_ROWS);
+    assert_eq!(state.offset_for_test(), 6, "two notches, six rows");
+    state.scroll_down(super::keys::WHEEL_ROWS);
+    state.scroll_down(super::keys::WHEEL_ROWS);
+    assert_eq!(state.offset_for_test(), 0, "and back to the newest");
+    for _ in 0..100 {
+        state.scroll_up(super::keys::WHEEL_ROWS);
+    }
+    assert_eq!(state.offset_for_test(), 99, "clamped at the oldest row");
+}
+
 #[test]
 fn plain_chars_insert_and_controlled_or_alt_chars_do_not() {
     assert_eq!(
@@ -153,7 +261,7 @@ fn plain_chars_insert_and_controlled_or_alt_chars_do_not() {
         KeyAction::Insert('A')
     );
     assert_eq!(
-        classify(key(KeyCode::Char('n'), KeyModifiers::CONTROL)),
+        classify(key(KeyCode::Char('f'), KeyModifiers::CONTROL)),
         KeyAction::Ignore,
         "Ctrl+<letter> shortcuts are actions, never text"
     );
@@ -231,6 +339,7 @@ fn suggestion_popup_tracks_the_composer() {
         131_072,
         Arc::new(skills),
         Arc::new(prompts),
+        History::default(),
     );
 
     assert!(!state.suggest_open(), "plain composer: no popup");
@@ -305,6 +414,7 @@ fn the_selection_stops_at_the_last_drawn_row_on_short_terminals() {
         131_072,
         std::sync::Arc::new(vec![]),
         std::sync::Arc::new(vec![]),
+        History::default(),
     );
     state.editor.insert_char('/');
 
@@ -382,6 +492,7 @@ fn view_folds_the_event_stream_into_lines() {
         131_072,
         std::sync::Arc::new(vec![]),
         std::sync::Arc::new(vec![]),
+        History::default(),
     );
     state.push_user("question");
     state.apply(&AgentEvent::RunStarted);
@@ -407,8 +518,8 @@ fn view_folds_the_event_stream_into_lines() {
             LineKind::Assistant,
             LineKind::Assistant,
             LineKind::Tool,
-            LineKind::Dim,
-            LineKind::Dim,
+            LineKind::Warning,
+            LineKind::Aborted,
         ]
     );
     let texts = state_line_texts(&state);
@@ -431,6 +542,7 @@ fn split_deltas_fold_into_the_same_block_as_one_shot_text() {
             131_072,
             std::sync::Arc::new(vec![]),
             std::sync::Arc::new(vec![]),
+            History::default(),
         );
         state.push_user("q");
         state.apply(&AgentEvent::TurnStarted);
@@ -454,6 +566,7 @@ fn split_deltas_fold_into_the_same_block_as_one_shot_text() {
             131_072,
             std::sync::Arc::new(vec![]),
             std::sync::Arc::new(vec![]),
+            History::default(),
         );
         state.push_user("q");
         state.apply(&AgentEvent::TurnStarted);
@@ -490,6 +603,7 @@ fn scrolling_stays_within_the_transcript() {
         131_072,
         std::sync::Arc::new(vec![]),
         std::sync::Arc::new(vec![]),
+        History::default(),
     );
     for i in 0..100 {
         // One text per turn: TurnStarted closes the previous assistant
@@ -517,6 +631,169 @@ fn footer_start_values_render_sensibly() {
     assert!(f.render().contains("○ ready"));
 }
 
+// ------------------------------------------------------- recall & Ctrl+C --
+
+/// A view with a submitted history behind it — the state the loop drives
+/// when an arrow or Ctrl+P/N is pressed.
+fn state_with_history(prompts: &[&str]) -> State {
+    let mut history = History::default();
+    for prompt in prompts {
+        history.record(prompt);
+    }
+    State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        std::sync::Arc::new(vec![]),
+        std::sync::Arc::new(vec![]),
+        history,
+    )
+}
+
+/// The arrows of an empty or single-line composer recall; the popup keeps
+/// them while it is open; a multi-line composer keeps its line cursor.
+#[test]
+fn arrows_recall_history_from_an_empty_or_single_line_composer() {
+    let mut state = state_with_history(&["first prompt", "second prompt"]);
+    assert_eq!(state.arrow(true), Arrow::Prev);
+    assert_eq!(
+        state.arrow(false),
+        Arrow::Nothing,
+        "↓ has nothing to walk before a browse starts"
+    );
+
+    state.recall_prev();
+    assert_eq!(state.editor.text(), "second prompt");
+    state.recall_prev();
+    assert_eq!(state.editor.text(), "first prompt");
+    state.recall_prev();
+    assert_eq!(
+        state.editor.text(),
+        "first prompt",
+        "the oldest is where it stops"
+    );
+
+    // Down walks forward, and past the newest comes back what the composer
+    // held when browsing began — here, nothing.
+    state.recall_next();
+    assert_eq!(state.editor.text(), "second prompt");
+    state.recall_next();
+    assert_eq!(state.editor.text(), "", "the draft, and browsing is over");
+    assert_eq!(state.arrow(true), Arrow::Prev, "a fresh ↑ starts over");
+}
+
+/// A non-empty draft is not lost to a recall: the first ↑ saves it, ↓ past
+/// the newest gives it back.
+#[test]
+fn a_half_typed_draft_survives_a_recall() {
+    let mut state = state_with_history(&["older prompt"]);
+    state.editor.set_text("half a thought");
+    assert_eq!(state.arrow(true), Arrow::Prev);
+    state.recall_prev();
+    assert_eq!(state.editor.text(), "older prompt");
+    // Recalled text is ordinary composer text: editable.
+    state.editor.insert_char('?');
+    assert_eq!(state.editor.text(), "older prompt?");
+    state.recall_next();
+    assert_eq!(state.editor.text(), "half a thought", "the draft came back");
+}
+
+#[test]
+fn a_multiline_composer_keeps_its_line_cursor_until_a_browse_starts() {
+    let mut state = state_with_history(&["one", "two"]);
+    state.editor.set_text("first\nsecond\nthird");
+    assert_eq!(state.arrow(true), Arrow::LineUp);
+    assert_eq!(state.arrow(false), Arrow::LineDown);
+    state.editor.move_up();
+    assert_eq!(
+        state.editor.cursor_row_col(),
+        (1, 5),
+        "not history, just the cursor (the column of the line it left)"
+    );
+
+    // Ctrl+P recalls whatever the composer holds, and once a browse is
+    // running the arrows follow it — even showing a multi-line prompt.
+    state.recall_prev();
+    assert_eq!(state.editor.text(), "two");
+    assert_eq!(state.arrow(true), Arrow::Prev);
+    assert_eq!(state.arrow(false), Arrow::Next);
+    state.recall_prev();
+    assert_eq!(state.editor.text(), "one");
+    state.recall_next();
+    assert_eq!(state.editor.text(), "two");
+}
+
+/// While the popup is open the arrows are its, history and all.
+#[test]
+fn the_open_popup_outranks_history_for_the_arrows() {
+    let mut state = state_with_history(&["prompt"]);
+    state.editor.insert_char('/');
+    assert!(state.suggest_open());
+    assert_eq!(state.arrow(true), Arrow::SuggestPrev);
+    assert_eq!(state.arrow(false), Arrow::SuggestNext);
+}
+
+/// Ctrl+C: cancel a live run, clear a draft, and only then quit.
+#[test]
+fn ctrl_c_cancels_a_run_clears_a_draft_and_only_then_quits() {
+    let mut state = state_with_history(&[]);
+    // Idle with nothing typed: there is nothing left to cancel.
+    assert_eq!(state.interrupt(), Cancel::Quit);
+
+    // Idle with a draft: the first press clears it, the next quits.
+    state.editor.set_text("typed but unsent");
+    assert_eq!(state.interrupt(), Cancel::DraftCleared);
+    assert_eq!(state.editor.text(), "");
+    assert_eq!(state.interrupt(), Cancel::Quit);
+
+    // Busy: the first press asks the run to stop and the footer says so;
+    // a second, while it is still busy, ends the TUI.
+    state.begin_run();
+    assert_eq!(state.interrupt(), Cancel::Stopping);
+    assert!(state.stopping());
+    assert!(state.footer.render().contains("stopping…"));
+    assert_eq!(state.interrupt(), Cancel::ForceQuit);
+    assert!(state.busy, "the run is still winding down until it reports");
+
+    // Esc stops a run too, but it does not arm an exit: the Ctrl+C that
+    // follows still just confirms the stop, and only the next one leaves.
+    state.run_finished();
+    state.begin_run();
+    state.set_stopping(true); // what the loop's Esc arm does
+    assert_eq!(state.interrupt(), Cancel::Stopping);
+    assert_eq!(state.interrupt(), Cancel::ForceQuit);
+
+    // Any run ending clears the mark — completed, failed, or aborted.
+    state.run_finished();
+    assert!(!state.stopping());
+    assert!(state.footer.render().contains("○ ready"));
+    // And a new run does not inherit one.
+    state.begin_run();
+    state.set_stopping(true);
+    assert!(state.stopping());
+    state.begin_run();
+    assert!(!state.stopping(), "begin_run clears it");
+}
+
+/// The stopping mark belongs to a live run: idle, asking for it does
+/// nothing (Esc on an idle view leaves no mark, and Ctrl+C's own idle path
+/// is the draft/quit pair instead).
+#[test]
+fn stopping_only_means_something_while_busy() {
+    let mut state = state_with_history(&[]);
+    state.set_stopping(true);
+    assert!(!state.stopping());
+    assert!(state.footer.render().contains("○ ready"));
+    state.begin_run();
+    state.set_stopping(true);
+    assert!(state.stopping());
+    // `/new` ends it too: the mark is about a run, and a new session has
+    // none in flight.
+    state.new_session(None, false);
+    assert!(!state.stopping());
+    assert!(!state.history.browsing(), "/new ends a recall as well");
+}
+
 #[tokio::test]
 async fn shell_output_over_the_cap_with_multibyte_chars_never_panics() {
     // 14_000 bytes of 2-byte chars: a byte-index truncate at 10_240 would
@@ -535,14 +812,10 @@ async fn shell_output_over_the_cap_with_multibyte_chars_never_panics() {
 
 #[test]
 fn long_transcript_lines_wrap_into_exact_rows() {
+    use super::line::wrap_line;
     use super::transcript::{LineKind, RenderedLine};
-    use super::view::wrap_line;
 
-    let line = RenderedLine {
-        text: "aéz ".repeat(10), // 40 chars incl. multibyte
-        kind: LineKind::Assistant,
-        bold: Vec::new(),
-    };
+    let line = RenderedLine::new("aéz ".repeat(10), LineKind::Assistant); // 40 chars, multibyte
     let rows = wrap_line(&line, 15);
     assert!(rows.len() >= 3, "40 chars / 15-wide rows: {}", rows.len());
     for row in &rows {
@@ -553,34 +826,35 @@ fn long_transcript_lines_wrap_into_exact_rows() {
     let joined: String = rows.iter().map(|r| r.text.as_str()).collect();
     assert_eq!(joined, line.text);
 
-    let one = wrap_line(
-        &RenderedLine {
-            text: "short".into(),
-            kind: LineKind::User,
-            bold: Vec::new(),
-        },
-        80,
-    );
+    let one = wrap_line(&RenderedLine::new("short", LineKind::User), 80);
     assert_eq!(one.len(), 1);
 }
 
-/// A bold span split across wrapped rows bolds both pieces at the right
+/// A bold span split across wrapped rows styles both pieces at the right
 /// row-local offsets, and no character is lost or duplicated.
 #[test]
 fn bold_ranges_split_across_wrapped_rows() {
-    use super::transcript::{LineKind, RenderedLine};
-    use super::view::wrap_line;
+    use super::line::wrap_line;
+    use super::transcript::{LineKind, Mark, RenderedLine};
 
     // 20 chars, bold covering chars 8..14 — split at width 10.
-    let line = RenderedLine {
-        text: "0123456789abcdefghij".into(),
-        kind: LineKind::Assistant,
-        bold: vec![(8, 14)],
-    };
+    let line = RenderedLine::new("0123456789abcdefghij", LineKind::Assistant).with_marks(vec![(
+        8,
+        14,
+        Mark::Bold,
+    )]);
     let rows = wrap_line(&line, 10);
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].bold, vec![(8, 10)], "clipped to the first row");
-    assert_eq!(rows[1].bold, vec![(0, 4)], "remainder, row-local");
+    assert_eq!(
+        rows[0].marks,
+        vec![(8, 10, Mark::Bold)],
+        "clipped to the first row"
+    );
+    assert_eq!(
+        rows[1].marks,
+        vec![(0, 4, Mark::Bold)],
+        "remainder, row-local"
+    );
     let joined: String = rows.iter().map(|r| r.text.as_str()).collect();
     assert_eq!(joined, line.text);
 }
@@ -597,7 +871,7 @@ fn plain_assistant_text_renders_identically_through_markdown() {
     assert_eq!(rendered.len(), 2);
     assert_eq!(rendered[0].text, "plain one");
     assert_eq!(rendered[0].kind, super::transcript::LineKind::Assistant);
-    assert!(rendered[0].bold.is_empty());
+    assert!(rendered[0].marks.is_empty());
 }
 
 #[test]
@@ -665,6 +939,7 @@ fn seed_from_entries_rebuilds_the_blocks_the_event_stream_would() {
         131_072,
         std::sync::Arc::new(vec![]),
         std::sync::Arc::new(vec![]),
+        History::default(),
     );
     state.seed_from_entries(&entries);
 
@@ -744,6 +1019,7 @@ async fn task_events_fold_into_the_view() {
             131_072,
             Arc::new(vec![]),
             Arc::new(vec![]),
+            History::default(),
         )
     };
     let mut state = fresh();

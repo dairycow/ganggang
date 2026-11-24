@@ -24,7 +24,7 @@ pub(crate) fn models_url(base_url: &str) -> String {
 /// True when `provider` speaks OpenAI Completions on `strata` or a loopback URL.
 pub fn is_local_discoverable(provider: &ProviderConfig) -> bool {
     provider.api == super::ApiKind::OpenAiCompletions
-        && (provider.name == "strata" || super::client::is_local_url(&provider.base_url))
+        && (provider.name == "strata" || super::health::is_local_url(&provider.base_url))
 }
 
 /// Parse an OpenAI-compatible `/v1/models` JSON payload.

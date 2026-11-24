@@ -3,7 +3,9 @@
 //! Straight-line async on purpose. Tool failures are values the model can
 //! read; only transport and session errors propagate. Runaway loops are
 //! stopped by the user via the abort flag (Esc / Ctrl+C / SIGTERM) or an
-//! optional `--max-turns` / `GG_MAX_TURNS` cap.
+//! optional `--max-turns` / `GG_MAX_TURNS` cap. The cap bounds one thing
+//! more than it did: a truncated answer earns a few "keep going" turns
+//! ([`cut`]), and those count toward it like any other.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,10 +18,13 @@ use crate::llm::types::ChatMessage;
 
 use super::Agent;
 use super::compaction;
-use super::session::{self, Entry, Message, Role, last_entry_id};
-use super::tools::ToolResult;
+use super::session::{self, Role};
+use super::tools::Cancel;
 
+mod ask;
+mod cut;
 mod dispatch;
+mod record;
 
 pub(crate) async fn wait_for_abort(abort: &Arc<AtomicBool>) {
     loop {
@@ -54,6 +59,11 @@ impl Agent {
     /// are dispatched (concurrently for contiguous read-only calls), each
     /// batch loops back into a new turn until the model answers without
     /// wanting tools.
+    ///
+    /// A turn that falls short — the stream was cut, the answer hit
+    /// `max_tokens`, or the user stopped it — is decided before anything
+    /// else happens to it ([`cut`]): its tool calls never run, and the run
+    /// either asks for the rest or ends with the partial answer standing.
     pub async fn run(
         &mut self,
         input: String,
@@ -63,6 +73,10 @@ impl Agent {
         // by an earlier run (or an interface path that forgot to reset it)
         // would phantom-abort this one between tool calls.
         self.abort.store(false, Ordering::Release);
+        // The tool-facing view of that same flag: one handle for every call
+        // this run dispatches, so a running tool notices the stop request
+        // instead of only being skipped between calls.
+        let cancel = Cancel::new(self.abort.clone());
         // Set when a batch reports trigger-true/NothingToDo, so the
         // "past the line, no cut point" warning fires once, not per batch.
         let mut noop_compaction_warned = false;
@@ -80,6 +94,8 @@ impl Agent {
 
         let mut turns = 0u32;
         let mut wrap_up_nudged = false;
+        // Continuations this run has spent on a short answer (§ cut).
+        let mut continuations = 0u32;
         loop {
             if self.abort.load(Ordering::Acquire) {
                 self.emit_abort(events).await?;
@@ -123,7 +139,15 @@ impl Agent {
                         "[system notice: you are on turn {turns} of {limit} ({remaining} turn(s) remaining). Wrap up your work and return your final response soon without starting new exploration.]"
                     )
                 };
-                if let Some(last) = messages.last_mut().filter(|m| m.role == "tool") {
+                // The notice rides the request's last message: the last
+                // tool result, or — on a continuation turn — the
+                // instruction to keep going. A message of its own after
+                // either would put two of a kind in a row, which strict
+                // providers refuse.
+                if let Some(last) = messages
+                    .last_mut()
+                    .filter(|m| m.role == "tool" || m.role == "user")
+                {
                     let existing = last.content.take().unwrap_or_default();
                     last.content = Some(if existing.is_empty() {
                         notice
@@ -139,73 +163,45 @@ impl Agent {
                 }
             }
 
-            let declarations = self.tools.declarations();
-            let response = if self.stream {
-                let event_tx = events.clone();
-                let req = self.client.send_stream(
-                    &self.model,
-                    &messages,
-                    self.max_tokens,
-                    &declarations,
-                    |delta| {
-                        let tx = event_tx.clone();
-                        Box::pin(async move {
-                            let event = match delta {
-                                crate::llm::stream::Delta::Text(t) => {
-                                    AgentEvent::AssistantText { delta: t }
-                                }
-                                crate::llm::stream::Delta::Thinking(t) => {
-                                    AgentEvent::Thinking { delta: t }
-                                }
-                            };
-                            let _ = tx.send(event).await;
-                        })
-                    },
-                );
-                tokio::select! {
-                    biased;
-                    _ = wait_for_abort(&self.abort) => {
-                        self.emit_abort(events).await?;
-                        return Ok(());
-                    }
-                    res = req => res?,
-                }
-            } else {
-                let req = self
-                    .client
-                    .send(&self.model, &messages, self.max_tokens, &declarations);
-                tokio::select! {
-                    biased;
-                    _ = wait_for_abort(&self.abort) => {
-                        self.emit_abort(events).await?;
-                        return Ok(());
-                    }
-                    res = req => res?,
-                }
-            };
+            // The request, with the stop request wired in: a stream stops
+            // when the user asks and comes back with what arrived, and a
+            // non-streaming wait is raced against the same flag.
+            let outcome = self.ask(&messages, events).await?;
             // Read before `from_response` consumes the response: the wire
             // type stays the single place finish reasons and timings exist.
-            let truncated = response
+            let timings = outcome.response.timings.clone();
+            let truncated = outcome
+                .response
                 .choices
                 .first()
                 .and_then(|c| c.finish_reason.as_deref())
                 == Some("length");
-            let timings = response.timings.clone();
-            let (message, warnings) = session::from_response(response)?;
+            // A stop request outranks every other reason a turn fell short:
+            // the user has already disowned the next request, so the
+            // partial stays and nothing is asked for. Otherwise a `length`
+            // finish explains itself even when the stream ended cleanly, and
+            // either way the answer is a prefix and the turn is short.
+            let short = if outcome.aborted {
+                Some(cut::Cut::Aborted)
+            } else if truncated {
+                Some(cut::Cut::MaxTokens)
+            } else if !outcome.complete {
+                Some(cut::Cut::StreamEnded)
+            } else {
+                None
+            };
+            let (message, warnings) = session::from_response(outcome.response)?;
             let turn_usage = message.usage;
             let thinking_pct = session::thinking_pct(&message);
-            // §17: a length finish is a truncation — visible, never silent.
-            if truncated {
-                events
-                    .send(AgentEvent::Warned {
-                        message: format!("response truncated by max_tokens={}", self.max_tokens),
-                    })
-                    .await?;
-            }
             for warning in warnings {
                 events.send(AgentEvent::Warned { message: warning }).await?;
             }
-            self.push_entry(message.clone())?;
+            // A stopped stream that produced nothing leaves a blank
+            // assistant message: recording it would put an empty turn in the
+            // session and the transcript for news nobody asked for.
+            if !outcome.aborted || !cut::is_blank(&message) {
+                self.push_entry(message.clone())?;
+            }
 
             // Non-streaming: the whole text arrives at once, so one chunk.
             // (The streaming path emitted its deltas during the read.)
@@ -225,6 +221,50 @@ impl Agent {
                             delta: text.clone(),
                         })
                         .await?;
+                }
+            }
+
+            // A stream cut or a `length` finish means what arrived is a
+            // PREFIX of an answer, not an answer: keep it (it is already
+            // persisted and, on the streaming path, already on screen) and
+            // ask for the rest — bounded, visible, and never by running the
+            // partial's tool calls.
+            if let Some(cut) = short {
+                let turn = cut::ShortTurn {
+                    number: turns,
+                    request: &messages,
+                    telemetry: cut::Telemetry {
+                        usage: turn_usage,
+                        timings: timings.clone(),
+                        thinking_pct,
+                    },
+                };
+                let tool_call_ids = message
+                    .tool_calls
+                    .iter()
+                    .map(|c| c.id.clone())
+                    .collect::<Vec<_>>();
+                match self
+                    .handle_cut(
+                        cut,
+                        &tool_call_ids,
+                        &mut continuations,
+                        turn,
+                        events,
+                        &mut noop_compaction_warned,
+                    )
+                    .await?
+                {
+                    // `handle_cut` already sent the TurnEnded carrying the
+                    // stop reason that names the truncation.
+                    cut::After::Continue => continue,
+                    cut::After::EndRun => break,
+                    cut::After::Aborted => {
+                        // The loop's abort shape finishes the run with every
+                        // entry it has.
+                        self.emit_abort(events).await?;
+                        return Ok(());
+                    }
                 }
             }
 
@@ -251,7 +291,7 @@ impl Agent {
             }
 
             if self
-                .execute_tool_batch(&message.tool_calls, session_id.as_deref(), events)
+                .execute_tool_batch(&message.tool_calls, session_id.as_deref(), &cancel, events)
                 .await?
             {
                 return Ok(());
@@ -318,53 +358,6 @@ impl Agent {
         }
         events.send(AgentEvent::RunEnded { turns }).await?;
         Ok(())
-    }
-}
-
-impl Agent {
-    /// Entries form a linear chain: each new one names the previous as
-    /// parent. The entry is persisted BEFORE it joins the in-memory log —
-    /// flush-per-append is the crash-safety contract (§13) — and session
-    /// I/O errors abort the run (§17).
-    fn push_entry(&mut self, message: Message) -> anyhow::Result<()> {
-        let parent = self.entries.last().map(last_entry_id);
-        let entry = Entry::Message {
-            id: session::new_entry_id(),
-            parent_id: parent,
-            timestamp: session::now_iso(),
-            message,
-        };
-        if let Some(store) = &mut self.store {
-            store.append(&entry)?;
-        }
-        self.entries.push(entry);
-        Ok(())
-    }
-
-    fn push_message(&mut self, role: Role, content: Option<String>) -> anyhow::Result<()> {
-        self.push_entry(Message {
-            role,
-            content,
-            tool_calls: Vec::new(),
-            tool_call_id: None,
-            usage: None,
-            is_error: false,
-            reasoning: None,
-        })
-    }
-}
-
-impl Agent {
-    fn push_tool_result(&mut self, call_id: &str, result: &ToolResult) -> anyhow::Result<()> {
-        self.push_entry(Message {
-            role: Role::ToolResult,
-            content: Some(result.output.clone()),
-            tool_calls: Vec::new(),
-            tool_call_id: Some(call_id.to_string()),
-            usage: None,
-            is_error: result.is_error,
-            reasoning: None,
-        })
     }
 }
 

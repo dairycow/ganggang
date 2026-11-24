@@ -2,7 +2,7 @@
 //! without a terminal; the event loop decides what each action means
 //! in state.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyAction {
@@ -11,7 +11,11 @@ pub enum KeyAction {
     Newline,
     Send,
     Abort,
-    Quit,
+    /// Ctrl+C: cancel what is happening — the run when one is in flight,
+    /// the draft when one is typed — and quit only when there is nothing
+    /// left to cancel. Never an unconditional quit (gap §5). The way out
+    /// on one's own terms stays `/quit`, a command rather than a key.
+    Interrupt,
     ToggleExpand,
     ToggleThinking,
     CopyAnswer,
@@ -28,10 +32,17 @@ pub enum KeyAction {
     KillToStart,
     CursorLeft,
     CursorRight,
-    /// ↓: suggestion next while the popup is open; cursor down otherwise.
-    SuggestNext,
-    /// ↑: suggestion previous while the popup is open; cursor up otherwise.
+    /// ↑: suggestion previous while the popup is open; history recall or
+    /// cursor up otherwise (the loop decides — see
+    /// [`history_for`](super::history::history_for)).
     SuggestPrev,
+    /// ↓: suggestion next while the popup is open; history recall, cursor
+    /// down, or nothing (same rule).
+    SuggestNext,
+    /// Ctrl+P / Ctrl+N: history recall whatever the composer holds, arrows
+    /// aside (readline's muscle memory, gap §4).
+    HistoryPrev,
+    HistoryNext,
     /// Tab while the suggestion popup is open.
     SuggestComplete,
     /// Ctrl+G: edit the draft in the external editor, which takes the
@@ -41,6 +52,32 @@ pub enum KeyAction {
     /// otherwise).
     Rebuild,
     Ignore,
+}
+
+/// What one mouse-wheel notch does: `Up` shows older rows, `Down` newer
+/// ones — the same direction the transcript's scroll offset counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wheel {
+    Up,
+    Down,
+}
+
+/// Rows one mouse-wheel notch scrolls. Three: a notch should move a chunk
+/// of the transcript without losing the row a reader was looking at, and a
+/// PageUp/PageDown (ten) stays the bigger step.
+pub const WHEEL_ROWS: u16 = 3;
+
+/// What a mouse event means. Only the wheel means anything: a press, a
+/// release, a drag or a hold does nothing at all, because gg uses the mouse
+/// to scroll and for no other purpose — which is also why a click cannot
+/// move a cursor or select the wrong thing. Pure, so the mapping is testable
+/// without a terminal.
+pub fn classify_wheel(event: MouseEvent) -> Option<Wheel> {
+    match event.kind {
+        MouseEventKind::ScrollUp => Some(Wheel::Up),
+        MouseEventKind::ScrollDown => Some(Wheel::Down),
+        _ => None,
+    }
 }
 
 /// Shift+Enter arrives as SHIFT|Enter only from terminals that report
@@ -60,7 +97,7 @@ pub fn classify(key: KeyEvent) -> KeyAction {
         // rather than 'j'. Both mean the same key.
         KeyCode::Char('\n') if ctrl => KeyAction::Newline,
         KeyCode::Char('j') if ctrl => KeyAction::Newline,
-        KeyCode::Char('c') if ctrl => KeyAction::Quit,
+        KeyCode::Char('c') if ctrl => KeyAction::Interrupt,
         KeyCode::Char('o') if ctrl => KeyAction::ToggleExpand,
         KeyCode::Char('t') if ctrl => KeyAction::ToggleThinking,
         KeyCode::Char('x') if ctrl => KeyAction::CopyAnswer,
@@ -71,6 +108,10 @@ pub fn classify(key: KeyEvent) -> KeyAction {
         KeyCode::Char('e') if ctrl => KeyAction::LineEnd,
         KeyCode::Char('k') if ctrl => KeyAction::KillToEnd,
         KeyCode::Char('u') if ctrl => KeyAction::KillToStart,
+        // Readline's history, kept beside readline's line editing. Ctrl+P
+        // was unassigned; Ctrl+N was ignored.
+        KeyCode::Char('p') if ctrl => KeyAction::HistoryPrev,
+        KeyCode::Char('n') if ctrl => KeyAction::HistoryNext,
         KeyCode::Esc => KeyAction::Abort,
         KeyCode::Backspace => KeyAction::Backspace,
         KeyCode::Home => KeyAction::LineStart,

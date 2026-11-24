@@ -33,7 +33,15 @@ curl -s 127.0.0.1:8080/health
 
 - **Agent loop** (§09 of the design): request → tool calls → results → repeat
   until answered. Contiguous read-only tool calls run concurrently, responses
-  stream, abort with Esc/Ctrl+C/SIGTERM, and optionally cap with `--max-turns`.
+  stream, and an optional `--max-turns` caps the run. Without it you are the
+  runaway check; a truncated answer is the one exception, continued at most
+  3 times (and it counts toward the cap). A cut stream keeps its partial
+  answer. Esc (or Ctrl+C) aborts the run: the in-flight request or stream is
+  cut within ~100 ms — the connection closes instead of waiting out the
+  generation — a running `bash` command loses its whole process group, a
+  `grep`/`find` walk stops, and the next tool call never starts. What the
+  stopped stream had already streamed in is kept as the answer, never
+  replayed and never continued: you asked it to stop.
 - **Tools** (§10): `read`, `bash`, `edit`, `write` — plus `grep`, `find`,
   `ls` for search. Plain values in and out; every truncation is visible in
   the output; tool failures are values the model reacts to, never crashes.
@@ -60,22 +68,37 @@ curl -s 127.0.0.1:8080/health
 - **Compaction** (§14): when context crowds the window, older history is
   summarized in one extra call and kept as a `Compaction` entry — raw
   history is never destroyed. `/compact [instructions]` runs it on demand.
-- **Interfaces** (§15): fullscreen TUI (transcript / editor / footer, with
-  markdown rendering and thinking behind Ctrl+T), print mode (`-p`,
-  pipeable), JSON mode (`--mode json` — the same event stream the TUI
-  consumes, one object per line), and `--export <session> [out.html]` —
-  one self-contained HTML transcript.
+- **Interfaces** (§15): fullscreen TUI — one themed frame (see *Theme &
+  layout*): transcript / composer / footer, with markdown rendering and
+  thinking behind Ctrl+T. Print mode (`-p`, pipeable), JSON mode
+  (`--mode json` — the same event stream the TUI consumes, one object per
+  line), and `--export <session> [out.html]` — one self-contained HTML
+  transcript.
 
 ## Keys & commands (TUI)
 
 Enter send · Alt+Enter / Ctrl+J newline (Shift+Enter too, where the
 terminal reports modified keys) · Ctrl+A / Ctrl+E line start/end · Ctrl+K
-/ Ctrl+U kill to line end/start · ←/→ move the cursor, ↑/↓ move between
-lines (and drive the `/` suggestion list while it is open) · Home/End
+/ Ctrl+U kill to line end/start · ←/→ move the cursor · ↑/↓ recall a prompt
+you already submitted, whenever the composer is empty or holds a single
+line (while the `/` suggestion list is open they drive it instead, and in a
+multi-line composer they move between lines) · Ctrl+P / Ctrl+N recall
+history whatever the composer holds · Home/End
 line start/end · Esc abort run · Ctrl+O expand
 tool calls · Ctrl+X copy last answer · Ctrl+T toggle thinking display ·
 Ctrl+G edit the draft in your external editor · Ctrl+R rebuild and restart
-(`--watch`) · PageUp/Down scroll · Ctrl+C quit.
+(`--watch`) · PageUp/Down scroll, and the mouse wheel scrolls three rows a
+notch · Ctrl+C cancel — the run while one is in flight, the draft when one
+is typed, and the session only when there is nothing left to cancel; a
+second Ctrl+C in a row forces it out.
+
+Mouse capture is on while gg runs (so the wheel can scroll) and off the
+moment it exits — nothing survives `restore`, a panic, or a Ctrl+G that
+lends the terminal to an editor. gg reads the wheel and nothing else: a
+click, a drag and a hold do nothing at all, so a stray click can never
+move a cursor or select the wrong thing. To copy with the terminal's own
+selection, hold **Shift** while dragging (that is how every terminal
+program under mouse capture does it).
 
 **tmux:** Alt+Enter and Ctrl+J work as they are. Shift+Enter needs tmux's
 extended keys and a terminal that reports modified keys: add
@@ -88,6 +111,47 @@ Typing a `/` command opens a suggestion list above the editor (the
 built-ins, your `~/.gg/prompts/*.md` templates, and one row per skill
 once `/skill:` is typed): ↑/↓ move the highlight, Tab completes it,
 Enter still sends what you typed.
+
+**Prompt history:** everything you submit — a prompt, a `!`/`!!` shell line,
+a slash command except `/quit` — is remembered, newest last, in
+`~/.gg/history.jsonl` (one JSON string per line, `0600`, the newest 500
+kept). ↑/↓ walk it while the composer is empty or single-line; Ctrl+P /
+Ctrl+N walk it whatever the composer holds. The first ↑ saves what you were
+typing, and ↓ past the newest gives it back, so a recall never costs a
+draft. Recalled text is ordinary composer text: edit it and send it again.
+A run stopped by Ctrl+C shows `stopping…` beside the spinner in the
+footer while it winds
+down, and it winds down promptly: a generation still streaming is cut at
+the same moment, not left to finish. A second Ctrl+C ends the session,
+which is safe mid-run because the session file flushes per append. The
+half-finished answer stays in the transcript and in the session file —
+it is what you asked for, so nothing asks the model to continue it.
+
+**Theme & layout.** The theme owns the screen: every cell of the frame is
+painted before a widget draws, so gg's charcoal is what you see rather
+than the terminal's own background. It is themed on the bird — charcoal
+plumage, a scarlet crest for gg's own marks (the `you │ ` prefix, the
+footer's `gg`, an aborted run, the scrollbar's thumb), orange-red for
+anything live (a tool call, the footer's spinner, the composer's border
+while a run is in flight), warm off-white text, pale-grey and grey-green
+secondaries, wattle gold for warnings, and a raised slate band for code,
+expanded tool output and the suggestion popup. On a terminal that does not
+claim 24-bit colour (`COLORTERM=truecolor`/`24bit`, or a `TERM`
+advertising direct colour) the same palette draws in xterm-256, one colour
+per role.
+
+The frame: transcript on top, a rounded `compose` box in the middle, one
+footer row. The composer grows with the draft, one text row to eight, then
+scrolls inside its own box so the cursor lands where the draft's cursor is
+— counted in characters, so a wide glyph (CJK, emoji) can leave it a cell
+left of where the terminal draws it; its border goes warm while a run
+works and scarlet while it is
+being stopped. The footer is fields, not one grey string: `gg`, the
+directory, the model, `↑in ↓out`, `ctx N%` (gold past 60%, red past 85%),
+the watch state, and the status — `○ ready`, a turning spinner +
+`working`, or `stopping…`. The transcript shows a scrollbar only when it
+overflows, reserving its column so no text hides under it, and an empty
+session draws a short welcome block instead of a blank area.
 
 **External editor** (Ctrl+G): your draft opens in `$VISUAL`, else
 `$EDITOR`, else `nano` — arguments are fine (`code --wait`, for editors
@@ -106,11 +170,35 @@ context (`!!` doesn't).
 
 Precedence: CLI flags (`-P`/`--provider`, `-m`/`--model`, `--tools`, `--reasoning-effort`, `--thinking-budget`, `--max-turns`, `--session-file`) > environment
 (`GG_PROVIDER`, `GG_BASE_URL`, `GG_MODEL`, `GG_MAX_TOKENS`, `GG_API_KEY`,
-`GG_CONTEXT_WINDOW`, `GG_BASH_TIMEOUT`, `GG_REASONING_EFFORT`, `GG_THINKING_BUDGET`,
-`GG_COMPACT_THRESHOLD`, `GG_MAX_TURNS`, `GG_DEBUG_PROMPT=1` to dump the
+`GG_CONTEXT_WINDOW`, `GG_BASH_TIMEOUT`, `GG_MAX_RETRIES`, `GG_REQUEST_TIMEOUT`,
+`GG_REASONING_EFFORT`, `GG_THINKING_BUDGET`, `GG_COMPACT_THRESHOLD`, `GG_MAX_TURNS`,
+`GG_DEBUG_PROMPT=1` to dump the
 assembled system prompt to stderr, plus provider env vars `ZHIPU_API_KEY`,
 `OPENCODE_API_KEY`, `DEEPSEEK_API_KEY`) > `.gg/config.toml` >
 `~/.gg/config.toml` > defaults.
+
+Transient LLM transport failures are retried: connection errors, request
+timeouts, and HTTP 408/429/5xx earn up to `max_retries` extra attempts
+(default 3) with exponential backoff from 500 ms and a little jitter, and a
+provider's `Retry-After` (seconds, capped at 30 s) wins over the backoff.
+Any other 4xx fails at once, and a stream that already delivered a delta is
+never replayed — a cut mid-answer never becomes a duplicated answer.
+Each retry prints a `warning:` line to stderr; nothing above the HTTP client
+has to know retries happened. `max_retries = 0` turns retrying off.
+
+One LLM request gets `request_timeout_secs` (default 600) for its whole
+response — head and body, so a stream too — and connecting stays a fixed
+10 s. A stream whose body ends before the protocol says it is done, and an
+answer that hits `max_tokens` (`finish_reason: length`), are both kept and
+continued: the partial answer stays on screen and in the session, the loop
+appends "continue exactly where you stopped", and the run asks again — at
+most 3 times per run. Tool calls from a truncated turn are never executed;
+each gets an `is_error` result ("not executed: response was truncated") so
+the replayed session stays valid. A continued turn's `turn_ended` event
+carries `stop_reason: "length"` or `"stream_cut"` instead of `"stop"`, and
+print mode prints the pieces as one answer. Every case warns and the turn
+ends cleanly once the budget is spent — never a hang, never an unbounded
+loop.
 
 Built-in providers: `strata` (local default), `glm-coding-plan` (Z.AI,
 alias `zai-coding-plan`), `opencode-go` (routes OpenAI Completions and
@@ -131,6 +219,8 @@ max_tokens = 16384
 # reasoning_effort = "medium"       # strata default
 # reasoning_budget_tokens = 4096    # strata default (0 disables)
 bash_timeout_secs = 30
+max_retries = 3           # extra attempts on a transient transport failure
+request_timeout_secs = 600  # whole-response timeout (a stream included)
 tools = ["read", "bash", "edit", "write", "grep", "find", "ls"]
 
 [providers.strata]

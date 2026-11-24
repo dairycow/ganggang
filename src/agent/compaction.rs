@@ -349,7 +349,11 @@ impl super::Agent {
         events: &mut Sender<AgentEvent>,
         noop_warned: &mut bool,
     ) -> anyhow::Result<()> {
-        let message = match self.compact_once(instructions).await? {
+        let outcome = self.compact_once(instructions).await?;
+        // A retry the summary request needed is news whatever the attempt
+        // concluded, and it is this run's: said here, with the rest.
+        self.relay_notices(events).await?;
+        let message = match outcome {
             CompactOutcome::NothingToDo => {
                 if !*noop_warned {
                     *noop_warned = true;

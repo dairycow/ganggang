@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{BoxFuture, Tool, ToolResult, parse_args};
+use super::{BoxFuture, Cancel, Tool, ToolResult, parse_args};
 
 const MAX_LINES: usize = 2000;
 const MAX_BYTES: usize = 50 * 1024;
@@ -76,7 +76,7 @@ impl ReadOut {
     }
 }
 
-fn read(path: &Path, offset: Option<usize>, limit: Option<usize>) -> ToolResult {
+fn read(path: &Path, offset: Option<usize>, limit: Option<usize>, cancel: &Cancel) -> ToolResult {
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) => return ToolResult::err(format!("cannot read {}: {e}", path.display())),
@@ -102,6 +102,12 @@ fn read(path: &Path, offset: Option<usize>, limit: Option<usize>) -> ToolResult 
     };
 
     'outer: loop {
+        // Every chunk: the scan runs on a blocking thread and may run to
+        // MAX_SCAN_BYTES, so the stop request is the only thing that can
+        // end it early.
+        if cancel.is_cancelled() {
+            return ToolResult::err("aborted by user".into());
+        }
         let n = match reader.read(&mut chunk) {
             Ok(0) => {
                 eof = true;
@@ -315,8 +321,11 @@ larger files (including past 50 KiB)."
         true
     }
 
-    fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult> {
+    fn execute<'a>(&'a self, args: &'a Value, cancel: &'a Cancel) -> BoxFuture<'a, ToolResult> {
         Box::pin(async move {
+            if cancel.is_cancelled() {
+                return ToolResult::err("aborted by user".into());
+            }
             let args: ReadArgs = match parse_args(args) {
                 Ok(a) => a,
                 Err(e) => return ToolResult::err(e),
@@ -324,7 +333,8 @@ larger files (including past 50 KiB)."
             let path = self.resolve(&args.path);
             let offset = args.offset;
             let limit = args.limit;
-            match tokio::task::spawn_blocking(move || read(&path, offset, limit)).await {
+            let cancel = cancel.clone();
+            match tokio::task::spawn_blocking(move || read(&path, offset, limit, &cancel)).await {
                 Ok(res) => res,
                 Err(e) => ToolResult::err(format!("read task failed: {e}")),
             }

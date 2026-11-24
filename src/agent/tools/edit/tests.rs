@@ -4,7 +4,9 @@
 use super::*;
 
 async fn edit_file(dir: &std::path::Path, args: Value) -> ToolResult {
-    EditTool::new(dir.to_path_buf()).execute(&args).await
+    EditTool::new(dir.to_path_buf())
+        .execute(&args, &Cancel::none())
+        .await
 }
 
 fn written(path: &std::path::Path) -> String {

@@ -5,7 +5,7 @@
 //! incremental bookkeeping and an unterminated fence simply renders as
 //! code until the stream closes it.
 
-use super::render::{LineKind, RenderedLine};
+use super::render::{LineKind, Mark, RenderedLine};
 
 /// Split assistant text into rendered lines. A line whose trimmed form
 /// starts with ``` toggles code mode (the fence line itself carries no
@@ -26,7 +26,11 @@ pub(super) fn lines(text: &str) -> Vec<RenderedLine> {
         }
         let displayed = bulletize(line);
         let (plain, bold) = strip_bold(&displayed);
-        out.push(RenderedLine::new(plain, LineKind::Assistant).with_bold(bold));
+        let marks = bold
+            .into_iter()
+            .map(|(start, end)| (start, end, Mark::Bold))
+            .collect();
+        out.push(RenderedLine::new(plain, LineKind::Assistant).with_marks(marks));
     }
     out
 }
@@ -74,14 +78,19 @@ fn strip_bold(line: &str) -> (String, Vec<(usize, usize)>) {
 mod tests {
     use super::*;
 
-    /// (text, kind, bold) per rendered line — plain data, comparable.
-    type Flat = Vec<(String, LineKind, Vec<(usize, usize)>)>;
+    /// (text, kind, marks) per rendered line — plain data, comparable.
+    type Flat = Vec<(String, LineKind, Vec<(usize, usize, Mark)>)>;
 
     fn rendered(text: &str) -> Flat {
         lines(text)
             .into_iter()
-            .map(|l| (l.text, l.kind, l.bold))
+            .map(|l| (l.text, l.kind, l.marks))
             .collect()
+    }
+
+    /// `(start, end)` as a bold mark, the shape the tests read.
+    fn b(start: usize, end: usize) -> (usize, usize, Mark) {
+        (start, end, Mark::Bold)
     }
 
     #[test]
@@ -144,7 +153,7 @@ mod tests {
                 ("• item".into(), LineKind::Assistant, vec![]),
                 ("  • nested".into(), LineKind::Assistant, vec![]),
                 ("1. first".into(), LineKind::Assistant, vec![]),
-                ("key: value".into(), LineKind::Assistant, vec![(0, 4)]),
+                ("key: value".into(), LineKind::Assistant, vec![b(0, 4)]),
             ]
         );
     }

@@ -57,7 +57,7 @@ A `pre_tool` hook allows by printing nothing (or `{"decision":"allow"}`) and exi
 {"decision":"deny","reason":"blocked by the user guard hook"}
 ```
 
-A denial is a normal tool error: the model reads the reason (capped at 2 KiB; a missing reason names the hook command) and reacts to it. The tool does not run and `post_tool` hooks are skipped. Calls whose arguments were not valid JSON never reach hooks.
+A denial is a normal tool error: the model reads the reason (capped at 2 KiB; a missing reason names the hook command) and reacts to it. The tool does not run and `post_tool` hooks are skipped. Calls whose arguments were not valid JSON never reach hooks. Neither pattern runs `post_tool`: a call that never executed has nothing to observe, which includes a call the user stopped while it ran (`Esc`, `Ctrl+C`).
 
 ## Failure handling
 
@@ -65,7 +65,7 @@ Hooks **fail open**. A non-zero exit, a timeout, output that is not valid decisi
 
 - The deadline is `timeout_secs`; on timeout the whole process group is killed.
 - stdout is capped at 64 KiB, and stderr keeps its last 8 KiB, which is quoted in warnings.
-- Aborting a run (`Esc`) kills a running hook's process group.
+- Aborting a run (`Esc` or `Ctrl+C`) kills a running hook's process group.
 
 ## Recipes
 

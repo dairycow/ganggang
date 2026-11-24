@@ -33,7 +33,11 @@ impl Tool for SlowReadOnlyTool {
     fn is_read_only(&self) -> bool {
         true
     }
-    fn execute<'a>(&'a self, args: &'a Value) -> tools::BoxFuture<'a, ToolResult> {
+    fn execute<'a>(
+        &'a self,
+        args: &'a Value,
+        _cancel: &'a tools::Cancel,
+    ) -> tools::BoxFuture<'a, ToolResult> {
         #[derive(serde::Deserialize)]
         struct Args {
             label: String,

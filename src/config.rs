@@ -74,6 +74,13 @@ pub struct Config {
     pub compact_threshold_explicit: bool,
     pub max_turns: Option<u32>,
     pub bash_timeout_secs: u64,
+    /// Extra attempts a transient LLM transport failure earns (0 turns
+    /// retrying off). The policy itself lives in `llm::retry`.
+    pub max_retries: u32,
+    /// The whole-response timeout for one LLM request — response head AND
+    /// body, so it bounds a stream too. Long generations are the reason it
+    /// is a setting (GAP 2); connecting stays a fixed 10 s.
+    pub request_timeout_secs: u64,
     pub tools: Vec<String>,
     pub providers: BTreeMap<String, ProviderConfig>,
     env_overrides: EnvOverrides,
@@ -104,6 +111,8 @@ impl Default for Config {
             compact_threshold_explicit: ep.compact_threshold_explicit,
             max_turns: None,
             bash_timeout_secs: 30,
+            max_retries: 3,
+            request_timeout_secs: 600,
             tools: crate::agent::tools::NAMES
                 .iter()
                 .map(|s| s.to_string())
@@ -286,6 +295,8 @@ struct FileConfig {
     compact_threshold_tokens: Option<u32>,
     max_turns: Option<u32>,
     bash_timeout_secs: Option<u64>,
+    max_retries: Option<u32>,
+    request_timeout_secs: Option<u64>,
     tools: Option<Vec<String>>,
     #[serde(default)]
     providers: BTreeMap<String, providers::FileProviderConfig>,
@@ -484,6 +495,24 @@ pub fn merge(
                 defaults.bash_timeout_secs,
             ),
         )?,
+        max_retries: parse_env(
+            env_value(env, "GG_MAX_RETRIES"),
+            "GG_MAX_RETRIES",
+            pick_num(
+                &user.max_retries,
+                &project.max_retries,
+                defaults.max_retries,
+            ),
+        )?,
+        request_timeout_secs: parse_env(
+            env_value(env, "GG_REQUEST_TIMEOUT"),
+            "GG_REQUEST_TIMEOUT",
+            pick_num(
+                &user.request_timeout_secs,
+                &project.request_timeout_secs,
+                defaults.request_timeout_secs,
+            ),
+        )?,
         tools: pick_list(&user.tools, &project.tools).unwrap_or(defaults.tools),
         providers,
         env_overrides,
@@ -534,6 +563,9 @@ fn validate(cfg: &Config) -> anyhow::Result<()> {
     }
     if cfg.bash_timeout_secs == 0 {
         anyhow::bail!("bash_timeout_secs must be positive");
+    }
+    if cfg.request_timeout_secs == 0 {
+        anyhow::bail!("request_timeout_secs must be positive");
     }
     for tool in &cfg.tools {
         if tool.trim().is_empty() {

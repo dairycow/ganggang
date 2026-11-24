@@ -1,7 +1,9 @@
 use super::*;
 
 async fn run(dir: &std::path::Path, args: Value) -> ToolResult {
-    ReadTool::new(dir.to_path_buf()).execute(&args).await
+    ReadTool::new(dir.to_path_buf())
+        .execute(&args, &Cancel::none())
+        .await
 }
 
 #[tokio::test]

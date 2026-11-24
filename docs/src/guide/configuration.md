@@ -22,6 +22,8 @@ max_tokens = 16384
 # reasoning_effort = "medium"       # strata default
 # reasoning_budget_tokens = 4096    # strata default (0 disables)
 bash_timeout_secs = 30
+max_retries = 3
+request_timeout_secs = 600
 tools = ["read", "bash", "edit", "write", "grep", "find", "ls"]
 
 [providers.strata]
@@ -33,13 +35,15 @@ model = "deepseek-flash"
 # api_key = "…"  # or export DEEPSEEK_API_KEY
 ```
 
-Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `api_key`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`, `max_turns`, `bash_timeout_secs`, `tools`. The flat provider-level keys only apply when they belong to the active provider.
+Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `api_key`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`, `max_turns`, `bash_timeout_secs`, `max_retries`, `request_timeout_secs`, `tools`. The flat provider-level keys only apply when they belong to the active provider; `max_retries` and `request_timeout_secs` are top-level only.
 
 - `api` is `"open-ai-completions"` (default) or `"anthropic-messages"` (note the spelling: the `openai-completions` shown by `--list-models` is display text, not the config value).
 - `auth` is `"auto"` (Bearer for OpenAI, `x-api-key` for Anthropic), `"bearer"`, or `"x-api-key"`.
 - `replay_reasoning` controls whether earlier thinking is sent back to the model: `"never"` (`false`), `"turn"` (only assistant turns since the last user message; `strata` default), or `"all"` (`true`).
 - `compact_threshold_tokens` caps when auto-compaction triggers (e.g. `65536` on `strata` to stay within local VRAM KV residency; `0` disables).
 - `max_turns` caps turns per run (`0` disables); `gg` nudges the model to wrap up at 80% of the budget.
+- `max_retries` is how many extra attempts a transient LLM failure gets (408, 429, 5xx, a timeout, a dropped connection). The wait doubles from 500 ms with jitter, and a `Retry-After` header wins (capped at 30 s). `0` disables retries. Any other 4xx fails at once.
+- `request_timeout_secs` bounds one LLM request end to end — the response head and the whole body, a stream included — and must be at least `1`. A generation longer than this is cut, and what had streamed in is kept (see [Output Modes](modes.md#print-mode)).
 - `tools` is the allowlist of tools offered to the model (also `--tools read,grep`). Unknown names are an error. See [Tools](tools.md).
 - `context_window` should match the server's real window: compaction and the footer's context percentage use it. When unset on `strata` or a local URL, `gg` probes `/health` at startup for `max_context` (and `kv_resident` when `compact_threshold_tokens` is unset), falling back to `/v1/models` when needed. On `strata`, `gg` also adopts whichever model the server currently has loaded unless overridden via `-m` or `GG_MODEL`. See [Sessions & Compaction](sessions-compaction.md).
 
@@ -86,6 +90,8 @@ Choose at the command line with `-P deepseek`, `-m deepseek-v4-pro`, or `-m open
 | `GG_THINKING_BUDGET` | Cap thinking tokens per turn (`0` disables preset cap) |
 | `GG_COMPACT_THRESHOLD` | Auto-compaction token threshold (`0` disables preset threshold) |
 | `GG_MAX_TURNS` | Maximum turns per run (`0` disables) |
+| `GG_MAX_RETRIES` | Extra attempts per transient LLM failure (`0` disables) |
+| `GG_REQUEST_TIMEOUT` | Whole-request timeout in seconds, stream included |
 | `GG_DEBUG_PROMPT` | Set to `1` to dump the assembled system prompt to stderr |
 | `ZHIPU_API_KEY` | Key for `glm-coding-plan` |
 | `OPENCODE_API_KEY` | Key for `opencode-go` |
@@ -105,3 +111,4 @@ Choose at the command line with `-P deepseek`, `-m deepseek-v4-pro`, or `-m open
 | `~/.gg/AGENTS.md`, `AGENTS.md` | [Context files](context-skills-prompts.md#agentsmd) |
 | `~/.agents/skills/`, `.agents/skills/` | [Skills](context-skills-prompts.md#skills) |
 | `~/.gg/sessions/` | [Sessions](sessions-compaction.md) |
+| `~/.gg/history.jsonl` | [Prompt history](tui.md#prompt-history); written by the TUI, mode `0600` |

@@ -7,6 +7,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -51,6 +52,33 @@ impl ToolResult {
 /// dependency.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// The user's stop request, handed to every tool call.
+///
+/// An `Arc<AtomicBool>` wrapper over the loop's abort flag: a tool whose
+/// action can run a long time (a shell command, a directory walk) polls it
+/// and stops, so Esc is not dead until the next call boundary. The check is
+/// one acquire load — it pairs with the loop's release store, so a tool on
+/// another thread sees a stop request as soon as it is made — and it is
+/// cheap enough to repeat inside a walk.
+#[derive(Clone)]
+pub struct Cancel(Arc<AtomicBool>);
+
+impl Cancel {
+    pub fn new(flag: Arc<AtomicBool>) -> Self {
+        Self(flag)
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    /// A flag nothing ever sets, for a caller that must supply a [`Cancel`]
+    /// but has no cancellation path of its own (the TUI's `!` shell).
+    pub fn none() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+}
+
 pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
 
@@ -65,7 +93,11 @@ pub trait Tool: Send + Sync {
         false
     }
 
-    fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult>;
+    /// Run one call. `cancel` is the user's stop request: a tool with an
+    /// unbounded or long-running action checks it and stops promptly,
+    /// answering with an error result that says it was aborted. It lives as
+    /// long as the call's future, so a tool may hold it across an await.
+    fn execute<'a>(&'a self, args: &'a Value, cancel: &'a Cancel) -> BoxFuture<'a, ToolResult>;
 }
 
 /// Ordered tool set. Order of registration is the order of advertisement.
@@ -116,26 +148,31 @@ impl Registry {
             .collect()
     }
 
-    /// Execute one call. Unparseable arguments (checked first), unknown
+    /// Execute one call. A stop request already in effect answers without
+    /// touching the tool; unparseable arguments (checked first), unknown
     /// names, and field-level argument problems are error *results* — the
     /// model can read them and retry.
-    pub async fn dispatch(&self, call: &ToolCall) -> ToolResult {
+    pub async fn dispatch(&self, call: &ToolCall, cancel: &Cancel) -> ToolResult {
         if let Some(detail) = &call.args_error {
             return ToolResult::err(format!("arguments were not valid JSON: {detail}"));
         }
         let Some(tool) = self.0.iter().find(|t| t.name() == call.name) else {
             return ToolResult::err(format!("unknown tool: {}", call.name));
         };
-        tool.execute(&call.args).await
+        if cancel.is_cancelled() {
+            // Before the tool, not inside it: an Esc must not pay for one
+            // more command's startup.
+            return ToolResult::err("aborted by user".into());
+        }
+        tool.execute(&call.args, cancel).await
     }
 
     /// Execute a slice of calls concurrently (bounded at 8 in-flight),
-    /// returning results in the exact original call order.
-    pub async fn dispatch_parallel(
-        &self,
-        calls: &[ToolCall],
-        abort: &Arc<std::sync::atomic::AtomicBool>,
-    ) -> Vec<ToolResult> {
+    /// returning results in the exact original call order. Every call gets
+    /// the user's stop request: one that has not started when it lands is
+    /// answered without running, and one already running sees it through
+    /// the same [`Cancel`] a sequential call would.
+    pub async fn dispatch_parallel(&self, calls: &[ToolCall], cancel: &Cancel) -> Vec<ToolResult> {
         let sem = Arc::new(tokio::sync::Semaphore::new(8));
         let mut set = tokio::task::JoinSet::new();
         for (idx, call) in calls.iter().enumerate() {
@@ -151,13 +188,13 @@ impl Registry {
             };
             let args = call.args.clone();
             let sem = sem.clone();
-            let abort = abort.clone();
+            let cancel = cancel.clone();
             set.spawn(async move {
                 let _permit = sem.acquire_owned().await;
-                if abort.load(std::sync::atomic::Ordering::Acquire) {
+                if cancel.is_cancelled() {
                     return (idx, ToolResult::err("aborted before execution".into()));
                 }
-                let res = tool.execute(&args).await;
+                let res = tool.execute(&args, &cancel).await;
                 (idx, res)
             });
         }
@@ -244,122 +281,4 @@ pub fn default_registry(cwd: PathBuf, bash_timeout_secs: u64) -> Registry {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct Echo;
-
-    #[derive(serde::Deserialize)]
-    struct EchoArgs {
-        text: String,
-    }
-
-    impl Tool for Echo {
-        fn name(&self) -> &'static str {
-            "echo"
-        }
-
-        fn description(&self) -> &'static str {
-            "echo the text back"
-        }
-
-        fn schema(&self) -> Value {
-            serde_json::json!({
-                "type": "object",
-                "properties": {"text": {"type": "string"}},
-                "required": ["text"],
-            })
-        }
-
-        fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult> {
-            Box::pin(async move {
-                match parse_args::<EchoArgs>(args) {
-                    Ok(a) => ToolResult::ok(a.text),
-                    Err(e) => ToolResult::err(e),
-                }
-            })
-        }
-    }
-
-    fn call(name: &str, args: Value) -> ToolCall {
-        ToolCall {
-            id: "call_x".into(),
-            name: name.into(),
-            args,
-            args_error: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn dispatch_runs_a_registered_tool() {
-        let mut registry = Registry::new();
-        registry.register(Box::new(Echo));
-
-        let result = registry
-            .dispatch(&call("echo", serde_json::json!({"text": "hello"})))
-            .await;
-        assert!(!result.is_error);
-        assert_eq!(result.output, "hello");
-    }
-
-    #[test]
-    fn the_default_registry_matches_the_canonical_name_list() {
-        let registry = default_registry(std::env::temp_dir(), 30);
-        let names: Vec<&str> = registry.tools().iter().map(|tool| tool.name()).collect();
-        assert_eq!(names, NAMES);
-    }
-
-    #[tokio::test]
-    async fn dispatch_reports_bad_args_as_an_error_result() {
-        let mut registry = Registry::new();
-        registry.register(Box::new(Echo));
-
-        let result = registry
-            .dispatch(&call("echo", serde_json::json!({"nope": 1})))
-            .await;
-        assert!(result.is_error);
-        assert!(result.output.contains("invalid arguments"));
-    }
-
-    #[tokio::test]
-    async fn dispatch_reports_unknown_tools_without_panicking() {
-        let registry = Registry::new();
-
-        let result = registry
-            .dispatch(&call("ghost", serde_json::json!({})))
-            .await;
-        assert!(result.is_error);
-        assert_eq!(result.output, "unknown tool: ghost");
-    }
-
-    #[tokio::test]
-    async fn unparseable_arguments_are_an_error_result_without_invoking_the_tool() {
-        let mut registry = Registry::new();
-        registry.register(Box::new(Echo));
-
-        let result = registry
-            .dispatch(&ToolCall {
-                id: "call_x".into(),
-                name: "echo".into(),
-                args: serde_json::json!({}),
-                args_error: Some("expected value at line 1 column 1: `{not json`".into()),
-            })
-            .await;
-        assert!(result.is_error);
-        assert!(result.output.starts_with("arguments were not valid JSON"));
-        // If the tool had run with empty args it would have complained about
-        // a missing `text` field instead — a different, misleading error.
-    }
-
-    #[test]
-    fn declarations_use_the_function_shape() {
-        let mut registry = Registry::new();
-        registry.register(Box::new(Echo));
-
-        let decls = registry.declarations();
-        assert_eq!(decls.len(), 1);
-        assert_eq!(decls[0]["type"], "function");
-        assert_eq!(decls[0]["function"]["name"], "echo");
-        assert_eq!(decls[0]["function"]["parameters"]["required"][0], "text");
-    }
-}
+mod tests;

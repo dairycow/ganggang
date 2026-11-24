@@ -1,7 +1,17 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use super::*;
 
 async fn run(dir: &std::path::Path, args: Value) -> ToolResult {
-    GrepTool::new(dir.to_path_buf()).execute(&args).await
+    run_with(dir, args, &Cancel::none()).await
+}
+
+/// The same call with the user's stop request in hand.
+async fn run_with(dir: &std::path::Path, args: Value, cancel: &Cancel) -> ToolResult {
+    GrepTool::new(dir.to_path_buf())
+        .execute(&args, cancel)
+        .await
 }
 
 fn tree(dir: &std::path::Path) {
@@ -208,4 +218,111 @@ async fn glob_with_directory_prefix_matches_when_path_is_omitted() {
     .await;
     assert!(!r.is_error, "{}", r.output);
     assert_eq!(r.output, "src/a.rs:1: needle\n");
+}
+
+/// A tree of small files — `from` directories up to `upto`, fifty files
+/// each — for the walk that has to take a while.
+fn plant(dir: &std::path::Path, from: usize, upto: usize) {
+    for i in from..upto {
+        let sub = dir.join(format!("d{i}"));
+        std::fs::create_dir_all(&sub).unwrap();
+        for j in 0..50 {
+            std::fs::write(sub.join(format!("f{j}.txt")), "text\n").unwrap();
+        }
+    }
+}
+
+/// How long an uncancelled walk of the whole tree takes, having grown the
+/// tree until that is a measurable while: a stop request timed at a
+/// quarter of the walk then lands inside it on any machine, however fast
+/// or loaded. Returns the time and the tree's file count.
+async fn a_walk_that_takes_a_while(
+    dir: &std::path::Path,
+    args: impl Fn(usize) -> Value,
+) -> (std::time::Duration, usize) {
+    let (mut from, mut dirs) = (0, 200);
+    loop {
+        plant(dir, from, dirs);
+        from = dirs;
+        let total = dirs * 50;
+        let measured = std::time::Instant::now();
+        let complete = run(dir, args(total)).await;
+        let walk_time = measured.elapsed();
+        assert!(!complete.is_error, "{}", complete.output);
+        assert!(
+            complete.output.contains(&format!("{total} file(s)")),
+            "the uncancelled walk covers the tree: {}",
+            complete.output
+        );
+        if walk_time >= std::time::Duration::from_millis(200) || dirs >= 3200 {
+            return (walk_time, total);
+        }
+        dirs *= 2;
+    }
+}
+
+/// A stop request raised from a real thread `delay` from now — the walk is
+/// synchronous, so the flag cannot come from this task's executor.
+fn stop_after(delay: std::time::Duration) -> (Cancel, std::thread::JoinHandle<()>) {
+    let flag = Arc::new(AtomicBool::new(false));
+    let setter = {
+        let flag = flag.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(delay);
+            flag.store(true, Ordering::Release);
+        })
+    };
+    (Cancel::new(flag), setter)
+}
+
+/// Esc before the call: the search never starts, and the answer says so
+/// as an error rather than as a confident miss.
+#[tokio::test]
+async fn a_cancelled_search_reports_aborted_without_searching() {
+    let dir = tempfile::tempdir().unwrap();
+    tree(dir.path());
+
+    let r = run_with(
+        dir.path(),
+        serde_json::json!({"pattern": "needle", "path": "."}),
+        &Cancel::new(Arc::new(AtomicBool::new(true))),
+    )
+    .await;
+    assert!(r.is_error);
+    assert!(r.output.contains("aborted by user"), "{}", r.output);
+}
+
+/// Esc mid-walk: a stop request raised while the search is in flight ends
+/// it. The files-searched count in the answer is the proof the walk really
+/// stopped early.
+#[tokio::test]
+async fn a_cancelled_walk_stops_promptly_and_says_it_is_partial() {
+    let dir = tempfile::tempdir().unwrap();
+    // No pattern matches, so the only thing the walk reports is scope.
+    let args = |max: usize| serde_json::json!({"pattern": "no-such-needle", "path": ".", "max_results": max});
+    let (walk_time, total) = a_walk_that_takes_a_while(dir.path(), args).await;
+
+    let (cancel, setter) = stop_after(walk_time / 4);
+    let r = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        run_with(dir.path(), args(total + 10), &cancel),
+    )
+    .await
+    .expect("a cancelled walk must not run on to the end of the tree");
+    setter.join().unwrap();
+
+    assert!(r.is_error, "a stopped search is an error: {}", r.output);
+    assert!(r.output.contains("aborted by user"), "{}", r.output);
+    assert!(r.output.contains("partial"), "{}", r.output);
+    let searched: usize = r
+        .output
+        .split("after ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .expect("the aborted result names the scope it covered");
+    assert!(
+        searched > 0 && searched < total,
+        "the walk must stop partway, covered {searched} of {total}"
+    );
 }

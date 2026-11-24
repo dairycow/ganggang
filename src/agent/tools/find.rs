@@ -8,7 +8,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{
-    BoxFuture, PRUNED_DIRS, Tool, ToolResult, display_relative, parse_args, resolve_walk_root,
+    BoxFuture, Cancel, PRUNED_DIRS, Tool, ToolResult, display_relative, parse_args,
+    resolve_walk_root,
 };
 
 const DEFAULT_MAX_RESULTS: usize = 50;
@@ -35,7 +36,7 @@ struct FindArgs {
     include_ignored: Option<bool>,
 }
 
-fn find(cwd: &Path, root: &Path, args: &FindArgs) -> ToolResult {
+fn find(cwd: &Path, root: &Path, args: &FindArgs, cancel: &Cancel) -> ToolResult {
     if args.pattern.is_empty() {
         return ToolResult::err("pattern must not be empty".into());
     }
@@ -88,7 +89,15 @@ fn find(cwd: &Path, root: &Path, args: &FindArgs) -> ToolResult {
         .build();
 
     let mut hits = Vec::new();
+    // Checked every entry: the walk runs on a blocking thread, where
+    // dropping the call's future cannot reach it — only the stop request
+    // can end it early.
+    let mut stopped = false;
     for entry in walker.flatten() {
+        if cancel.is_cancelled() {
+            stopped = true;
+            break;
+        }
         if entry.depth() == 0 {
             continue;
         }
@@ -120,7 +129,17 @@ fn find(cwd: &Path, root: &Path, args: &FindArgs) -> ToolResult {
     let mut out = hits.join("\n");
     if !out.is_empty() {
         out.push('\n');
-    } else {
+    }
+    // A stopped walk's answer is an error: its hits are real, but a
+    // "(no matches)" from a walk that gave up would read as a miss.
+    if stopped {
+        return ToolResult::err(if hits.is_empty() {
+            "search aborted by user before any match\n".into()
+        } else {
+            format!("{out}search aborted by user — results are partial\n")
+        });
+    }
+    if out.is_empty() {
         out.push_str("(no matches)\n");
     }
     if hits.len() >= cap {
@@ -159,15 +178,19 @@ to include them). Dotfiles included, results sorted, capped at max_results (defa
         true
     }
 
-    fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult> {
+    fn execute<'a>(&'a self, args: &'a Value, cancel: &'a Cancel) -> BoxFuture<'a, ToolResult> {
         Box::pin(async move {
+            if cancel.is_cancelled() {
+                return ToolResult::err("search aborted by user before it started".into());
+            }
             let args: FindArgs = match parse_args(args) {
                 Ok(a) => a,
                 Err(e) => return ToolResult::err(e),
             };
             let cwd = self.cwd.clone();
             let root = self.resolve(args.path.as_deref());
-            match tokio::task::spawn_blocking(move || find(&cwd, &root, &args)).await {
+            let cancel = cancel.clone();
+            match tokio::task::spawn_blocking(move || find(&cwd, &root, &args, &cancel)).await {
                 Ok(res) => res,
                 Err(e) => ToolResult::err(format!("find task failed: {e}")),
             }

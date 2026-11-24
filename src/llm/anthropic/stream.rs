@@ -1,14 +1,20 @@
-//! SSE decoding for Anthropic `/v1/messages` streaming responses.
+//! SSE decoding for Anthropic Messages (`/v1/messages`) streaming responses
+//! — the same salvage contract as [`crate::llm::stream`]: a body that ends
+//! before `message_stop` comes back with what assembled and
+//! `complete: false`, and only an empty partial is an error. A stop request
+//! is the other way a read ends: polled while waiting for the next
+//! fragment, answered with the partial and `aborted: true`.
 
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::Context;
 use serde_json::Value;
 
 use super::map_stop_reason;
-use crate::llm::stream::{Delta, LineBuffer};
+use crate::llm::stream::{Delta, LineBuffer, StreamOutcome, salvageable, until_abort};
 use crate::llm::types::{ChatMessage, ChatResponse, Choice, ToolCall, Usage};
 
 #[derive(Default)]
@@ -228,19 +234,21 @@ impl AnthropicAssembler {
 
 pub(crate) async fn drain_sse(
     mut response: reqwest::Response,
+    abort: &AtomicBool,
     mut on_delta: impl FnMut(Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
-) -> anyhow::Result<ChatResponse> {
+) -> anyhow::Result<StreamOutcome> {
     let mut lines = LineBuffer::new();
     let mut assembler = AnthropicAssembler::default();
     let mut current_event: Option<String> = None;
     let mut done = false;
+    let mut aborted = false;
 
     while !done {
-        let Some(bytes) = response
-            .chunk()
-            .await
-            .context("reading Anthropic SSE stream")?
-        else {
+        let Some(bytes) = until_abort(abort, response.chunk()).await else {
+            aborted = true;
+            break;
+        };
+        let Some(bytes) = bytes.context("reading Anthropic SSE stream")? else {
             break;
         };
         for line in lines.feed(&bytes) {
@@ -276,11 +284,18 @@ pub(crate) async fn drain_sse(
         }
     }
 
-    if !done {
-        anyhow::bail!(
-            "Anthropic SSE stream ended without message_stop — the connection was cut mid-generation \
-             (partial output discarded; retry the run)"
+    let assembled = assembler.finish();
+    if !(done || aborted) {
+        anyhow::ensure!(
+            salvageable(&assembled),
+            "Anthropic SSE stream ended without message_stop and assembled nothing — the \
+             connection was cut before the model produced anything (nothing to salvage; \
+             retry the run)"
         );
     }
-    Ok(assembler.finish())
+    Ok(StreamOutcome {
+        response: assembled,
+        complete: done,
+        aborted,
+    })
 }

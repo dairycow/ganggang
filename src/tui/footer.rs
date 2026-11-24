@@ -1,5 +1,30 @@
-//! The one-line footer: where we are, who we talk to, what it cost, and
-//! whether a run is live. Pure state → string; mod.rs styles it.
+//! The one-line footer: where we are, who we talk to, what it cost, how
+//! fast the last turn ran, and whether a run is live.
+//!
+//! State in, [`UiLine`] out — the footer owns its own styling now, because
+//! a footer made of structured spans cannot be styled as one string: the
+//! `gg` mark, the context percentage's colour, and a spinner that changes
+//! frame to frame all need their own span. The colour decisions that carry
+//! meaning (how full the context window may get before the number turns
+//! gold, then red; which spinner frame is showing) are pure functions of
+//! state, so they are testable without a terminal.
+
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line as UiLine, Span};
+
+use super::theme::Palette;
+
+/// Spinner frames, one per 100 ms tick. Braille, eight states of one
+/// rotating dot: quiet enough to sit in a status line without demanding
+/// the eye.
+pub const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/// The context percentage at which the footer's number turns gold, and
+/// the one past which it turns red. Under the first the number is a fact;
+/// between them it is worth noticing; above it, the run is about to
+/// compact.
+pub const CTX_WARN: u8 = 60;
+pub const CTX_ERROR: u8 = 85;
 
 /// Footer contents, updated as events arrive.
 #[derive(Debug)]
@@ -10,13 +35,19 @@ pub struct Footer {
     tokens_out: u64,
     /// Context usage of the last request vs the window, once known.
     context_pct: Option<u8>,
-    /// Last turn's decode throughput (tok/s), once known.
+    /// Last turn's decode throughput (tokens/s), once the backend reports
+    /// it.
     decode_tps: Option<f64>,
-    /// Last turn's thinking share (%), once known.
+    /// Last turn's thinking share (%), the same.
     thinking_pct: Option<u8>,
     /// `--watch` state, absent when not watching (dev mode only).
     watch: Option<String>,
     busy: bool,
+    /// Ctrl+C asked a running task to stop: still busy, but on the way out
+    /// (gap §5). The footer says so instead of the plain working mark.
+    stopping: bool,
+    /// Spinner frame, advanced by the event loop only while a run is live.
+    frame: usize,
 }
 
 impl Footer {
@@ -31,6 +62,8 @@ impl Footer {
             thinking_pct: None,
             watch: None,
             busy: false,
+            stopping: false,
+            frame: 0,
         }
     }
 
@@ -52,16 +85,10 @@ impl Footer {
             self.context_pct = None;
             return;
         }
+        // Clamped before it is ever a `u8`: four times the window would
+        // otherwise wrap to a reassuringly small number.
         let pct = (context_tokens.saturating_mul(100) / context_window).min(100) as u8;
         self.context_pct = Some(pct);
-    }
-
-    pub fn set_busy(&mut self, busy: bool) {
-        self.busy = busy;
-    }
-
-    pub fn set_model(&mut self, model: &str) {
-        self.model = model.to_string();
     }
 
     pub fn set_decode_tps(&mut self, tps: Option<f64>) {
@@ -72,48 +99,162 @@ impl Footer {
         self.thinking_pct = pct;
     }
 
+    /// A new session starts with no history to measure: the context
+    /// figure and both throughput figures go with it.
     pub fn clear_telemetry(&mut self) {
         self.context_pct = None;
         self.decode_tps = None;
         self.thinking_pct = None;
     }
 
-    /// e.g. `…/projects/ganggang │ qwen3.8 │ ↑305 ↓81 │ ctx 4% │ 62.4 t/s │ ● working`
-    pub fn render(&self) -> String {
-        let context = self
-            .context_pct
-            .map(|pct| format!("│ ctx {pct}% "))
-            .unwrap_or_default();
-        let tps = self
-            .decode_tps
-            .map(|t| format!("│ {t:.1} t/s "))
-            .unwrap_or_default();
-        let think = self
-            .thinking_pct
-            .map(|p| format!("│ think {p}% "))
-            .unwrap_or_default();
-        let watch = self
-            .watch
-            .as_deref()
-            .map(|watch| format!("│ {watch} "))
-            .unwrap_or_default();
-        format!(
-            "{} │ {} │ ↑{} ↓{} {}{}{}{}│ {}",
-            self.cwd_short,
-            self.model,
-            self.tokens_in,
-            self.tokens_out,
-            context,
-            tps,
-            think,
-            watch,
-            if self.busy {
-                "● working"
-            } else {
-                "○ ready"
-            }
-        )
+    pub fn set_busy(&mut self, busy: bool) {
+        self.busy = busy;
+        // The stopping mark belongs to one run: it goes whenever the busy
+        // mark moves, in either direction, and a run asked to stop is
+        // marked again with [`set_stopping`](Self::set_stopping).
+        self.stopping = false;
+        // A run that starts begins its spinner at the top; one that ends
+        // leaves no half-turn behind.
+        self.frame = 0;
     }
+
+    /// The stopping mark goes with a busy run and nowhere else: a run that
+    /// ends (completed, failed, or aborted) clears it here as well.
+    pub fn set_stopping(&mut self, stopping: bool) {
+        self.stopping = stopping && self.busy;
+    }
+
+    /// Whether a spinner has anything to show: the loop asks before it
+    /// arms its 100 ms timer, so an idle footer never wakes the frame.
+    pub fn spinning(&self) -> bool {
+        self.busy
+    }
+
+    /// Advance the spinner one frame. Called from the event loop's timer
+    /// arm only while [`spinning`](Self::spinning).
+    pub fn tick(&mut self) {
+        self.frame = (self.frame + 1) % SPINNER.len();
+    }
+
+    /// The spinner frame the footer is showing.
+    pub fn spinner(&self) -> char {
+        SPINNER[self.frame % SPINNER.len()]
+    }
+
+    /// Whether the footer is showing the stopping mark.
+    pub fn stopping(&self) -> bool {
+        self.stopping
+    }
+
+    pub fn set_model(&mut self, model: &str) {
+        self.model = model.to_string();
+    }
+
+    /// The whole line at once, unstyled — what the footer's tests assert
+    /// against, and the text behind [`spans`](Self::spans). Test-only by
+    /// design: the view draws spans, and nothing in the program needs the
+    /// flat form.
+    #[cfg(test)]
+    pub fn render(&self) -> String {
+        self.spans(&Palette::default())
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    /// e.g. `gg …/projects/ganggang qwen3.8 ↑305 ↓81 ctx 4% ⠋ working`, and
+    /// with the throughput figures the backend reports,
+    /// `… ↑305 ↓81 ctx 4% 62.4 t/s think 45% ⠋ working`.
+    ///
+    /// One row of spans, each already carrying the style its role means:
+    /// the mark in the crest, the location in pale grey, the model in body
+    /// text, the totals in muted, the context number in muted (going gold
+    /// then red as the window fills), the throughput figures in muted, the
+    /// watch state in gold, and the status — ready, a turning spinner and
+    /// `working`, or `stopping…`.
+    pub fn spans(&self, palette: &Palette) -> UiLine<'static> {
+        let muted = Style::new().fg(palette.muted);
+        let mut spans: Vec<Span<'static>> = vec![
+            Span::styled(
+                "gg",
+                Style::new().fg(palette.accent).add_modifier(Modifier::BOLD),
+            ),
+            field(muted),
+            Span::styled(self.cwd_short.clone(), muted),
+            field(muted),
+            Span::styled(self.model.clone(), Style::new().fg(palette.text)),
+            field(muted),
+            Span::styled(format!("↑{} ↓{}", self.tokens_in, self.tokens_out), muted),
+        ];
+        if let Some(pct) = self.context_pct {
+            spans.push(field(muted));
+            spans.push(Span::styled(
+                format!("ctx {pct}%"),
+                Style::new().fg(Self::ctx_colour(palette, pct)),
+            ));
+        }
+        // Throughput, when the backend reports it: Strata does, most
+        // cloud providers do not. Absent, the field is simply not there.
+        if let Some(tps) = self.decode_tps {
+            spans.push(field(muted));
+            spans.push(Span::styled(format!("{tps:.1} t/s"), muted));
+        }
+        if let Some(pct) = self.thinking_pct {
+            spans.push(field(muted));
+            spans.push(Span::styled(format!("think {pct}%"), muted));
+        }
+        if let Some(watch) = &self.watch {
+            spans.push(field(muted));
+            spans.push(Span::styled(watch.clone(), Style::new().fg(palette.warn)));
+        }
+        spans.push(field(muted));
+        spans.extend(self.status_spans(palette));
+        UiLine::from(spans)
+    }
+
+    /// The status in the spans its state needs: one for the word, so a
+    /// stopping run is scarlet and bold while the spinner stays warm.
+    fn status_spans(&self, palette: &Palette) -> Vec<Span<'static>> {
+        if !self.busy {
+            return vec![Span::styled("○ ready", Style::new().fg(palette.muted))];
+        }
+        if self.stopping {
+            return vec![
+                Span::styled(self.spinner().to_string(), Style::new().fg(palette.accent)),
+                Span::styled(
+                    " stopping…",
+                    Style::new().fg(palette.accent).add_modifier(Modifier::BOLD),
+                ),
+            ];
+        }
+        vec![
+            Span::styled(
+                self.spinner().to_string(),
+                Style::new().fg(palette.accent_soft),
+            ),
+            Span::styled(" working", Style::new().fg(palette.accent_soft)),
+        ]
+    }
+
+    /// The colour of the context percentage: a fact, then a warning, then
+    /// a problem. Pure, and the rule the footer test pins down.
+    pub fn ctx_colour(palette: &Palette, pct: u8) -> ratatui::style::Color {
+        if pct <= CTX_WARN {
+            palette.muted
+        } else if pct <= CTX_ERROR {
+            palette.warn
+        } else {
+            palette.error
+        }
+    }
+}
+
+/// One field boundary: ` │ ` in the pale-grey field colour, so the footer
+/// reads as fields rather than one long sentence.
+fn field(style: Style) -> Span<'static> {
+    Span::styled(" │ ", style)
 }
 
 /// Last two components of the path — enough to tell projects apart,
@@ -127,60 +268,5 @@ fn shorten(cwd: &std::path::Path) -> String {
     let leaf = parts[parts.len() - 1].as_os_str().to_string_lossy();
     format!("…/{parent}/{leaf}")
 }
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::Path;
-
-    #[test]
-    fn footer_shows_location_model_tokens_and_state() {
-        let mut f = Footer::new(Path::new("/home/user/Projects/ganggang"), "qwen3.8");
-        f.set_usage(305, 81);
-        f.set_busy(true);
-        let rendered = f.render();
-        assert!(rendered.contains("Projects/ganggang"), "{rendered}");
-        assert!(rendered.contains("qwen3.8"));
-        assert!(rendered.contains("↑305 ↓81"));
-        assert!(rendered.contains("● working"));
-        f.set_busy(false);
-        assert!(f.render().contains("○ ready"));
-    }
-
-    #[test]
-    fn watch_status_renders_only_when_watching() {
-        let mut f = Footer::new(Path::new("/home/user/Projects/ganggang"), "qwen3.8");
-        assert!(!f.render().contains("watch"));
-        f.set_watch(Some("watch debug · watching".into()));
-        assert!(f.render().contains("watch debug · watching"));
-        f.set_watch(None);
-        assert!(!f.render().contains("watch"));
-    }
-
-    #[test]
-    fn short_paths_are_shown_whole() {
-        assert_eq!(shorten(Path::new("/")), "/");
-        assert_eq!(shorten(Path::new("/home")), "/home");
-    }
-
-    #[test]
-    fn telemetry_renders_tps_and_thinking_pct_when_set() {
-        let mut f = Footer::new(Path::new("/home/user/Projects/ganggang"), "qwen3.8");
-        f.set_decode_tps(Some(62.4));
-        f.set_thinking_pct(Some(45));
-        let rendered = f.render();
-        assert!(rendered.contains("62.4 t/s"), "{rendered}");
-        assert!(rendered.contains("think 45%"), "{rendered}");
-        f.clear_telemetry();
-        let cleared = f.render();
-        assert!(!cleared.contains("t/s"));
-        assert!(!cleared.contains("think"));
-    }
-
-    #[test]
-    fn set_context_clamps_above_100_without_u8_wrapping() {
-        let mut f = Footer::new(Path::new("/home/user/Projects/ganggang"), "qwen3.8");
-        f.set_context(400_000, 100_000);
-        assert!(f.render().contains("ctx 100%"), "{}", f.render());
-    }
-}
+mod tests;

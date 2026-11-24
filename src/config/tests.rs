@@ -98,6 +98,74 @@ fn invalid_env_value_names_the_var() {
     );
 }
 
+/// The retry budget is a setting like any other: default 3, file then
+/// env over it, and zero is a real value (one attempt, no retrying).
+#[test]
+fn max_retries_merges_like_other_numbers() {
+    let default = merge(Config::default(), None, None, &[]).unwrap();
+    assert_eq!(default.max_retries, 3);
+    let cfg = merge(
+        Config::default(),
+        Some("max_retries = 5\n"),
+        None,
+        &env(&[("GG_MAX_RETRIES", "0")]),
+    )
+    .unwrap();
+    assert_eq!(cfg.max_retries, 0, "env wins, and zero turns retries off");
+    let err = merge(
+        Config::default(),
+        None,
+        None,
+        &env(&[("GG_MAX_RETRIES", "often")]),
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("GG_MAX_RETRIES"), "{err:#}");
+}
+
+/// The whole-response timeout merges like any other number: default 600
+/// (the old fixed 300 guillotined long generations), file under env, and
+/// zero refused — a request with no deadline could hang a run forever.
+#[test]
+fn request_timeout_secs_merges_like_other_numbers() {
+    let default = merge(Config::default(), None, None, &[]).unwrap();
+    assert_eq!(default.request_timeout_secs, 600);
+    let cfg = merge(
+        Config::default(),
+        Some("request_timeout_secs = 900\n"),
+        Some("request_timeout_secs = 1200\n"),
+        &env(&[("GG_REQUEST_TIMEOUT", "60")]),
+    )
+    .unwrap();
+    assert_eq!(cfg.request_timeout_secs, 60, "env wins over both files");
+    let cfg = merge(
+        Config::default(),
+        Some("request_timeout_secs = 900\n"),
+        None,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(cfg.request_timeout_secs, 900);
+    let err = merge(
+        Config::default(),
+        Some("request_timeout_secs = 0\n"),
+        None,
+        &[],
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("request_timeout_secs"),
+        "{err:#}"
+    );
+    let err = merge(
+        Config::default(),
+        None,
+        None,
+        &env(&[("GG_REQUEST_TIMEOUT", "soon")]),
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("GG_REQUEST_TIMEOUT"), "{err:#}");
+}
+
 #[test]
 fn unknown_allowlist_tool_is_an_error() {
     // "grep" graduated to a known tool in M7.1 — the unknown-name

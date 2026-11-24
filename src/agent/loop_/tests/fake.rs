@@ -28,23 +28,68 @@ impl FakeServer {
     pub(super) fn spawn_sse(streams: Vec<String>) -> Self {
         serve(streams, "text/event-stream", true)
     }
+
+    /// [`spawn`](Self::spawn), plus a hook called with each request's
+    /// 0-based index after it is read and before the answer is written —
+    /// the seam a script uses to change harness state mid-run, e.g. a
+    /// user pressing Esc while a request is in flight.
+    pub(super) fn spawn_with_hook(
+        responses: Vec<String>,
+        on_request: impl Fn(usize) + Send + 'static,
+    ) -> Self {
+        serve_hooked(responses, "application/json", false, on_request)
+    }
+
+    /// Answers with whole raw HTTP responses, exactly as given (status
+    /// line, headers, body) — for scripts about the transport itself, a
+    /// retried 429 say, where the status is the point.
+    pub(super) fn spawn_raw(responses: Vec<String>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_request_body(&mut stream);
+                seen.lock()
+                    .unwrap()
+                    .push(serde_json::from_str(&request).unwrap());
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        FakeServer {
+            base_url: format!("http://{addr}"),
+            requests,
+        }
+    }
 }
 
 /// The accept loop both spawners share: one body per connection,
 /// requests recorded in order.
 fn serve(bodies: Vec<String>, content_type: &str, fragmented: bool) -> FakeServer {
+    serve_hooked(bodies, content_type, fragmented, |_| {})
+}
+
+fn serve_hooked(
+    bodies: Vec<String>,
+    content_type: &str,
+    fragmented: bool,
+    on_request: impl Fn(usize) + Send + 'static,
+) -> FakeServer {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let seen = requests.clone();
     let content_type = content_type.to_string();
     thread::spawn(move || {
-        for body in bodies {
+        for (index, body) in bodies.into_iter().enumerate() {
             let (mut stream, _) = listener.accept().unwrap();
             let request = read_request_body(&mut stream);
             seen.lock()
                 .unwrap()
                 .push(serde_json::from_str(&request).unwrap());
+            on_request(index);
             let head = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n"
             );
@@ -65,8 +110,9 @@ fn serve(bodies: Vec<String>, content_type: &str, fragmented: bool) -> FakeServe
     }
 }
 
-/// Reads one HTTP request and returns just its body.
-fn read_request_body(stream: &mut TcpStream) -> String {
+/// Reads one HTTP request and returns just its body. Shared with the
+/// abort scripts, which need to see the request a stalled stream is answering.
+pub(super) fn read_request_body(stream: &mut TcpStream) -> String {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     let header_end = loop {
@@ -99,9 +145,29 @@ pub(super) fn text_response(text: &str) -> String {
     .to_string()
 }
 
+/// An answer the provider ran out of tokens on: same shape, `length`
+/// finish (GAP 11 scripts).
+pub(super) fn length_response(text: &str) -> String {
+    json!({
+        "choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "length"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    })
+    .to_string()
+}
+
 /// `(id, name, arguments-string)` triples become one assistant tool-call
 /// response with `content: null`.
 pub(super) fn tool_call_response(calls: &[(&str, &str, &str)]) -> String {
+    tool_call_response_with(calls, "tool_calls")
+}
+
+/// The same tool-call batch cut by `max_tokens` — the shape a truncated
+/// turn arrives as when it was mid-tool-call (GAP 2 + GAP 11 scripts).
+pub(super) fn length_tool_call_response(calls: &[(&str, &str, &str)]) -> String {
+    tool_call_response_with(calls, "length")
+}
+
+fn tool_call_response_with(calls: &[(&str, &str, &str)], finish_reason: &str) -> String {
     json!({
         "choices": [{
             "message": {
@@ -112,7 +178,7 @@ pub(super) fn tool_call_response(calls: &[(&str, &str, &str)]) -> String {
                     "function": {"name": name, "arguments": args},
                 })).collect::<Vec<_>>(),
             },
-            "finish_reason": "tool_calls",
+            "finish_reason": finish_reason,
         }],
         "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28},
     })
@@ -150,6 +216,28 @@ pub(super) fn sse_text_response(text: &str) -> String {
         json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
         json!({"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}),
     ])
+}
+
+/// [`text_response`](text_response)'s stream cut off mid-answer: the text
+/// deltas arrive, then the connection ends — no finish chunk, no usage
+/// chunk, no `[DONE]` (the GAP 2 shape: a clean EOF from a dead upstream).
+pub(super) fn sse_text_response_cut(text: &str) -> String {
+    let mid = text.char_indices().count() / 2;
+    let split = text
+        .char_indices()
+        .nth(mid)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
+    let (a, b) = text.split_at(split);
+    let mut out = String::from(": keep-alive\n\n");
+    for event in [
+        json!({"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}),
+        json!({"choices":[{"index":0,"delta":{"content":a},"finish_reason":null}]}),
+        json!({"choices":[{"index":0,"delta":{"content":b},"finish_reason":null}]}),
+    ] {
+        out.push_str(&format!("data: {event}\n\n"));
+    }
+    out
 }
 
 /// [`text_response`](text_response)'s stream with thinking in front

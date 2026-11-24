@@ -127,7 +127,13 @@ impl Agent {
     }
 
     pub fn switch_endpoint(&mut self, endpoint: &crate::config::Endpoint) -> anyhow::Result<()> {
-        let client = LlmClient::from_endpoint(endpoint)?.with_session_id(self.session_id.clone());
+        // The retry budget and the request timeout are the run's, not the
+        // endpoint's: carry both onto the fresh client rather than falling
+        // back to the defaults.
+        let client = LlmClient::from_endpoint(endpoint)?
+            .with_session_id(self.session_id.clone())
+            .with_retry(self.client.max_retries())
+            .with_request_timeout(self.client.request_timeout_secs());
         self.client = client;
         self.model = endpoint.model.clone();
         self.max_tokens = endpoint.max_tokens;

@@ -1,14 +1,16 @@
 //! The terminal-event reader. crossterm's `read` blocks, and blocking has
 //! no place inside a tokio `select!` — so a dedicated thread reads and
-//! forwards key and paste events. Bracketed paste is what makes multi-line
-//! pastes land as text instead of submitting at the first newline.
+//! forwards key, paste, and mouse-wheel events. Bracketed paste is what
+//! makes multi-line pastes land as text instead of submitting at the first
+//! newline; the mouse is forwarded because the wheel scrolls the transcript
+//! and nothing else about a mouse means anything to gg.
 
 use std::time::Duration;
 
 use crossterm::event::Event;
 use tokio::sync::mpsc;
 
-use super::keys::{KeyAction, classify};
+use super::keys::{KeyAction, classify, classify_wheel};
 
 pub(super) struct KeyReader {
     events: mpsc::Receiver<Event>,
@@ -23,6 +25,11 @@ impl KeyReader {
         std::thread::spawn(move || {
             loop {
                 match crossterm::event::read() {
+                    // Keys, pastes, and the wheel. Other mouse events — a
+                    // press, a release, a drag, a hold — are dropped HERE
+                    // rather than forwarded: mouse capture reports motion,
+                    // and a drag across the transcript would otherwise fill
+                    // the channel with events nothing acts on.
                     Ok(event @ (Event::Key(_) | Event::Paste(_))) => {
                         // Ctrl+G lends the terminal to the editor. The read
                         // cannot be interrupted from outside, and while
@@ -43,6 +50,11 @@ impl KeyReader {
                             break;
                         }
                         if lent && wake.recv().is_err() {
+                            break;
+                        }
+                    }
+                    Ok(Event::Mouse(mouse)) if classify_wheel(mouse).is_some() => {
+                        if tx.blocking_send(Event::Mouse(mouse)).is_err() {
                             break;
                         }
                     }

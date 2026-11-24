@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 use anyhow::Context;
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    KeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    EnableMouseCapture, KeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::style::Print;
@@ -23,12 +23,19 @@ use crossterm::terminal::{
 /// takes back verbatim. Recorded by [`Guard::new`] before gg first goes raw.
 static SHELL_MODE: OnceLock<String> = OnceLock::new();
 
-/// Enter raw mode, the alternate screen, bracketed-paste mode, and the
-/// terminal's enhanced-key reporting (see [`request_enhanced_keys`]). Call
+/// Enter raw mode, the alternate screen, bracketed-paste mode, mouse
+/// reporting (the wheel scrolls the transcript — see
+/// [`classify_wheel`](super::keys::classify_wheel)), and the terminal's
+/// enhanced-key reporting (see [`request_enhanced_keys`]). Call
 /// [`restore`] on the way out, no matter how the way out happens.
 pub fn enter() -> anyhow::Result<()> {
     enable_raw_mode().context("entering raw mode")?;
-    if let Err(e) = execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste) {
+    if let Err(e) = execute!(
+        stdout(),
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        EnableMouseCapture
+    ) {
         // Raw mode is already on — leave the terminal as we found it
         // instead of exiting with the keyboard still raw.
         let _ = disable_raw_mode();
@@ -60,10 +67,14 @@ pub fn restore() {
     // alternate screen still needs leaving. The keyboard modes gg asked
     // for are popped here too — an editor is handed a plain terminal, and
     // the shell gets one back (a tmux pane left in an extended key mode
-    // reports modified keys the shell never asked for).
+    // reports modified keys the shell never asked for). Mouse reporting
+    // goes with them: a shell that never asked for it must not be handed a
+    // terminal that reports every click, and an editor that does want the
+    // mouse asks for it itself.
     let _ = execute!(
         stdout(),
         DisableBracketedPaste,
+        DisableMouseCapture,
         LeaveAlternateScreen,
         Print("\x1b[<u\x1b[>4;0m")
     );

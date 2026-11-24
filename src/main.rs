@@ -160,7 +160,7 @@ async fn main() -> anyhow::Result<()> {
         let mut cfg = config::load()?;
         cfg.apply_cli(cli.provider.as_deref(), cli.model.as_deref())?;
         let mut active = cfg.active_endpoint();
-        llm::client::maybe_probe_local_health(&mut active).await;
+        llm::health::maybe_probe_local_health(&mut active).await;
         if let Some(p) = cfg.providers.get_mut(&active.provider)
             && !p.context_window_explicit
         {
@@ -257,7 +257,7 @@ async fn main() -> anyhow::Result<()> {
         cfg.apply_max_turns_cli(cli.max_turns);
         let mut endpoint = cfg.active_endpoint();
         endpoint.require_auth()?;
-        crate::llm::client::maybe_probe_local_health(&mut endpoint).await;
+        crate::llm::health::maybe_probe_local_health(&mut endpoint).await;
         cfg.model = endpoint.model.clone();
         cfg.model_explicit = endpoint.model_explicit;
         cfg.context_window = endpoint.context_window;
@@ -493,7 +493,7 @@ async fn open_agent(cli: &Cli, abort: Arc<AtomicBool>) -> anyhow::Result<Agent> 
     cfg.apply_max_turns_cli(cli.max_turns);
     let mut endpoint = cfg.active_endpoint();
     endpoint.require_auth()?;
-    crate::llm::client::maybe_probe_local_health(&mut endpoint).await;
+    crate::llm::health::maybe_probe_local_health(&mut endpoint).await;
     let cwd = std::env::current_dir()?;
     let (hooks, hook_warnings) = agent::hooks::load(&cwd, cli.no_hooks)?;
     for warning in &hook_warnings {
@@ -600,7 +600,9 @@ fn build_agent(
     store: Option<agent::session::io::SessionStore>,
     hooks: &agent::hooks::Hooks,
 ) -> anyhow::Result<Agent> {
-    let client = LlmClient::from_endpoint(endpoint)?;
+    let client = LlmClient::from_endpoint(endpoint)?
+        .with_retry(cfg.max_retries)
+        .with_request_timeout(cfg.request_timeout_secs);
     let mut registry = default_registry(cwd.to_path_buf(), cfg.bash_timeout_secs);
     let allowlist = config::resolve_tools(
         cli.tools.clone(),

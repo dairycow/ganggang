@@ -1,5 +1,8 @@
 //! Tool-batch execution for the agent loop: sequential by default, with
-//! concurrent dispatch for contiguous runs of 2+ read-only calls.
+//! concurrent dispatch for contiguous runs of 2+ read-only calls. Either
+//! way every call is handed the run's stop request, and a stop mid-batch
+//! ends the run with the abort shape (the remaining calls get synthesized
+//! error results, `RunAborted` is emitted).
 
 use std::sync::atomic::Ordering;
 
@@ -10,7 +13,7 @@ use crate::events::AgentEvent;
 use super::super::Agent;
 use super::super::hooks::PreOutcome;
 use super::super::session::ToolCall;
-use super::super::tools::ToolResult;
+use super::super::tools::{Cancel, ToolResult};
 
 enum PreparedCall {
     Runnable,
@@ -25,6 +28,7 @@ impl Agent {
         &mut self,
         tool_calls: &[ToolCall],
         session_id: Option<&str>,
+        cancel: &Cancel,
         events: &mut Sender<AgentEvent>,
     ) -> anyhow::Result<bool> {
         let mut cursor = 0usize;
@@ -38,13 +42,13 @@ impl Agent {
             }
             if run_ro && end - cursor >= 2 {
                 if self
-                    .execute_parallel_run(tool_calls, cursor, end, session_id, events)
+                    .execute_parallel_run(tool_calls, cursor, end, session_id, cancel, events)
                     .await?
                 {
                     return Ok(true);
                 }
             } else if self
-                .execute_sequential_run(tool_calls, cursor, end, session_id, events)
+                .execute_sequential_run(tool_calls, cursor, end, session_id, cancel, events)
                 .await?
             {
                 return Ok(true);
@@ -101,6 +105,7 @@ impl Agent {
         start: usize,
         end: usize,
         session_id: Option<&str>,
+        cancel: &Cancel,
         events: &mut Sender<AgentEvent>,
     ) -> anyhow::Result<bool> {
         for (offset, call) in all_calls[start..end].iter().enumerate() {
@@ -131,7 +136,12 @@ impl Agent {
                     for warning in warnings {
                         events.send(AgentEvent::Warned { message: warning }).await?;
                     }
-                    (self.tools.dispatch(call).await, call.args_error.is_none())
+                    // A call the user stopped while it ran is not an
+                    // execution a `post_tool` hook should observe — the
+                    // same rule as a call that never executed.
+                    let result = self.tools.dispatch(call, cancel).await;
+                    let executed = call.args_error.is_none() && !self.abort.load(Ordering::Acquire);
+                    (result, executed)
                 }
                 PreOutcome::Deny { reason, warnings } => {
                     for warning in warnings {
@@ -186,6 +196,7 @@ impl Agent {
         start: usize,
         end: usize,
         session_id: Option<&str>,
+        cancel: &Cancel,
         events: &mut Sender<AgentEvent>,
     ) -> anyhow::Result<bool> {
         if self.abort.load(Ordering::Acquire) {
@@ -230,7 +241,7 @@ impl Agent {
                         runnable_calls.push(call.clone());
                     } else {
                         prepared.push(PreparedCall::Immediate {
-                            result: self.tools.dispatch(call).await,
+                            result: self.tools.dispatch(call, cancel).await,
                             executed: false,
                         });
                     }
@@ -268,7 +279,7 @@ impl Agent {
         let parallel_vec = if runnable_calls.is_empty() {
             Vec::new()
         } else {
-            let fut = self.tools.dispatch_parallel(&runnable_calls, &self.abort);
+            let fut = self.tools.dispatch_parallel(&runnable_calls, cancel);
             tokio::select! {
                 biased;
                 _ = super::wait_for_abort(&self.abort) => {
