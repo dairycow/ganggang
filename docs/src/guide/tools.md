@@ -1,20 +1,20 @@
 # Tools
 
-The model gets seven tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. Parameters and descriptions are in the generated [Built-in Tools](../reference/tools.md) reference; this page covers behaviour and limits.
+`gg` provides seven built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. Parameters and descriptions are in the generated [Built-in tools](../reference/tools.md) reference; this page covers behaviour and limits.
 
 ## Principles
 
 - Mutating tools (`bash`, `edit`, `write`) run **one at a time**, in the order the model called them. Contiguous runs of 2+ read-only tools (`read`, `grep`, `find`, `ls`) execute **in parallel** (up to 8 in flight) while preserving call order in events and session history.
-- A tool failure is a **value**: the error text goes back to the model, which reads it and retries. Only transport and session I/O errors abort a run.
-- Every cap is **visible**: truncated output says so, so the model knows when a result is cut.
+- Tool failures are returned to the model as tool results so it can recover. Only transport and session I/O errors abort a run.
+- Truncated outputs include an explicit truncation marker.
 
 ## Stopping a run
 
-`Esc` or `Ctrl+C` (or `SIGTERM`) stops a run as it is running, not at the next call boundary:
+`Esc` or `Ctrl+C` (or `SIGTERM`) aborts an active run immediately:
 
-- A `bash` command has its whole process group killed; the model is told `command aborted by user and killed`.
+- A `bash` command has its whole process group killed; the model is told `command aborted by user and killed`, followed by any output received before the kill.
 - A `grep` or `find` walk stops and returns what it found so far, as an error saying the results are partial. A call that had not started does not start.
-- A call the user stopped while it ran is not an execution: no `post_tool` [hook](hooks.md) observes it.
+- Aborted tool calls do not trigger `post_tool` [hooks](hooks.md).
 
 ## Choosing which tools are offered
 
@@ -26,11 +26,11 @@ or `tools = [...]` in [config](configuration.md). The flag overrides the config.
 
 ## `read`
 
-Reads a text file with 1-based line numbers (`N| text`): at most 2000 lines and 50 KiB per call, with a `[truncated: …]` note when cut. `offset` (1-based line) and `limit` stream sequentially so you can page cleanly past 50 KiB. Non-UTF-8 files are refused.
+Reads a text file with 1-based line numbers (`N| text`). The default page is 400 lines or 24 KiB, whichever comes first, with a `[truncated: ...]` note. `offset` (1-based line) and `limit` stream sequentially so you can page cleanly past 50 KiB; `limit` caps at 2000 lines. A line longer than 500 characters is cut with `…` so a minified file cannot fill the page. A negative `offset` (for example `offset: -30`) reads the last 30 lines and keeps their real line numbers. Non-UTF-8 files are refused.
 
 ## `bash`
 
-Runs `bash -c` in the session directory with your permissions. stdout and stderr are merged in arrival order; output is capped at 10 KiB (the command still runs to completion, so the exit code is real) and a non-zero exit is reported as an error result. A per-call `timeout_secs` is clamped to `bash_timeout_secs` (default 30). On timeout the **whole process group** is killed.
+Runs `bash -c` in the session directory with your permissions. stdout and stderr are merged in arrival order. Output over 10 KiB keeps the first quarter and the last three quarters, with a `[... N bytes omitted ...]` marker between; the command runs to completion so its exit code is accurate. A non-zero exit is reported as an error result. A per-call `timeout_secs` is clamped to `bash_timeout_secs` (default 30). On timeout the **whole process group** is killed, and output received before the kill is returned after `[partial output]`.
 
 ## `edit`
 
@@ -38,11 +38,11 @@ Exact-match replacement. Each `old_text` must occur **exactly once**; any miss o
 
 ## `write`
 
-Creates or overwrites a file, creating parent directories. Paths that resolve (lexically, after `..`) outside the working directory are refused unless the call passes `force: true`. This is a guardrail, not a sandbox: `bash` can write anywhere.
+Creates or overwrites a file, creating parent directories. Paths that resolve (lexically, after `..`) outside the working directory are refused unless the call passes `force: true`. This guardrail prevents accidental writes outside the workspace but is not a sandbox (`bash` can write anywhere).
 
 ## `grep`
 
-Searches file contents using a regular expression (or literal text with `fixed_strings: true`). Respects `.gitignore` and skips `.git`, `target`, `node_modules`, and binary files. Supports `glob` filtering, `case_insensitive`, `context` lines (up to 10), and optional `path` (default `.`). Defaults to 50 results; each matching line is cut at 250 characters; only the first 1 MiB of each file is searched; symlinks are not followed.
+Searches file contents using a regular expression (or literal text with `fixed_strings: true`). Respects `.gitignore` and skips `.git`, `target`, `node_modules`, and binary files. Results are grouped by file: `<path>:` followed by `  <line>: <text>` for matches, `  <line>- <text>` for context lines, and `  --` between separated hunks. Supports `glob` filtering, `case_insensitive`, `context` lines (up to 10), `files_only`, and optional `path` (default `.`). `files_only: true` reports `<path> (<count>)` for each matching file. Output is capped at 16 KiB with a visible notice; each matching line is cut at 250 characters; only the first 1 MiB of each file is searched; symlinks are not followed. The default result cap is 50 matching lines.
 
 ## `find`
 
