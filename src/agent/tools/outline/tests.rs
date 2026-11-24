@@ -268,6 +268,72 @@ async fn plain_text_says_use_read() {
 }
 
 #[tokio::test]
+async fn hardens_rust_java_js_python_markdown_and_toml_edge_cases() {
+    // Rust: raw strings, pub(crate) fn, inline mod, multiline where, [u8; 32], extern "C"
+    let rs = r##"const RAW: &str = r#"}"#;
+pub mod inner {
+    pub struct S;
+    impl S {
+        pub(crate) fn method(&self, buf: &[u8; 32]) {}
+    }
+}
+pub extern "C" fn c_entry() {}
+"##;
+    let (err, out) = outlined("edge.rs", rs.as_bytes(), json!({})).await;
+    assert!(!err, "{out}");
+    assert!(out.contains("const RAW: &str = r#\"}\"#;"), "{out}");
+    assert!(out.contains("pub mod inner"), "{out}");
+    assert!(out.contains("pub struct S"), "{out}");
+    assert!(
+        out.contains("pub(crate) fn method(&self, buf: &[u8; 32])"),
+        "{out}"
+    );
+    assert!(out.contains("pub extern \"C\" fn c_entry()"), "{out}");
+
+    // Java: public class + method
+    let java = "public class Foo {\n    public void bar() {\n    }\n}\n";
+    let (err, out) = outlined("Foo.java", java.as_bytes(), json!({})).await;
+    assert!(!err, "{out}");
+    assert!(out.contains("1-4: public class Foo"), "{out}");
+    assert!(out.contains("2-3: public void bar()"), "{out}");
+
+    // C: struct field does not leak
+    let c = "struct Node {\n    struct Node *next;\n};\n";
+    let (err, out) = outlined("node.c", c.as_bytes(), json!({})).await;
+    assert!(!err, "{out}");
+    assert!(!out.contains("next"), "{out}");
+
+    // JS: export const arrow, local .map(x =>) ignored
+    let js = "export const handler = (x) => {\n  const ys = xs.map(y => y + 1);\n};\n";
+    let (err, out) = outlined("app.js", js.as_bytes(), json!({})).await;
+    assert!(!err, "{out}");
+    assert!(out.contains("1-3: export const handler"), "{out}");
+    assert!(!out.contains("ys"), "{out}");
+
+    // Python: multiline def + asyncdef non-match
+    let py = "asyncdef = 1\ndef foo(\n    a: int,\n) -> int:\n    return a\n";
+    let (err, out) = outlined("m.py", py.as_bytes(), json!({})).await;
+    assert!(!err, "{out}");
+    assert!(!out.contains("asyncdef"), "{out}");
+    assert!(out.contains("2-5: def foo("), "{out}");
+
+    // Markdown: ### contains ####, 4-backtick fence
+    let md = "### Parent\n#### Child\n````md\n```\n# NotHeading\n```\n````\n";
+    let (err, out) = outlined("doc.md", md.as_bytes(), json!({})).await;
+    assert!(!err, "{out}");
+    assert!(out.contains("1-7: ### Parent"), "{out}");
+    assert!(out.contains("2-7: #### Child"), "{out}");
+    assert!(!out.contains("NotHeading"), "{out}");
+
+    // TOML: inline comment + multiline array non-match
+    let toml = "[deps] # runtime\narr = [\n  [1, 2]\n]\n";
+    let (err, out) = outlined("Cargo.toml", toml.as_bytes(), json!({})).await;
+    assert!(!err, "{out}");
+    assert!(out.contains("1-4: [deps] # runtime"), "{out}");
+    assert!(!out.contains("[1, 2]"), "{out}");
+}
+
+#[tokio::test]
 async fn a_stopped_run_reports_the_stop() {
     let dir = tmp_dir("cancel.rs");
     fs::write(dir.join("cancel.rs"), "fn a() {}\n").unwrap();

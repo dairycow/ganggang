@@ -121,6 +121,7 @@ fn the_default_registry_matches_the_canonical_name_list() {
     let registry = default_registry(std::env::temp_dir(), 30);
     let names: Vec<&str> = registry.tools().iter().map(|tool| tool.name()).collect();
     assert_eq!(names, NAMES);
+    assert!(registry.is_read_only("outline"));
 }
 
 #[tokio::test]

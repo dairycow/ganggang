@@ -18,6 +18,7 @@ use super::{BoxFuture, Cancel, Tool, ToolResult, display_relative, parse_args};
 
 mod brace;
 mod lang;
+mod rust;
 #[cfg(test)]
 mod tests;
 
@@ -32,11 +33,13 @@ const MAX_OUTPUT_BYTES: usize = 12 * 1024;
 /// Signatures longer than this are cut with an ellipsis.
 const MAX_SIG_CHARS: usize = 140;
 
+/// Structural outline tool for source and config files.
 pub struct OutlineTool {
     cwd: PathBuf,
 }
 
 impl OutlineTool {
+    /// Create an `outline` tool rooted at `cwd`.
     pub fn new(cwd: PathBuf) -> Self {
         Self { cwd }
     }
