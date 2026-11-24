@@ -8,9 +8,21 @@
 #   3. print mode completes a bash-tool edit round-trip (write → verify → restore)
 set -euo pipefail
 
+if [[ -n "${GG_BIN:-}" ]]; then
+  if [[ "$GG_BIN" == */* ]]; then
+    GG=$(readlink -f "$GG_BIN")
+  else
+    GG=$(command -v "$GG_BIN" || true)
+  fi
+fi
+
 cd "$(dirname "$0")/.."
-GG="${GG_BIN:-$PWD/target/debug/gg}"
-EXPECTED_VER=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+GG="${GG:-$PWD/target/debug/gg}"
+EXPECTED_VER=$(awk '/^version = "/ { gsub(/"/, "", $3); print $3; exit }' Cargo.toml)
+if [[ -z "$EXPECTED_VER" ]]; then
+  echo "FAIL: could not read version from Cargo.toml" >&2
+  exit 1
+fi
 
 if [[ ! -x "$GG" ]]; then
   echo "FAIL: $GG not built (cargo build)" >&2

@@ -343,7 +343,7 @@ for name, cwd, prompt, check_fn in tasks:
                 empty_trunc += 1
         elif et == "warned":
             message = ev.get("message", "")
-            if "had no content" in message or "before producing visible output" in message:
+            if "had no content" in message:
                 empty_trunc += 1
         elif et == "tool_call_started":
             calls += 1
@@ -358,7 +358,7 @@ for name, cwd, prompt, check_fn in tasks:
                 workarounds = {"sed", "cat", "head", "tail", "grep", "rg", "find", "ls", "python", "python3"}
                 is_workaround = False
                 uses_python = False
-                for seg in re.split(r"\s*(?:&&|\|\||[;|\n])\s*", cstr):
+                for seg in re.split(r"\s*(?:&&|\|\||[;\n])\s*", cstr):
                     tokens = seg.strip().split()
                     while tokens and "=" in tokens[0] and not tokens[0].startswith("="):
                         tokens.pop(0)
@@ -397,7 +397,7 @@ for name, cwd, prompt, check_fn in tasks:
                 role = m.get("role")
                 u = m.get("usage") or {}
                 if role == "tool_result":
-                    tool_bytes += len(m.get("content") or "")
+                    tool_bytes += len((m.get("content") or "").encode("utf-8"))
                 if role != "assistant":
                     continue
                 prompt_tokens = int(u.get("prompt_tokens") or 0)

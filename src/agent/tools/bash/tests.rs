@@ -60,7 +60,7 @@ async fn timeout_kills_the_whole_process_group_not_just_the_shell() {
     // (unique, valid) sleep duration so pgrep can find group members.
     let pid = std::process::id();
     let marker = format!("617.{pid}");
-    let pattern = format!(r"617\.{pid}");
+    let pattern = format!(r"617\.{pid}([^0-9]|$)");
     let tool = BashTool::new(std::env::temp_dir(), 1);
     let r = tool
         .execute(
@@ -100,7 +100,7 @@ async fn timeout_kills_the_whole_process_group_not_just_the_shell() {
 async fn cancellation_kills_the_whole_process_group_and_reports_it() {
     let pid = std::process::id();
     let marker = format!("731.{pid}");
-    let pattern = format!(r"731\.{pid}");
+    let pattern = format!(r"731\.{pid}([^0-9]|$)");
     let tool = BashTool::new(std::env::temp_dir(), 30);
     let flag = Arc::new(AtomicBool::new(false));
     let setter = {
@@ -220,13 +220,13 @@ async fn long_multibyte_output_stays_valid_utf8() {
 fn interior_non_utf8_bytes_do_not_truncate_head_or_tail() {
     let head = b"HEAD_START\xffHEAD_AFTER";
     assert!(
-        prefix_string(head).contains("HEAD_AFTER"),
+        prefix_string(head, OUTPUT_CAP / 4).contains("HEAD_AFTER"),
         "valid output after an interior bad byte must survive"
     );
 
     let tail = b"TAIL_BEFORE\xffTAIL_END";
     assert!(
-        suffix_string(tail).contains("TAIL_END"),
+        suffix_string(tail, OUTPUT_CAP - OUTPUT_CAP / 4).contains("TAIL_END"),
         "valid output after an interior bad byte must survive"
     );
 }
@@ -298,7 +298,7 @@ async fn cancellation_reports_output_that_arrived_before_the_kill() {
 #[test]
 fn workaround_hint_names_the_native_tool() {
     let cwd = Path::new("/work/dir");
-    const READ: &str = "use native read (supports offset/limit and negative offset), outline, or edit instead of bash";
+    const READ: &str = "use native read (supports offset/limit and negative offset), outline or edit instead of bash";
     let hinted = [
         ("cat src/main.rs", READ),
         ("sed -n '1,20p' src/main.rs", READ),
@@ -308,7 +308,7 @@ fn workaround_hint_names_the_native_tool() {
         ("ls -la src/", "use native ls or find instead of bash"),
         (
             "/usr/bin/python3 -c \"open('a.txt').write('x')\"",
-            "use native read, edit, or write instead of inline python in bash",
+            "use native read, edit or write instead of inline python in bash",
         ),
         (
             "cd /work/dir && echo ok",
@@ -364,7 +364,7 @@ async fn a_workaround_command_gets_a_hint_line() {
         ("ls", "use native ls or find"),
         (
             "python3 -c \"open('/dev/null', 'w').write('x')\"",
-            "use native read, edit, or write",
+            "use native read, edit or write",
         ),
         (
             &format!("cd {} && echo ok", cwd.display()),

@@ -102,8 +102,9 @@ impl Capture {
 }
 
 /// The longest valid UTF-8 prefix of `bytes`, trimming only an
-/// incomplete character split at the end.
-fn prefix_string(bytes: &[u8]) -> String {
+/// incomplete character split at the end and bounding lossy expansion to
+/// `max_bytes`.
+fn prefix_string(bytes: &[u8], max_bytes: usize) -> String {
     let mut bytes = bytes;
     if !bytes.is_empty() {
         let mut start = bytes.len() - 1;
@@ -118,17 +119,33 @@ fn prefix_string(bytes: &[u8]) -> String {
             bytes = &bytes[..start];
         }
     }
-    String::from_utf8_lossy(bytes).into_owned()
+    let s = String::from_utf8_lossy(bytes);
+    if s.len() <= max_bytes {
+        return s.into_owned();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
 }
 
 /// The longest valid UTF-8 suffix of `bytes`, dropping a leading partial
-/// character left by the split.
-fn suffix_string(bytes: &[u8]) -> String {
+/// character left by the split and bounding lossy expansion to `max_bytes`.
+fn suffix_string(bytes: &[u8], max_bytes: usize) -> String {
     let mut skip = 0;
     while skip < bytes.len().min(3) && (bytes[skip] & 0xC0) == 0x80 {
         skip += 1;
     }
-    String::from_utf8_lossy(&bytes[skip..]).into_owned()
+    let s = String::from_utf8_lossy(&bytes[skip..]);
+    if s.len() <= max_bytes {
+        return s.into_owned();
+    }
+    let mut start = s.len() - max_bytes;
+    while start < s.len() && !s.is_char_boundary(start) {
+        start += 1;
+    }
+    s[start..].to_string()
 }
 
 /// Render the captured bytes: everything when it fits, otherwise the head,
@@ -144,8 +161,8 @@ fn render_capture(capture: &Arc<Mutex<Capture>>, cap: usize) -> String {
         return String::from_utf8_lossy(&all).into_owned();
     }
     let omitted = capture.total.saturating_sub(cap);
-    let head = prefix_string(&capture.head);
-    let tail = suffix_string(capture.tail.make_contiguous());
+    let head = prefix_string(&capture.head, cap / 4);
+    let tail = suffix_string(capture.tail.make_contiguous(), cap - cap / 4);
     format!("{head}\n[... {omitted} bytes omitted ...]\n{tail}")
 }
 
@@ -345,7 +362,10 @@ impl Tool for BashTool {
                     // A shell command that duplicates a native tool gets a
                     // one-line nudge; the command itself ran regardless.
                     if let Some(h) = hint::workaround_hint(&args.command, &self.cwd) {
-                        result.push_str(&format!("\n[hint: {h}]"));
+                        if !result.ends_with('\n') {
+                            result.push('\n');
+                        }
+                        result.push_str(&format!("[hint: {h}]"));
                     }
                     if status.success() {
                         ToolResult::ok(result)

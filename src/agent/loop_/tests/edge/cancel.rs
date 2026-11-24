@@ -35,7 +35,7 @@ async fn abort_during_a_running_command_kills_it_and_ends_the_run() {
     // find the killed group's members.
     let pid = std::process::id();
     let marker = format!("712.{pid}");
-    let pattern = format!(r"712\.{pid}");
+    let pattern = format!(r"712\.{pid}([^0-9]|$)");
     let (server, registry) = one_bash_call(&format!("echo starting; sleep {marker}"));
 
     let abort = Arc::new(AtomicBool::new(false));
