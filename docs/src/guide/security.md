@@ -1,12 +1,12 @@
 # Security model
 
-> **No permission gating.** Like pi, `gg` does not ask before tool calls. Safe use means running it where the `bash` tool is allowed to be: a container or VM for untrusted work.
+> **No permission gating.** Like pi, `gg` does not ask before tool calls. Run `gg` in a container or VM when working with untrusted code.
 
 ## The trust boundary
 
 - The `bash` tool runs with **your user permissions**, in the session's working directory. There is no sandbox and no approval prompt, by design.
 - [Hooks](hooks.md) run with the same permissions and are equally unsandboxed.
-- Anything the model reads (files, `@file` attachments, command output, skills) can influence what it does next. Do not point `gg` at a repository or prompt you do not trust on a machine you care about.
+- Anything the model reads (files, `@file` attachments, command output, skills) can influence what it does next. Do not point `gg` at a repository or prompt you do not trust on a sensitive host.
 - Your messages and tool output are sent to whichever provider you configured. The default, a local Strata server, keeps them on your machine; `gg` itself has no telemetry.
 
 ## Guardrails (not sandboxes)
@@ -17,11 +17,11 @@ These reduce accidents:
 - **Hooks are user-level only.** A project `.gg/hooks.toml` is ignored with a warning, so a cloned repository cannot add executable behaviour.
 - **`HOME` must be absolute.** A relative or empty `HOME` is ignored for `~/.gg` and `~/.agents`, so user-level config, hooks and skills cannot silently become paths inside the current directory.
 - **Prompt history is plain text.** `~/.gg/history.jsonl` keeps what you submit in the TUI (the newest 500 lines, mode `0600`), secrets pasted into a prompt included. `--no-session` does not turn it off; running without `HOME` keeps the history in memory only.
-- **Bounded everything.** Tool output, attachments, hook output and timeouts all have visible caps; runaway commands are killed with their whole process group.
+- **Resource limits.** Tool output, attachments, hook output and timeouts all have visible caps; runaway commands are killed with their whole process group.
 - **A `pre_tool` hook can deny** calls you want blocked: useful workflow policy, but not a security boundary.
 
 ## Practical advice
 
 - Use a container or VM for untrusted repositories.
-- Offer fewer tools: `gg --tools read,grep,find,ls` gives a read-only session. (`bash` is the one that can do anything.)
+- Offer fewer tools: `gg --tools read,grep,find,ls` gives a read-only session. (omitting `bash` prevents arbitrary command execution).
 - Keep API keys in environment variables rather than committed config files.

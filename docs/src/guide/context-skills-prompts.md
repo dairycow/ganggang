@@ -2,7 +2,7 @@
 
 ## The system prompt
 
-`gg` builds the system prompt fresh for every request from named sections, in this order: preamble, context files (`AGENTS.md`), tools, skills, then working directory (cwd, OS, date). Empty sections are omitted. Inspect exactly what the next request carries with `/context` in the TUI, or set `GG_DEBUG_PROMPT=1` to dump it to stderr.
+`gg` builds the system prompt fresh for every request from named sections, in this order: preamble, context files (`AGENTS.md`), skills, then working directory (cwd, OS, date). Empty sections are omitted. Tool names, descriptions and JSON schemas ride in the API `tools` array on every request, so the system prompt does not repeat them. Inspect exactly what the next request carries with `/context` in the TUI, or set `GG_DEBUG_PROMPT=1` to dump it to stderr.
 
 ## AGENTS.md
 
@@ -11,7 +11,7 @@
 1. `~/.gg/AGENTS.md`
 2. `AGENTS.md` from the repository root (the nearest ancestor containing `.git`) down to the current directory
 
-Deeper files read as refinements of shallower ones. With no repository, discovery runs from the filesystem root. Unreadable files produce a warning, not a failure.
+Files closer to the current directory act as more specific instructions. With no repository, discovery runs from the filesystem root. Unreadable files produce a warning, not a failure.
 
 ## Skills
 
@@ -45,6 +45,6 @@ description: Review a diff carefully
 Review this diff line by line. Flag bugs first, style last.
 ```
 
-`/review src/main.rs` drops the body (plus your arguments) into the composer as an editable **draft**; nothing is sent until you press `Enter`. Frontmatter is optional: without a `name`, the file name stem is used. `/prompts` lists templates.
+`/review src/main.rs` inserts the template body and your arguments into the composer as an editable **draft**; nothing is sent until you press `Enter`. Frontmatter is optional: without a `name`, the file name stem is used. `/prompts` lists templates.
 
 A template whose name contains whitespace, matches a built-in command, or starts with `skill:` is skipped with a warning, as are duplicates (first, by file name, wins).

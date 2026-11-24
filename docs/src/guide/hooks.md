@@ -1,8 +1,8 @@
 # Hooks
 
-Hooks are one-shot shell commands that run at three points in the agent loop. A hook is not a plugin: it is a process that receives one JSON object on stdin and, for `pre_tool`, may print a decision. There is no plugin runtime, no argument rewriting, and no approval prompt.
+Hooks are one-shot shell commands that run at three points in the agent loop. Hooks are external processes rather than in-process plugins. Each hook receives one JSON object on stdin and, for `pre_tool`, may return a decision on stdout. There is no plugin runtime, no argument rewriting, and no approval prompt.
 
-| Event | When | Can it block? |
+| Event | When | Can deny |
 |---|---|---|
 | `pre_tool` | Before a tool call | Yes: it may deny |
 | `post_tool` | After the tool result is recorded | No, observe only |
@@ -10,7 +10,7 @@ Hooks are one-shot shell commands that run at three points in the agent loop. A 
 
 ## Configuring
 
-Hooks live in `~/.gg/hooks.toml` and **only** there:
+Hooks are configured only in `~/.gg/hooks.toml`:
 
 ```toml
 # ~/.gg/hooks.toml
@@ -57,7 +57,7 @@ A `pre_tool` hook allows by printing nothing (or `{"decision":"allow"}`) and exi
 {"decision":"deny","reason":"blocked by the user guard hook"}
 ```
 
-A denial is a normal tool error: the model reads the reason (capped at 2 KiB; a missing reason names the hook command) and reacts to it. The tool does not run and `post_tool` hooks are skipped. Calls whose arguments were not valid JSON never reach hooks. Neither pattern runs `post_tool`: a call that never executed has nothing to observe, which includes a call the user stopped while it ran (`Esc`, `Ctrl+C`).
+A denial is a normal tool error: the model reads the reason (capped at 2 KiB; a missing reason names the hook command) and reacts to it. The tool does not run and `post_tool` hooks are skipped. Calls whose arguments were not valid JSON never reach hooks. Calls that are denied, fail argument parsing, or are aborted by the user (`Esc`, `Ctrl+C`) do not trigger `post_tool` hooks.
 
 ## Failure handling
 
@@ -81,4 +81,4 @@ fi
 
 Format after edits (`post_tool` on `edit` and `write`), or notify when a long run finishes (`run_end`), as in the configuration above.
 
-> Hooks run with your permissions and are unsandboxed. A `pre_tool` deny is workflow policy, not a security boundary. See the [Security Model](security.md).
+> Hooks run with your permissions and are unsandboxed. A `pre_tool` deny is workflow policy, not a security boundary. See the [Security model](security.md).
