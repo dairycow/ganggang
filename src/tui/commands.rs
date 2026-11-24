@@ -30,8 +30,6 @@ pub enum Command {
     Session,
     /// Dump the assembled system prompt (§12's debugging affordance).
     Context,
-    /// List prompt templates (M7.4), mirroring `/skills`.
-    Prompts,
     /// List loaded user-level hooks (§22), or say why there are none.
     Hooks,
     Skill {
@@ -42,12 +40,8 @@ pub enum Command {
     /// switches by list number, provider, model, or `provider/model`.
     Model(Option<String>),
     Quit,
-    /// Not a built-in. The name may still match a prompt template
-    /// (M7.4), so the args ride along for the insertion.
-    Unknown {
-        name: String,
-        args: String,
-    },
+    /// Not a built-in.
+    Unknown(String),
 }
 
 /// Classify a submitted editor text. Trimmed-empty submissions are the
@@ -84,7 +78,6 @@ pub fn classify_submission(text: &str) -> Submission {
             "skills" => Command::Skills,
             "session" => Command::Session,
             "context" => Command::Context,
-            "prompts" => Command::Prompts,
             "model" => Command::Model(Some(arg)).filter_arg(),
             "hooks" => Command::Hooks,
             "quit" | "exit" => Command::Quit,
@@ -92,10 +85,7 @@ pub fn classify_submission(text: &str) -> Submission {
                 name: head["skill:".len()..].trim().to_string(),
                 args: arg,
             },
-            _ => Command::Unknown {
-                name: head.to_string(),
-                args: arg,
-            },
+            _ => Command::Unknown(head.to_string()),
         });
     }
     Submission::Plain(text.to_string())
@@ -116,7 +106,7 @@ impl Command {
 
 /// The valid commands, for unknown-command feedback.
 pub fn known_commands() -> &'static str {
-    "/new /resume [n|prefix] /compact [instructions] /skills /session /context /prompts /hooks /skill:<name> [args] /model [provider/model] /quit"
+    "/new /resume [n|prefix] /compact [instructions] /skills /session /context /hooks /skill:<name> [args] /model [provider/model] /quit"
 }
 
 /// Everything a command needs to act: view state, the agent channels, the
@@ -128,7 +118,6 @@ pub(super) struct CmdCtx<'a> {
     pub input_tx: &'a mut tokio::sync::mpsc::Sender<super::AgentInput>,
     pub ui_tx: &'a tokio::sync::mpsc::Sender<super::agent_task::UiEvent>,
     pub skills: &'a [crate::agent::skills::Skill],
-    pub prompts: &'a [crate::prompts::PromptTemplate],
     pub hooks: &'a crate::agent::hooks::Hooks,
     pub cwd: &'a std::path::Path,
     pub abort: &'a std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -144,7 +133,6 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
         input_tx,
         ui_tx,
         skills,
-        prompts,
         hooks,
         cwd,
         abort,
@@ -167,23 +155,6 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
                         ""
                     },
                     skill.path.display(),
-                ));
-            }
-        }
-        Command::Prompts => {
-            if prompts.is_empty() {
-                state.push_info("no prompt templates (put ~/.gg/prompts/*.md files here)");
-            }
-            for template in prompts {
-                state.push_info(&format!(
-                    "  /{} — {} ({})",
-                    template.name,
-                    if template.description.is_empty() {
-                        "no description"
-                    } else {
-                        &template.description
-                    },
-                    template.path.display(),
                 ));
             }
         }
@@ -245,8 +216,12 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
                 return Ok(false);
             };
             // pi's forcing semantics: the instructions (plus any args)
-            // become the next user message and run immediately.
-            let message = if args.is_empty() {
+            // become the next user message and run immediately. The
+            // transcript shows what was typed; `@file` mentions in the
+            // args ride along in the payload only — scanned over the
+            // args, never the skill's own text, where an `@path` is the
+            // skill's writing, not the user's mention.
+            let display = if args.is_empty() {
                 format!(
                     "Follow this skill's instructions.\n\n{}",
                     skill.instructions
@@ -257,9 +232,13 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
                     skill.instructions
                 )
             };
-            state.push_user(&message);
+            let payload = match super::mentions::attachment_block(&args, cwd) {
+                Some(block) => [display.as_str(), block.as_str()].concat(),
+                None => display.clone(),
+            };
+            state.push_user(&display);
             state.begin_run();
-            input_tx.send(super::AgentInput::Prompt(message)).await?;
+            input_tx.send(super::AgentInput::Prompt(payload)).await?;
         }
         Command::New => {
             let boot = factory(super::SessionPick::New, active_endpoint, abort.clone())?;
@@ -392,24 +371,11 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
                 endpoint.context_window / 1000
             ));
         }
-        Command::Unknown { name, args } => {
-            // Not built-in — but it may be a prompt template (M7.4):
-            // the body (plus args) lands in the editor for review, and
-            // Enter submits it. Insertion, not submission: a template is
-            // a draft the user edits, not a command that acts.
-            if let Some(template) = prompts.iter().find(|t| t.name == name) {
-                let draft = if args.is_empty() {
-                    format!("{}\n", template.body)
-                } else {
-                    format!("{}\n{}\n", template.body, args)
-                };
-                state.editor.insert_paste(&draft);
-            } else {
-                state.push_warning(&format!(
-                    "unknown command /{name} — valid: {} (or a prompt template, /prompts lists them)",
-                    known_commands()
-                ));
-            }
+        Command::Unknown(name) => {
+            state.push_warning(&format!(
+                "unknown command /{name} — valid: {}",
+                known_commands()
+            ));
         }
     }
     Ok(false)
@@ -539,20 +505,14 @@ mod tests {
     fn unknown_commands_say_so_with_the_valid_set() {
         assert_eq!(
             classify_submission("/definitely-not-a-command"),
-            Submission::Command(Command::Unknown {
-                name: "definitely-not-a-command".into(),
-                args: String::new(),
-            })
+            Submission::Command(Command::Unknown("definitely-not-a-command".into()))
         );
         assert_eq!(
             classify_submission("/frobnicate  the args"),
-            Submission::Command(Command::Unknown {
-                name: "frobnicate".into(),
-                args: "the args".into(),
-            })
+            Submission::Command(Command::Unknown("frobnicate".into()))
         );
         assert!(known_commands().contains("/new"));
-        assert!(known_commands().contains("/prompts"));
+        assert!(!known_commands().contains("/prompts"));
     }
 
     #[test]
@@ -575,21 +535,29 @@ mod tests {
         assert_eq!(classify_submission("!"), Submission::Plain("!".into()));
     }
 
-    /// `/name` for a loaded template lands in the EDITOR as a draft
-    /// (args appended), never submitted; an unknown name keeps the
-    /// warning. The factory is never called on this path, so it can be
-    /// a stub.
-    #[tokio::test]
-    async fn unknown_name_matching_a_template_inserts_a_draft() {
+    /// Drive one `/skill:` command end to end: a temp cwd holding
+    /// `notes.txt`, one skill with the given instructions, the command
+    /// with the given args, and the resulting state plus what reached
+    /// the agent (if anything). The factory is never called on this
+    /// path, so it can be a stub.
+    async fn run_skill_command(
+        tag: &str,
+        args: &str,
+        instructions: &str,
+    ) -> (super::super::view::State, Option<super::super::AgentInput>) {
         use std::sync::Arc;
         use std::sync::atomic::AtomicBool;
 
+        let dir = std::env::temp_dir().join(format!("gg-skill-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("notes.txt"), "attach me\n").unwrap();
+
         let mut state = super::super::view::State::new(
-            std::path::Path::new("/tmp/x"),
+            &dir,
             "m",
             131_072,
-            std::sync::Arc::new(vec![]),
-            std::sync::Arc::new(vec![]),
+            Arc::new(vec![]),
             History::default(),
         );
         let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
@@ -598,80 +566,79 @@ mod tests {
             Arc::new(|_, _, _| unreachable!("no /new on this path"));
         let config = crate::config::Config::default();
         let mut active_endpoint = config.active_endpoint();
-        let prompts = vec![crate::prompts::PromptTemplate {
-            name: "review".into(),
-            description: "Review a diff".into(),
-            path: "/home/x/.gg/prompts/review.md".into(),
-            body: "Review this diff line by line.".into(),
+        let skills = vec![crate::agent::skills::Skill {
+            name: "pdf-tools".into(),
+            description: "d".into(),
+            disable_model_invocation: false,
+            path: dir.join("SKILL.md"),
+            instructions: instructions.into(),
         }];
-        let skills: Vec<crate::agent::skills::Skill> = Vec::new();
-        let hooks = crate::agent::hooks::Hooks::default();
         let abort = Arc::new(AtomicBool::new(false));
-        let cwd = std::path::PathBuf::from("/tmp/x");
 
-        let ctx = CmdCtx {
-            state: &mut state,
-            factory: &factory,
-            input_tx: &mut input_tx,
-            ui_tx: &ui_tx,
-            skills: &skills,
-            prompts: &prompts,
-            hooks: &hooks,
-            cwd: &cwd,
-            abort: &abort,
-            config: &config,
-            active_endpoint: &mut active_endpoint,
-        };
         handle_command(
-            Command::Unknown {
-                name: "review".into(),
-                args: "src/main.rs".into(),
+            Command::Skill {
+                name: "pdf-tools".into(),
+                args: args.into(),
             },
-            ctx,
+            CmdCtx {
+                state: &mut state,
+                factory: &factory,
+                input_tx: &mut input_tx,
+                ui_tx: &ui_tx,
+                skills: &skills,
+                hooks: &crate::agent::hooks::Hooks::default(),
+                cwd: &dir,
+                abort: &abort,
+                config: &config,
+                active_endpoint: &mut active_endpoint,
+            },
         )
         .await
         .unwrap();
-        let drafted: Vec<&str> = state.editor.lines();
-        assert_eq!(
-            drafted,
-            vec!["Review this diff line by line.", "src/main.rs", ""]
-        );
-        // Nothing was sent to the agent — the draft awaits Enter.
-        assert!(input_rx.try_recv().is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+        (state, input_rx.try_recv().ok())
+    }
 
-        // A genuinely unknown name warns and leaves the editor alone.
-        let mut state2 = super::super::view::State::new(
-            std::path::Path::new("/tmp/x"),
-            "m",
-            131_072,
-            std::sync::Arc::new(vec![]),
-            std::sync::Arc::new(vec![]),
-            History::default(),
-        );
-        let (mut input_tx2, _rx2) = tokio::sync::mpsc::channel(4);
-        let ctx = CmdCtx {
-            state: &mut state2,
-            factory: &factory,
-            input_tx: &mut input_tx2,
-            ui_tx: &ui_tx,
-            skills: &skills,
-            prompts: &prompts,
-            hooks: &hooks,
-            cwd: &cwd,
-            abort: &abort,
-            config: &config,
-            active_endpoint: &mut active_endpoint,
-        };
-        handle_command(
-            Command::Unknown {
-                name: "nope".into(),
-                args: String::new(),
-            },
-            ctx,
-        )
-        .await
-        .unwrap();
-        assert!(state2.editor.lines() == vec![""]);
+    /// `/skill:<name>` with an `@file` in the args: the file's content
+    /// rides into the Prompt payload, while the transcript line stays
+    /// exactly as typed — no attachment blocks on screen.
+    #[tokio::test]
+    async fn skill_args_mentions_attach_to_the_prompt_not_the_transcript() {
+        let (state, sent) =
+            run_skill_command("args", "summarise @notes.txt", "Read the pdf.").await;
+        match sent {
+            Some(super::super::AgentInput::Prompt(payload)) => {
+                assert!(
+                    payload.contains("Follow this skill's instructions for: summarise @notes.txt")
+                );
+                assert!(payload.contains("--- @notes.txt (1 lines) ---\nattach me\n"));
+                assert!(payload.contains("--- end @notes.txt ---"));
+                let body_at = payload.find("Read the pdf.").unwrap();
+                let attach_at = payload.find("--- attachments ---").unwrap();
+                assert!(body_at < attach_at, "attachments follow skill instructions");
+            }
+            other => panic!("expected a Prompt, got {other:?}"),
+        }
+        let lines = state.line_texts_for_test();
+        assert!(lines.iter().any(|l| l.contains("summarise @notes.txt")));
+        assert!(!lines.iter().any(|l| l.contains("attach me")));
+        assert!(!lines.iter().any(|l| l.contains("attachments")));
+    }
+
+    /// An `@path` inside a skill's own instructions is the skill's text,
+    /// not a user mention: nothing is attached even though `notes.txt`
+    /// sits in the cwd.
+    #[tokio::test]
+    async fn skill_instructions_mentions_are_not_expanded() {
+        let (_state, sent) = run_skill_command("body", "", "See @notes.txt for detail.").await;
+        match sent {
+            Some(super::super::AgentInput::Prompt(payload)) => {
+                assert!(payload.contains("See @notes.txt for detail."));
+                assert!(!payload.contains("attachments"));
+                assert!(!payload.contains("attach me"));
+            }
+            other => panic!("expected a Prompt, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -684,7 +651,6 @@ mod tests {
             "strata/qwen3.8-flash-next-iq3_s",
             131_072,
             Arc::new(vec![]),
-            Arc::new(vec![]),
             History::default(),
         );
         let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
@@ -695,7 +661,6 @@ mod tests {
         config.providers.get_mut("deepseek").unwrap().api_key = Some("test-key".into());
         let mut active_endpoint = config.active_endpoint();
         let skills: Vec<crate::agent::skills::Skill> = Vec::new();
-        let prompts: Vec<crate::prompts::PromptTemplate> = Vec::new();
         let abort = Arc::new(AtomicBool::new(false));
         let cwd = std::path::PathBuf::from("/tmp/x");
 
@@ -707,7 +672,6 @@ mod tests {
                 input_tx: &mut input_tx,
                 ui_tx: &ui_tx,
                 skills: &skills,
-                prompts: &prompts,
                 hooks: &crate::agent::hooks::Hooks::default(),
                 cwd: &cwd,
                 abort: &abort,
@@ -727,7 +691,6 @@ mod tests {
                 input_tx: &mut input_tx,
                 ui_tx: &ui_tx,
                 skills: &skills,
-                prompts: &prompts,
                 hooks: &crate::agent::hooks::Hooks::default(),
                 cwd: &cwd,
                 abort: &abort,
@@ -757,7 +720,6 @@ mod tests {
             "m",
             131_072,
             Arc::new(vec![]),
-            Arc::new(vec![]),
             History::default(),
         );
         let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
@@ -783,7 +745,6 @@ mod tests {
                 input_tx: &mut input_tx,
                 ui_tx: &ui_tx,
                 skills: &[],
-                prompts: &[],
                 hooks: &hooks,
                 cwd: &cwd,
                 abort: &abort,
@@ -811,7 +772,6 @@ mod tests {
                 input_tx: &mut input_tx,
                 ui_tx: &ui_tx,
                 skills: &[],
-                prompts: &[],
                 hooks: &disabled,
                 cwd: &cwd,
                 abort: &abort,
@@ -867,7 +827,6 @@ mod tests {
             &active_endpoint.label(),
             active_endpoint.context_window,
             Arc::new(vec![]),
-            Arc::new(vec![]),
             History::default(),
         );
         let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
@@ -885,7 +844,6 @@ mod tests {
                 input_tx: &mut input_tx,
                 ui_tx: &ui_tx,
                 skills: &[],
-                prompts: &[],
                 hooks: &crate::agent::hooks::Hooks::default(),
                 cwd: &cwd,
                 abort: &abort,
@@ -912,7 +870,6 @@ mod tests {
                 input_tx: &mut input_tx,
                 ui_tx: &ui_tx,
                 skills: &[],
-                prompts: &[],
                 hooks: &crate::agent::hooks::Hooks::default(),
                 cwd: &cwd,
                 abort: &abort,

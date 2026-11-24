@@ -1,7 +1,7 @@
 //! The user's home directory, absolute or nothing.
 //!
 //! `HOME` locates user-level policy and state (`~/.gg/hooks.toml`, config,
-//! sessions, prompt templates, skills, `AGENTS.md`). A relative or empty
+//! sessions, skills, `AGENTS.md`). A relative or empty
 //! value must not turn those into cwd-relative paths — a cloned repository
 //! could then supply executable hooks or a config that disables a guard.
 //! Only an absolute path counts as a home.

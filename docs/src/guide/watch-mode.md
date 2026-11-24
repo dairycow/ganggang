@@ -12,7 +12,7 @@ cargo build        # or --release; watch follows the binary you launched
 
 - Watches `*.rs` files under `src/` plus `Cargo.toml` and `Cargo.lock`. Editor swap files and symlinks are ignored.
 - Runs `cargo build` once an edit has settled (after a short quiet period). The profile follows the binary you launched (`target/debug` or `target/release`), and the footer shows `watch debug · watching`.
-- On success, re-executes the new binary with the same session. Every restart re-reads config, prompt templates, skills and `AGENTS.md`.
+- On success, re-executes the new binary with the same session. Every restart re-reads config, skills and `AGENTS.md`.
 - A build that finishes while a run is in flight **waits for idle**. With unsent text in the composer the restart holds at `rebuild ready · Ctrl+R`.
 - `Ctrl+R` forces a rebuild and restart when idle. Any unsent draft in the composer is saved beside the session and restored after restart.
 - A failed build stays in the transcript (the tail of cargo's output) and keeps the old binary running until the next edit or `Ctrl+R`.

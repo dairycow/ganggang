@@ -12,7 +12,6 @@ mod home;
 mod json_mode;
 mod llm;
 mod printers;
-mod prompts;
 mod tool_args;
 mod tui;
 
@@ -304,17 +303,10 @@ async fn main() -> anyhow::Result<()> {
             _ => None,
         };
         // Shared discovery for /skills and /skill: — the Agent discovers
-        // its own copy at construction; same cwd, same result. Prompt
-        // templates (M7.4) load once here too; load warnings are startup
-        // stderr, like skills'.
+        // its own copy at construction; same cwd, same result.
         let (skills, _) = agent::skills::discover(&cwd);
-        let (prompts, prompt_warnings) = prompts::discover();
-        for warning in &prompt_warnings {
-            eprintln!("warning: {warning}");
-        }
         let discovered = tui::Discovered {
             skills: std::sync::Arc::new(skills),
-            prompts: std::sync::Arc::new(prompts),
             hooks: std::sync::Arc::new(hooks),
         };
         let exit = tui::run(boot, factory, discovered, cwd, cfg, abort, watch_cfg, draft).await?;

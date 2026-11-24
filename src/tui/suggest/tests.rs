@@ -15,17 +15,8 @@ fn skill(name: &str, description: &str) -> Skill {
     }
 }
 
-fn template(name: &str, description: &str) -> PromptTemplate {
-    PromptTemplate {
-        name: name.into(),
-        description: description.into(),
-        path: PathBuf::from(format!("/tmp/prompts/{name}.md")),
-        body: String::new(),
-    }
-}
-
-fn labels(text: &str, skills: &[Skill], prompts: &[PromptTemplate]) -> Vec<String> {
-    suggestions(text, skills, prompts)
+fn labels(text: &str, skills: &[Skill]) -> Vec<String> {
+    suggestions(text, skills)
         .into_iter()
         .map(|s| s.label)
         .collect()
@@ -33,7 +24,7 @@ fn labels(text: &str, skills: &[Skill], prompts: &[PromptTemplate]) -> Vec<Strin
 
 #[test]
 fn a_bare_slash_lists_the_whole_builtin_set() {
-    let got = labels("/", &[], &[]);
+    let got = labels("/", &[]);
     assert_eq!(
         got,
         vec![
@@ -43,7 +34,6 @@ fn a_bare_slash_lists_the_whole_builtin_set() {
             "/skills",
             "/session",
             "/context",
-            "/prompts",
             "/hooks",
             "/skill:<name> [args]",
             "/model [provider/model]",
@@ -55,28 +45,25 @@ fn a_bare_slash_lists_the_whole_builtin_set() {
 
 #[test]
 fn the_typed_prefix_filters_and_keeps_order() {
-    assert_eq!(labels("/re", &[], &[]), vec!["/resume [n|prefix]"]);
+    assert_eq!(labels("/re", &[]), vec!["/resume [n|prefix]"]);
     assert_eq!(
-        labels("/c", &[], &[]),
+        labels("/c", &[]),
         vec!["/compact [instructions]", "/context"]
     );
     // `/skill` is a prefix of both the list command and the forcing
     // form — both are real continuations, both show.
-    assert_eq!(
-        labels("/sk", &[], &[]),
-        vec!["/skills", "/skill:<name> [args]"]
-    );
-    assert_eq!(labels("/skills", &[], &[]), vec!["/skills"]);
-    assert_eq!(labels("/zzz", &[], &[]), Vec::<String>::new());
+    assert_eq!(labels("/sk", &[]), vec!["/skills", "/skill:<name> [args]"]);
+    assert_eq!(labels("/skills", &[]), vec!["/skills"]);
+    assert_eq!(labels("/zzz", &[]), Vec::<String>::new());
 }
 
 #[test]
 fn completions_carry_a_trailing_space_for_arguments() {
-    let got = suggestions("/res", &[], &[]);
+    let got = suggestions("/res", &[]);
     assert_eq!(got[0].completion, "/resume ");
     // The generic skill row completes to the colon, not a space —
     // the name is still to come.
-    let got = suggestions("/ski", &[], &[]);
+    let got = suggestions("/ski", &[]);
     assert_eq!(got[1].completion, "/skill:");
 }
 
@@ -88,15 +75,15 @@ fn the_typed_colon_expands_one_row_per_matching_skill() {
         skill("web", "fetch pages"),
     ];
     assert_eq!(
-        labels("/skill:", &skills, &[]),
+        labels("/skill:", &skills),
         vec!["/skill:pdf-tools", "/skill:pdftk", "/skill:web"]
     );
     assert_eq!(
-        labels("/skill:pdf", &skills, &[]),
+        labels("/skill:pdf", &skills),
         vec!["/skill:pdf-tools", "/skill:pdftk"]
     );
-    assert_eq!(labels("/skill:zzz", &skills, &[]), Vec::<String>::new());
-    let got = suggestions("/skill:web", &skills, &[]);
+    assert_eq!(labels("/skill:zzz", &skills), Vec::<String>::new());
+    let got = suggestions("/skill:web", &skills);
     assert_eq!(got[0].description, "fetch pages");
     assert_eq!(got[0].completion, "/skill:web ");
 }
@@ -113,27 +100,14 @@ fn whitespace_named_skills_are_not_advertised() {
         skill("pdf-tools", "hyphenated"),
     ];
     assert_eq!(
-        labels("/skill:pdf", &skills, &[]),
+        labels("/skill:pdf", &skills),
         vec!["/skill:pdf-tools"],
         "the spaced imposter is skipped (it would match the prefix), the real one shows"
     );
 }
 
 #[test]
-fn prompt_templates_appear_after_the_builtins() {
-    let prompts = [template("review", "review the diff")];
-    assert_eq!(labels("/rev", &[], &prompts), vec!["/review"]);
-    let got = suggestions("/review", &[], &prompts);
-    assert_eq!(got[0].description, "review the diff");
-    assert_eq!(got[0].completion, "/review ");
-    // A template shadowing a built-in name cannot occur — the
-    // loader skips built-in names (prompts.rs BUILTINS) — so the
-    // popup never has to break that tie.
-}
-
-#[test]
 fn anything_that_is_not_a_bare_command_word_closes_the_list() {
-    let prompts = [template("review", "d")];
     for text in [
         "",
         "hello",
@@ -144,19 +118,20 @@ fn anything_that_is_not_a_bare_command_word_closes_the_list() {
         "!!",
         "@file.txt",
     ] {
-        assert_eq!(suggestions(text, &[], &prompts), Vec::new(), "{text:?}");
+        assert_eq!(suggestions(text, &[]), Vec::new(), "{text:?}");
         assert!(!active(text), "{text:?}");
     }
 }
 
 #[test]
 fn the_cap_keeps_the_list_at_ten_rows() {
-    let prompts: Vec<_> = (0..12)
-        .map(|i| template(&format!("t{i:02}"), "filler"))
-        .collect();
-    assert_eq!(suggestions("/", &[], &prompts).len(), MAX_ROWS);
+    assert_eq!(
+        suggestions("/", &[]).len(),
+        MAX_ROWS,
+        "the whole built-in set"
+    );
     let skills: Vec<_> = (0..12).map(|i| skill(&format!("s{i:02}"), "f")).collect();
-    assert_eq!(suggestions("/skill:", &skills, &[]).len(), MAX_ROWS);
+    assert_eq!(suggestions("/skill:", &skills).len(), MAX_ROWS);
 }
 
 /// What one row's spans say, joined — the truncation contract: the

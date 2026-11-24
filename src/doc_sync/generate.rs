@@ -195,6 +195,6 @@ pub(super) fn commands_reference() -> String {
             cell(description),
         ));
     }
-    out.push_str("\n`/exit` is a hidden alias for `/quit`. Any `~/.gg/prompts/*.md` template also becomes a `/name` command, and `!cmd` / `!!cmd` run a shell line (see [Interactive TUI](../guide/tui.md)).\n");
+    out.push_str("\n`/exit` is a hidden alias for `/quit`, and `!cmd` / `!!cmd` run a shell line (see [Interactive TUI](../guide/tui.md)).\n");
     out
 }

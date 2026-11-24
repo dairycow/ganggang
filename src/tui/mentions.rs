@@ -23,6 +23,18 @@ const BINARY_SNIFF: usize = 8_192;
 /// `file.txt`): mentions sit mid-sentence, filenames ending in
 /// punctuation are vanishingly rare.
 pub fn expand_mentions(text: &str, cwd: &Path) -> String {
+    match attachment_block(text, cwd) {
+        Some(block) => [text, &block].concat(),
+        None => text.to_string(),
+    }
+}
+
+/// The attachment blocks for the `@path` mentions in `text` (resolved
+/// against `cwd`), leading with `"\n\n--- attachments ---"`, or `None`
+/// when `text` holds no mentions. What [`expand_mentions`] appends, and
+/// nothing more — what a caller wants attached without repeating the
+/// text itself.
+pub fn attachment_block(text: &str, cwd: &Path) -> Option<String> {
     // Dedupe by the RESOLVED file, not the typed spelling: `@a.txt` and
     // `@./a.txt` are one attachment (canonicalize where possible; a path
     // that cannot be resolved still dedupes by its lexical form).
@@ -39,11 +51,10 @@ pub fn expand_mentions(text: &str, cwd: &Path) -> String {
         }
     }
     if mentioned.is_empty() {
-        return text.to_string();
+        return None;
     }
 
-    let mut out = String::from(text);
-    out.push_str("\n\n--- attachments ---");
+    let mut out = String::from("\n\n--- attachments ---");
     let mut budget = ATTACHMENT_CAP;
     for path in &mentioned {
         out.push_str(&format!("\n\n--- @{path} "));
@@ -77,7 +88,7 @@ pub fn expand_mentions(text: &str, cwd: &Path) -> String {
             }
         }
     }
-    out
+    Some(out)
 }
 
 /// The path a token mentions, or `None` when it is not a mention.

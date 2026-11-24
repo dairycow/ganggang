@@ -64,10 +64,9 @@ pub struct State {
     context_window: u64,
     last_context_tokens: u64,
     /// The discovery sets the suggestion popup lists from (§15
-    /// amendment): skills for `/skill:<name>` rows, prompt templates
-    /// for `/<name>` rows. Shared read-only with the command handler.
+    /// amendment): skills for `/skill:<name>` rows. Shared read-only
+    /// with the command handler.
     skills: Arc<Vec<crate::agent::skills::Skill>>,
-    prompts: Arc<Vec<crate::prompts::PromptTemplate>>,
     /// Highlighted row of the suggestion popup. Resets to the top
     /// whenever the composer text changes (render syncs it); ↑/↓ move
     /// it, Tab completes from it.
@@ -90,7 +89,6 @@ impl State {
         model: &str,
         context_window: u32,
         skills: Arc<Vec<crate::agent::skills::Skill>>,
-        prompts: Arc<Vec<crate::prompts::PromptTemplate>>,
         history: History,
     ) -> Self {
         Self::with_palette(
@@ -98,7 +96,6 @@ impl State {
             model,
             context_window,
             skills,
-            prompts,
             history,
             super::super::theme::palette_from_env(),
         )
@@ -111,7 +108,6 @@ impl State {
         model: &str,
         context_window: u32,
         skills: Arc<Vec<crate::agent::skills::Skill>>,
-        prompts: Arc<Vec<crate::prompts::PromptTemplate>>,
         history: History,
         palette: Palette,
     ) -> Self {
@@ -135,7 +131,6 @@ impl State {
             context_window: context_window as u64,
             last_context_tokens: 0,
             skills,
-            prompts,
             suggest_selected: 0,
             suggest_filter: String::new(),
             suggest_view_rows: 0,

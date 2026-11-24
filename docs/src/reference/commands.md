@@ -12,10 +12,9 @@ Generated from the command catalogue that drives the `/` suggestion popup.
 | `/skills` |  | list discovered skills |
 | `/session` |  | session path, entries, token totals |
 | `/context` |  | show the assembled system prompt |
-| `/prompts` |  | list prompt templates |
 | `/hooks` |  | list loaded hooks |
 | `/skill:` | &lt;name> [args] | run a skill now |
 | `/model` | [provider/model] | list or switch provider and model |
 | `/quit` |  | exit |
 
-`/exit` is a hidden alias for `/quit`. Any `~/.gg/prompts/*.md` template also becomes a `/name` command, and `!cmd` / `!!cmd` run a shell line (see [Interactive TUI](../guide/tui.md)).
+`/exit` is a hidden alias for `/quit`, and `!cmd` / `!!cmd` run a shell line (see [Interactive TUI](../guide/tui.md)).

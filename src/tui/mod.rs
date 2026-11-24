@@ -79,12 +79,10 @@ pub type Factory = Arc<
 
 /// The discovery sets the TUI renders lists from, shared read-only with
 /// the command handler. The Agent discovers its own copy of the skills
-/// (same cwd, same result); `/skills`, `/skill:`, and `/<template>` all
-/// answer without a round-trip to the agent task.
+/// (same cwd, same result); `/skills`, `/skill:`, `/hooks` and `/model`
+/// all answer without a round-trip to the agent task.
 pub struct Discovered {
     pub skills: Arc<Vec<Skill>>,
-    /// Prompt templates (M7.4) — `/<name>` inserts the body.
-    pub prompts: Arc<Vec<crate::prompts::PromptTemplate>>,
     /// User-level hooks (§22) — `/hooks` lists them.
     pub hooks: Arc<crate::agent::hooks::Hooks>,
 }
@@ -118,11 +116,7 @@ pub async fn run(
     watch_cfg: Option<watch::Config>,
     draft: Option<String>,
 ) -> anyhow::Result<Exit> {
-    let Discovered {
-        skills,
-        prompts,
-        hooks,
-    } = discovered;
+    let Discovered { skills, hooks } = discovered;
     let _guard = term::Guard::new()?;
     let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
     let mut terminal =
@@ -140,7 +134,6 @@ pub async fn run(
         &active_endpoint.label(),
         active_endpoint.context_window,
         skills.clone(),
-        prompts.clone(),
         history,
     );
     state.set_thinking(
@@ -389,7 +382,6 @@ pub async fn run(
                                         input_tx: &mut input_tx,
                                         ui_tx: &ui_tx,
                                         skills: &skills,
-                                        prompts: &prompts,
                                         hooks: &hooks,
                                         cwd: &cwd,
                                         abort: &abort,

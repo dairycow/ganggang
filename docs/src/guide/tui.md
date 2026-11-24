@@ -61,7 +61,7 @@ Assistant answers render a deliberately small markdown subset; your own messages
 
 ## Slash commands
 
-Typing `/` opens a suggestion list above the composer: the built-ins, your [prompt templates](context-skills-prompts.md#prompt-templates), and, once `/skill:` is typed, one row per skill. `↑`/`↓` move the highlight, `Tab` completes, and `Enter` still sends exactly what you typed.
+Typing `/` opens a suggestion list above the composer: the built-ins and, once `/skill:` is typed, one row per skill. `↑`/`↓` move the highlight, `Tab` completes, and `Enter` still sends exactly what you typed.
 
 The command list is in [TUI slash commands](../reference/commands.md). Unknown commands are rejected with the valid set.
 
@@ -74,7 +74,7 @@ Both share the bash tool's runner: 30-second timeout (the whole process group is
 
 ## `@file` mentions
 
-`@src/main.rs` in a message attaches the file's content below your text. Attached files are appended below your message as fenced code blocks.
+`@src/main.rs` in a message or `/skill:<name>` arguments attaches the file's content below your text. Attached files are appended below your message as fenced code blocks.
 
 - A token counts as a mention when what follows `@` contains `/` or `.`, so `user@host` and a lone `@` stay literal. Trailing punctuation (`@file.txt,`) is not part of the path.
 - Paths resolve against the session directory; two spellings of the same file attach once.

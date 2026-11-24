@@ -1,24 +1,22 @@
 //! Slash-command suggestions (§15 amendment): while the composer holds
 //! a bare command word — first char `/`, no whitespace yet — a filtered
 //! list of everything that word could become floats above the editor:
-//! the built-ins, the discovered prompt templates (`/<name>`, M7.4),
-//! and, once `/skill:` is typed, one row per skill. Pure, like
-//! [`classify_submission`](super::commands::classify_submission): the
+//! the built-ins and, once `/skill:` is typed, one row per skill. Pure,
+//! like [`classify_submission`](super::commands::classify_submission): the
 //! same catalog the submit path matches against, so the list can never
 //! advertise a command that does not run. The row-to-`UiLine` builders
 //! live here too — the popup's whole look, in the popup's module.
 
 use crate::agent::skills::Skill;
-use crate::prompts::PromptTemplate;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line as UiLine, Span};
 
 use super::theme::Palette;
 
-/// Rows the popup shows at most. Eleven is the whole built-in set (the
-/// merged set includes `/hooks`, §22, and `/model`); templates and skills
-/// flow in as the prefix narrows.
-const MAX_ROWS: usize = 11;
+/// Rows the popup shows at most. Ten is the whole built-in set (the
+/// merged set includes `/hooks`, §22, and `/model`); skills flow in as the
+/// prefix narrows.
+const MAX_ROWS: usize = 10;
 
 /// One popup row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +43,6 @@ pub(crate) const BUILTINS: &[(&str, &str, &str)] = &[
     ("/skills", "", "list discovered skills"),
     ("/session", "", "session path, entries, token totals"),
     ("/context", "", "show the assembled system prompt"),
-    ("/prompts", "", "list prompt templates"),
     ("/hooks", "", "list loaded hooks"),
     ("/skill:", "<name> [args]", "run a skill now"),
     (
@@ -64,9 +61,9 @@ pub fn active(text: &str) -> bool {
 }
 
 /// The suggestions for the composer's current text, in catalog order:
-/// built-ins, then templates, then (once `/skill:` is typed) per-skill
-/// rows. Empty when the popup should not show.
-pub fn suggestions(text: &str, skills: &[Skill], prompts: &[PromptTemplate]) -> Vec<Suggestion> {
+/// built-ins, then (once `/skill:` is typed) per-skill rows. Empty when
+/// the popup should not show.
+pub fn suggestions(text: &str, skills: &[Skill]) -> Vec<Suggestion> {
     if !active(text) {
         return Vec::new();
     }
@@ -103,16 +100,6 @@ pub fn suggestions(text: &str, skills: &[Skill], prompts: &[PromptTemplate]) -> 
                     format!("{name} ")
                 },
                 description: (*description).to_string(),
-            });
-        }
-    }
-    for template in prompts {
-        let command = format!("/{}", template.name);
-        if command.starts_with(text) {
-            out.push(Suggestion {
-                completion: format!("{command} "),
-                description: template.description.clone(),
-                label: command,
             });
         }
     }

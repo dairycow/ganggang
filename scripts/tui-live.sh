@@ -219,7 +219,7 @@ export EDITOR="$3" FAKE_MODE="$4" FAKE_SLEEP="${5:-}" FAKE_LOG="$base/fake.log"
 # gg's home is this run's own, like hooks-live.sh's: nothing it writes —
 # the prompt history, above all, since every line this test submits is a
 # submission — reaches the user's ~/.gg, and nothing of the user's config,
-# hooks, skills or templates changes what the test sees.
+# hooks or skills changes what the test sees.
 export HOME="$base/home"; mkdir -p "$HOME"
 cd "$base/scratch" || exit 1
 "$2" --no-session 2> "$base/gg-err.log"

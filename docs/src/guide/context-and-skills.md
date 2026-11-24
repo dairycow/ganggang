@@ -1,4 +1,4 @@
-# Context, skills and prompts
+# Context and skills
 
 ## The system prompt
 
@@ -32,19 +32,4 @@ Only each skill's **name, description and path** are advertised in the system pr
 - Frontmatter is simple `key: value` lines (quotes are stripped); unknown keys are ignored. `name` and `description` are required, otherwise the skill is skipped with a warning.
 - `disable-model-invocation: true` hides a skill from the prompt while keeping it available on demand.
 - `/skills` lists discovered skills; `/skill:<name> [args]` forces one: its instructions become your next message and run immediately.
-
-## Prompt templates
-
-Markdown files in `~/.gg/prompts/` become `/name` commands:
-
-```text
----
-name: review
-description: Review a diff carefully
----
-Review this diff line by line. Flag bugs first, style last.
-```
-
-`/review src/main.rs` inserts the template body and your arguments into the composer as an editable **draft**; nothing is sent until you press `Enter`. Frontmatter is optional: without a `name`, the file name stem is used. `/prompts` lists templates.
-
-A template whose name contains whitespace, matches a built-in command, or starts with `skill:` is skipped with a warning, as are duplicates (first, by file name, wins).
+- `@file` mentions in the arguments work as they do in a plain message: the transcript keeps the arguments you typed, and the attached file content reaches the model with the instructions. The skill's own instructions are never scanned for mentions.

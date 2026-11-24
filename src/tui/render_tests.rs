@@ -27,7 +27,6 @@ fn fresh(w: u16, h: u16) -> (Terminal<TestBackend>, State) {
         "qwen3.8",
         131_072,
         std::sync::Arc::new(vec![]),
-        std::sync::Arc::new(vec![]),
         History::default(),
         TRUECOLOR,
     );
@@ -354,7 +353,6 @@ fn an_indexed_session_draws_only_indexed_colours() {
         std::path::Path::new("/tmp/x"),
         "m",
         131_072,
-        std::sync::Arc::new(vec![]),
         std::sync::Arc::new(vec![]),
         History::default(),
         indexed,

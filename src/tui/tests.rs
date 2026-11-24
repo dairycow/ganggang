@@ -318,7 +318,6 @@ fn tab_and_arrows_drive_the_suggestion_popup() {
 #[test]
 fn suggestion_popup_tracks_the_composer() {
     use crate::agent::skills::Skill;
-    use crate::prompts::PromptTemplate;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -329,25 +328,18 @@ fn suggestion_popup_tracks_the_composer() {
         path: PathBuf::from("/tmp/pdf-tools/SKILL.md"),
         instructions: String::new(),
     }];
-    let prompts = vec![PromptTemplate {
-        name: "review".into(),
-        description: "review the diff".into(),
-        path: PathBuf::from("/tmp/prompts/review.md"),
-        body: String::new(),
-    }];
     let mut state = State::new(
         std::path::Path::new("/tmp/x"),
         "m",
         131_072,
         Arc::new(skills),
-        Arc::new(prompts),
         History::default(),
     );
 
     assert!(!state.suggest_open(), "plain composer: no popup");
     state.editor.insert_char('/');
     assert!(state.suggest_open(), "a bare slash opens the catalog");
-    assert_eq!(state.suggestions().len(), 11, "the built-in set");
+    assert_eq!(state.suggestions().len(), 10, "the built-in set");
 
     // Filtering: two down and one up leaves the highlight on /compact.
     state.suggest_next();
@@ -368,7 +360,7 @@ fn suggestion_popup_tracks_the_composer() {
     assert_eq!(state.editor.text(), "/skills ");
     assert!(!state.suggest_open(), "whitespace closes the popup");
 
-    // The skill colon expands per skill; the prompt template appears.
+    // The skill colon expands one row per matching skill.
     state.editor.set_text("/skill:p");
     assert_eq!(
         state
@@ -378,10 +370,6 @@ fn suggestion_popup_tracks_the_composer() {
             .collect::<Vec<_>>(),
         vec!["/skill:pdf-tools"]
     );
-    state.editor.set_text("/rev");
-    assert_eq!(state.suggestions()[0].label, "/review");
-    state.complete_suggestion();
-    assert_eq!(state.editor.text(), "/review ");
 
     // Selection cannot run off either end — and with the popup closed
     // (here: the completed text carries a space), the popup keys are
@@ -414,7 +402,6 @@ fn the_selection_stops_at_the_last_drawn_row_on_short_terminals() {
         std::path::Path::new("/tmp/x"),
         "m",
         131_072,
-        std::sync::Arc::new(vec![]),
         std::sync::Arc::new(vec![]),
         History::default(),
     );
@@ -493,7 +480,6 @@ fn view_folds_the_event_stream_into_lines() {
         "m",
         131_072,
         std::sync::Arc::new(vec![]),
-        std::sync::Arc::new(vec![]),
         History::default(),
     );
     state.push_user("question");
@@ -543,7 +529,6 @@ fn split_deltas_fold_into_the_same_block_as_one_shot_text() {
             "m",
             131_072,
             std::sync::Arc::new(vec![]),
-            std::sync::Arc::new(vec![]),
             History::default(),
         );
         state.push_user("q");
@@ -566,7 +551,6 @@ fn split_deltas_fold_into_the_same_block_as_one_shot_text() {
             std::path::Path::new("/tmp/x"),
             "m",
             131_072,
-            std::sync::Arc::new(vec![]),
             std::sync::Arc::new(vec![]),
             History::default(),
         );
@@ -603,7 +587,6 @@ fn scrolling_stays_within_the_transcript() {
         std::path::Path::new("/tmp/x"),
         "m",
         131_072,
-        std::sync::Arc::new(vec![]),
         std::sync::Arc::new(vec![]),
         History::default(),
     );
@@ -646,7 +629,6 @@ fn state_with_history(prompts: &[&str]) -> State {
         std::path::Path::new("/tmp/x"),
         "m",
         131_072,
-        std::sync::Arc::new(vec![]),
         std::sync::Arc::new(vec![]),
         history,
     )
@@ -940,7 +922,6 @@ fn seed_from_entries_rebuilds_the_blocks_the_event_stream_would() {
         "m",
         131_072,
         std::sync::Arc::new(vec![]),
-        std::sync::Arc::new(vec![]),
         History::default(),
     );
     state.seed_from_entries(&entries);
@@ -1019,7 +1000,6 @@ async fn task_events_fold_into_the_view() {
             std::path::Path::new("/tmp/x"),
             "m",
             131_072,
-            Arc::new(vec![]),
             Arc::new(vec![]),
             History::default(),
         )

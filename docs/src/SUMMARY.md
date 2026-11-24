@@ -12,7 +12,7 @@
 - [Configuration and providers](guide/configuration.md)
 - [Tools](guide/tools.md)
 - [Sessions and compaction](guide/sessions-compaction.md)
-- [Context, skills and prompts](guide/context-skills-prompts.md)
+- [Context and skills](guide/context-and-skills.md)
 - [Hooks](guide/hooks.md)
 - [Security model](guide/security.md)
 - [Watch mode](guide/watch-mode.md)
