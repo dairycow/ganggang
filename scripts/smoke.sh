@@ -9,7 +9,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-GG="$PWD/target/debug/gg"
+GG="${GG_BIN:-$PWD/target/debug/gg}"
+EXPECTED_VER=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
 
 if [[ ! -x "$GG" ]]; then
   echo "FAIL: $GG not built (cargo build)" >&2
@@ -26,8 +27,8 @@ echo "ok"
 echo "== 2. read-tool question =="
 answer=$(echo 'what version is in Cargo.toml? reply with just the version number' | "$GG" -p - 2>/tmp/gg-smoke.err)
 echo "answer: $answer"
-if [[ "$answer" != *"0.1"* ]]; then
-  echo "FAIL: expected the version in the answer" >&2
+if [[ "$answer" != *"$EXPECTED_VER"* ]]; then
+  echo "FAIL: expected version $EXPECTED_VER in the answer" >&2
   exit 1
 fi
 # Any tool counts: since M7 the model may equally answer with grep.

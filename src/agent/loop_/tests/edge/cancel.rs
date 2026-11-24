@@ -33,7 +33,9 @@ fn one_bash_call(command: &str) -> (FakeServer, Registry) {
 async fn abort_during_a_running_command_kills_it_and_ends_the_run() {
     // The marker doubles as the (unique, valid) sleep duration so pgrep can
     // find the killed group's members.
-    let marker = "712.419";
+    let pid = std::process::id();
+    let marker = format!("712.{pid}");
+    let pattern = format!(r"712\.{pid}");
     let (server, registry) = one_bash_call(&format!("echo starting; sleep {marker}"));
 
     let abort = Arc::new(AtomicBool::new(false));
@@ -119,7 +121,7 @@ async fn abort_during_a_running_command_kills_it_and_ends_the_run() {
     for _ in 0..20 {
         let alive = std::process::Command::new("pgrep")
             .arg("-f")
-            .arg(marker)
+            .arg(&pattern)
             .stdout(std::process::Stdio::null())
             .status()
             .unwrap()
