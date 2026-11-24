@@ -10,7 +10,7 @@ Highest wins:
 4. `~/.gg/config.toml` (user)
 5. Built-in defaults
 
-Merging is shallow: a layer that sets a key wins whole. An invalid value is an error wherever it comes from; a typo'd `GG_MAX_TOKENS` fails loudly instead of silently falling back. Unknown keys in a config file are ignored.
+Merging is shallow: a layer that sets a key wins whole. An invalid value is an error wherever it comes from; a typo'd `GG_MAX_TOKENS` fails with an error instead of silently falling back. Unknown keys in a config file are ignored.
 
 ## Config file
 
@@ -43,7 +43,7 @@ Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `a
 - `compact_threshold_tokens` caps when auto-compaction triggers (e.g. `65536` on `strata` to stay within local VRAM KV residency; `0` disables).
 - `max_turns` caps turns per run (`0` disables); `gg` nudges the model to wrap up at 80% of the budget.
 - `max_retries` is how many extra attempts a transient LLM failure gets (408, 429, 5xx, a timeout, a dropped connection). The wait doubles from 500 ms with jitter, and a `Retry-After` header wins (capped at 30 s). `0` disables retries. Any other 4xx fails at once.
-- `request_timeout_secs` bounds one LLM request end to end — the response head and the whole body, a stream included — and must be at least `1`. A generation longer than this is cut, and what had streamed in is kept (see [Output Modes](modes.md#print-mode)).
+- `request_timeout_secs` bounds one LLM request end to end, covering the response head and the whole body, a stream included, and must be at least `1`. A generation longer than this is cut, and what had streamed in is kept (see [Output Modes](modes.md#print-mode)).
 - `tools` is the allowlist of tools offered to the model (also `--tools read,grep`). Unknown names are an error. See [Tools](tools.md).
 - `context_window` should match the server's real window: compaction and the footer's context percentage use it. When unset on `strata` or a local URL, `gg` probes `/health` at startup for `max_context` (and `kv_resident` when `compact_threshold_tokens` is unset), falling back to `/v1/models` when needed. On `strata`, `gg` also adopts whichever model the server currently has loaded unless overridden via `-m` or `GG_MODEL`. See [Sessions & Compaction](sessions-compaction.md).
 
@@ -75,7 +75,7 @@ Provider keys: `base_url`, `api`, `auth`, `api_key`, `api_key_env`, `model`, `ma
 
 ### Removing a built-in provider
 
-The built-in providers are shipped as data, not compiled-in special cases: every field above is what the preset itself uses. Override what you need, or take the whole provider off the list with `disabled = true`:
+The built-in providers ship as data: every field above is what the preset itself uses. Override what you need, or take the whole provider off the list with `disabled = true`:
 
 ```toml
 # ~/.gg/config.toml
@@ -83,7 +83,7 @@ The built-in providers are shipped as data, not compiled-in special cases: every
 disabled = true
 ```
 
-A disabled provider disappears from `/model`, `--list-models`, `-P`, and `-m` — a `-P opencode-go` or `opencode-go/...` naming it fails with the reason instead of becoming a model id on the active provider. Removal is final for the merge: a project `.gg/config.toml` cannot patch or resurrect a provider an earlier layer switched off. Disabling a provider that does not exist is a no-op, and switching off the provider you are pointed at (via `provider = "…"`, `GG_PROVIDER`, or a `provider/model` prefix) is an error at startup, since there is nothing left to run.
+A disabled provider disappears from `/model`, `--list-models`, `-P`, and `-m`. A `-P opencode-go` or `opencode-go/...` naming it fails with the reason instead of becoming a model id on the active provider. Removal is final for the merge: a project `.gg/config.toml` cannot patch or resurrect a provider an earlier layer switched off. Disabling a provider that does not exist is a no-op, and switching off the provider you are pointed at (via `provider = "…"`, `GG_PROVIDER`, or a `provider/model` prefix) is an error at startup: no provider remains to run.
 
 Choose at the command line with `-P deepseek`, `-m deepseek-flash`, or `-m opencode-go/claude-haiku-5-5` (`provider/model`). Naming conflicting providers in `-P` and `-m` is an error.
 

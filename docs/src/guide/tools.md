@@ -6,16 +6,15 @@ The model gets seven tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls
 
 - Mutating tools (`bash`, `edit`, `write`) run **one at a time**, in the order the model called them. Contiguous runs of 2+ read-only tools (`read`, `grep`, `find`, `ls`) execute **in parallel** (up to 8 in flight) while preserving call order in events and session history.
 - A tool failure is a **value**: the error text goes back to the model, which reads it and retries. Only transport and session I/O errors abort a run.
-- Every cap is **visible**: truncated output says so, so the model never mistakes a cut for the whole.
+- Every cap is **visible**: truncated output says so, so the model knows when a result is cut.
 
 ## Stopping a run
 
 `Esc` or `Ctrl+C` (or `SIGTERM`) stops a run as it is running, not at the next call boundary:
 
 - A `bash` command has its whole process group killed; the model is told `command aborted by user and killed`.
-- A `grep` or `find` walk stops and returns what it found so far, as an error saying the results are partial. A call that had not started is never started.
+- A `grep` or `find` walk stops and returns what it found so far, as an error saying the results are partial. A call that had not started does not start.
 - A call the user stopped while it ran is not an execution: no `post_tool` [hook](hooks.md) observes it.
-
 
 ## Choosing which tools are offered
 

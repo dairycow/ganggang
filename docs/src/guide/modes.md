@@ -17,13 +17,11 @@ The final answer goes to **stdout**; progress (turn markers, formatted tool-call
 
 `Ctrl+C` aborts the run: an in-flight request or stream is cut within about 100 ms rather than left to finish, a running tool is stopped (a `bash` command loses its whole process group), and what had already streamed in is the answer on stdout. A second `Ctrl+C` exits immediately with status 130. `SIGTERM` triggers the same graceful abort, flushes output, and exits with status 143.
 
-#### A turn that falls short
+### Truncated responses
 
-A response can end before it is finished: the provider reports `finish_reason: "length"` (the answer hit `max_tokens`), or the stream ends without its sentinel (the request timed out, the connection dropped). Either way the partial answer is kept, a `warning:` line says what happened, and `gg` asks the model to continue from exactly where it stopped — at most 3 times per run, and never past `--max-turns`. The pieces are joined, so stdout still holds one answer. A tool call cut off mid-arguments is never run; the model is told it was not executed.
+A response can end before it is finished: the provider reports `finish_reason: "length"` (the answer hit `max_tokens`), or the stream ends without its sentinel (the request timed out, the connection dropped). Either way the partial answer is kept, a `warning:` line says what happened, and `gg` asks the model to continue from exactly where it stopped, at most 3 times per run and never past `--max-turns`. The pieces are joined, so stdout still holds one answer. A tool call cut off mid-arguments is never run; the model is told it was not executed.
 
 Transient transport failures are retried (see `max_retries` in [Configuration](configuration.md)); each retry is a `warning:` line on stderr.
-
-
 
 ## JSON mode
 
