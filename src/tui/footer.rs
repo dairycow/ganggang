@@ -1,5 +1,5 @@
-//! The one-line footer: where we are, who we talk to, what it cost, and
-//! whether a run is live.
+//! The one-line footer: where we are, who we talk to, what it cost, how
+//! fast the last turn ran, and whether a run is live.
 //!
 //! State in, [`UiLine`] out — the footer owns its own styling now, because
 //! a footer made of structured spans cannot be styled as one string: the
@@ -35,6 +35,11 @@ pub struct Footer {
     tokens_out: u64,
     /// Context usage of the last request vs the window, once known.
     context_pct: Option<u8>,
+    /// Last turn's decode throughput (tokens/s), once the backend reports
+    /// it.
+    decode_tps: Option<f64>,
+    /// Last turn's thinking share (%), the same.
+    thinking_pct: Option<u8>,
     /// `--watch` state, absent when not watching (dev mode only).
     watch: Option<String>,
     busy: bool,
@@ -53,6 +58,8 @@ impl Footer {
             tokens_in: 0,
             tokens_out: 0,
             context_pct: None,
+            decode_tps: None,
+            thinking_pct: None,
             watch: None,
             busy: false,
             stopping: false,
@@ -78,10 +85,26 @@ impl Footer {
             self.context_pct = None;
             return;
         }
-        self.context_pct = Some((context_tokens.saturating_mul(100) / context_window) as u8);
-        if self.context_pct > Some(100) {
-            self.context_pct = Some(100);
-        }
+        // Clamped before it is ever a `u8`: four times the window would
+        // otherwise wrap to a reassuringly small number.
+        let pct = (context_tokens.saturating_mul(100) / context_window).min(100) as u8;
+        self.context_pct = Some(pct);
+    }
+
+    pub fn set_decode_tps(&mut self, tps: Option<f64>) {
+        self.decode_tps = tps;
+    }
+
+    pub fn set_thinking_pct(&mut self, pct: Option<u8>) {
+        self.thinking_pct = pct;
+    }
+
+    /// A new session starts with no history to measure: the context
+    /// figure and both throughput figures go with it.
+    pub fn clear_telemetry(&mut self) {
+        self.context_pct = None;
+        self.decode_tps = None;
+        self.thinking_pct = None;
     }
 
     pub fn set_busy(&mut self, busy: bool) {
@@ -141,13 +164,16 @@ impl Footer {
             .join("")
     }
 
-    /// e.g. `gg …/projects/ganggang qwen3.8 ↑305 ↓81 ctx 4% ⠋ working`
+    /// e.g. `gg …/projects/ganggang qwen3.8 ↑305 ↓81 ctx 4% ⠋ working`, and
+    /// with the throughput figures the backend reports,
+    /// `… ↑305 ↓81 ctx 4% 62.4 t/s think 45% ⠋ working`.
     ///
     /// One row of spans, each already carrying the style its role means:
     /// the mark in the crest, the location in pale grey, the model in body
-    /// text, the totals and the context number in muted (the number going
-    /// gold then red as the window fills), the watch state in gold, and
-    /// the status — ready, a turning spinner and `working`, or `stopping…`.
+    /// text, the totals in muted, the context number in muted (going gold
+    /// then red as the window fills), the throughput figures in muted, the
+    /// watch state in gold, and the status — ready, a turning spinner and
+    /// `working`, or `stopping…`.
     pub fn spans(&self, palette: &Palette) -> UiLine<'static> {
         let muted = Style::new().fg(palette.muted);
         let mut spans: Vec<Span<'static>> = vec![
@@ -168,6 +194,16 @@ impl Footer {
                 format!("ctx {pct}%"),
                 Style::new().fg(Self::ctx_colour(palette, pct)),
             ));
+        }
+        // Throughput, when the backend reports it: Strata does, most
+        // cloud providers do not. Absent, the field is simply not there.
+        if let Some(tps) = self.decode_tps {
+            spans.push(field(muted));
+            spans.push(Span::styled(format!("{tps:.1} t/s"), muted));
+        }
+        if let Some(pct) = self.thinking_pct {
+            spans.push(field(muted));
+            spans.push(Span::styled(format!("think {pct}%"), muted));
         }
         if let Some(watch) = &self.watch {
             spans.push(field(muted));

@@ -51,6 +51,7 @@ pub struct SessionStore {
     id: String,
     header_line: String,
     file: Option<std::fs::File>,
+    allow_empty_existing: bool,
 }
 
 impl SessionStore {
@@ -71,6 +72,37 @@ impl SessionStore {
             id: header.id,
             header_line,
             file: None,
+            allow_empty_existing: false,
+        })
+    }
+
+    /// Create a lazy session store at an explicit file path (`--session-file`).
+    /// An absent file or a 0-byte existing file (e.g. `mktemp`) is initialized
+    /// on first append; a non-empty existing file is refused.
+    pub fn create_at(path: PathBuf, cwd: &Path, model: &str) -> anyhow::Result<Self> {
+        match std::fs::metadata(&path) {
+            Ok(meta) => {
+                if meta.is_dir() {
+                    anyhow::bail!("session file {} is a directory", path.display());
+                }
+                if meta.len() > 0 {
+                    anyhow::bail!(
+                        "session file {} already exists and is non-empty",
+                        path.display()
+                    );
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("inspecting {}", path.display())),
+        }
+        let header = SessionHeader::new(cwd, model);
+        let header_line = serde_json::to_string(&header).context("serializing session header")?;
+        Ok(Self {
+            path,
+            id: header.id,
+            header_line,
+            file: None,
+            allow_empty_existing: true,
         })
     }
 
@@ -98,6 +130,7 @@ impl SessionStore {
             id: header.id,
             header_line: String::new(),
             file: Some(file),
+            allow_empty_existing: false,
         })
     }
 
@@ -156,15 +189,32 @@ impl SessionStore {
 
     /// First append: create the directory and the file, write the header.
     fn start_file(&mut self) -> anyhow::Result<()> {
-        if let Some(parent) = self.path.parent() {
+        if let Some(parent) = self.path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
-        let mut file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .append(true)
+        let mut opts = std::fs::OpenOptions::new();
+        opts.append(true);
+        if self.allow_empty_existing {
+            opts.create(true);
+        } else {
+            opts.create_new(true);
+        }
+        let mut file = opts
             .open(&self.path)
             .with_context(|| format!("creating {}", self.path.display()))?;
+        if self.allow_empty_existing
+            && file
+                .metadata()
+                .with_context(|| format!("inspecting {}", self.path.display()))?
+                .len()
+                > 0
+        {
+            anyhow::bail!(
+                "session file {} became non-empty before initialization",
+                self.path.display()
+            );
+        }
         writeln!(file, "{}", self.header_line)
             .with_context(|| format!("writing {}", self.path.display()))?;
         file.flush()

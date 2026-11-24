@@ -222,6 +222,7 @@ impl AnthropicUsage {
             prompt_tokens,
             completion_tokens,
             total_tokens: prompt_tokens.saturating_add(completion_tokens),
+            ..Usage::default()
         }
     }
 }
@@ -270,5 +271,6 @@ pub(super) fn parse_response(raw: Value) -> anyhow::Result<ChatResponse> {
             finish_reason: map_stop_reason(resp.stop_reason),
         }],
         usage: resp.usage.map(AnthropicUsage::into_wire),
+        timings: None,
     })
 }

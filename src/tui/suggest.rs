@@ -34,7 +34,7 @@ pub struct Suggestion {
 
 /// The built-in half of the catalog: (command, args hint, description).
 /// `/exit` stays a hidden alias — the popup advertises one way out.
-const BUILTINS: &[(&str, &str, &str)] = &[
+pub(crate) const BUILTINS: &[(&str, &str, &str)] = &[
     ("/new", "", "start a fresh session"),
     ("/resume", " [n|prefix]", "list sessions, or open one"),
     (

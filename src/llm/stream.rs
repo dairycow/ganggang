@@ -11,16 +11,17 @@
 //! the visible text and delivered live as [`Delta::Thinking`] — captured
 //! for display, never mixed into message content. Strata's stream
 //! (verified live) also emits `: keep-alive` comment lines, a final
-//! `choices: []` chunk carrying `usage`, and non-standard `timings`
-//! objects the permissive wire types ignore.
+//! `choices: []` chunk carrying `usage`, and `timings` objects that are
+//! parsed into [`ChatResponse::timings`].
 //!
 //! A body that ends before its sentinel is salvage, not loss (GAP 2): the
 //! user has already watched most of an answer stream in, so
 //! [`drain_sse`] reports what assembled plus `complete: false` and lets
 //! the loop continue the answer instead of throwing the turn away.
-//! A stop request is a different animal (GAP 3's in-flight half): nobody waits for
-//! it, so both drains watch the run's abort flag while they read and come
-//! back with the partial and `aborted: true`.
+//!
+//! A stop request is a different animal (GAP 3's in-flight half): nobody
+//! waits for it, so the read watches the run's abort flag while it reads
+//! and comes back with the partial and `aborted: true`.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -31,7 +32,7 @@ use std::time::Duration;
 use anyhow::Context;
 use serde::Deserialize;
 
-use super::types::{ChatMessage, ChatResponse, Choice, ToolCall, Usage};
+use super::types::{ChatMessage, ChatResponse, Choice, Timings, ToolCall, Usage};
 
 /// One SSE chunk, permissive like every wire type (§8): `choices` is empty
 /// on the usage-only final chunk, `delta` can be `{}` on the chunk that
@@ -42,6 +43,8 @@ struct StreamChunk {
     choices: Vec<StreamChoice>,
     #[serde(default)]
     usage: Option<Usage>,
+    #[serde(default)]
+    timings: Option<Timings>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,6 +104,7 @@ struct Assembler {
     reasoning: String,
     finish_reason: Option<String>,
     usage: Option<Usage>,
+    timings: Option<Timings>,
     /// BTreeMap: keyed by fragment index, iterated in order at finish.
     calls: BTreeMap<u32, PartialCall>,
 }
@@ -119,6 +123,9 @@ impl Assembler {
     fn feed(&mut self, chunk: StreamChunk) -> Vec<Delta> {
         if chunk.usage.is_some() {
             self.usage = chunk.usage;
+        }
+        if chunk.timings.is_some() {
+            self.timings = chunk.timings;
         }
         let mut deltas = Vec::new();
         for choice in chunk.choices {
@@ -190,6 +197,7 @@ impl Assembler {
                 finish_reason: self.finish_reason,
             }],
             usage: self.usage,
+            timings: self.timings,
         }
     }
 }

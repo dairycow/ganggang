@@ -44,6 +44,12 @@ pub enum AgentEvent {
     },
     TurnEnded {
         stop_reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<crate::agent::session::Usage>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timings: Option<crate::llm::types::Timings>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thinking_pct: Option<u8>,
     },
     RunEnded {
         turns: u32,
@@ -83,7 +89,10 @@ mod tests {
         );
         assert_eq!(
             json(AgentEvent::TurnEnded {
-                stop_reason: "stop".into()
+                stop_reason: "stop".into(),
+                usage: None,
+                timings: None,
+                thinking_pct: None,
             }),
             r#"{"type":"turn_ended","stop_reason":"stop"}"#
         );

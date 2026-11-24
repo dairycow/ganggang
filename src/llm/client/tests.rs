@@ -216,3 +216,75 @@ fn the_request_timeout_is_configurable_and_carried_on_the_request() {
     // Zero is not a usable deadline; the floor keeps a hang bounded.
     assert_eq!(client.with_request_timeout(0).request_timeout_secs(), 1);
 }
+
+/// A server that answers one request with `body` and hands the raw
+/// request back for inspection.
+fn echo_request(body: &'static str) -> (String, Arc<Mutex<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = Arc::new(Mutex::new(String::new()));
+    let sink = seen.clone();
+    std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let n = s.read(&mut buf).unwrap();
+        *sink.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).to_string();
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        s.write_all(resp.as_bytes()).unwrap();
+    });
+    (format!("http://{addr}"), seen)
+}
+
+const OK: &str =
+    r#"{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#;
+
+#[tokio::test]
+async fn reasoning_effort_and_budget_are_sent_when_configured() {
+    let (base_url, seen) = echo_request(OK);
+    LlmClient::new(&base_url)
+        .unwrap()
+        .with_reasoning_effort(Some("medium".into()))
+        .with_reasoning_budget_tokens(Some(4096))
+        .send("m", &[], 16, &[])
+        .await
+        .unwrap();
+    let raw = seen.lock().unwrap().clone();
+    let body = raw.split("\r\n\r\n").nth(1).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(v["reasoning_effort"], "medium");
+    assert_eq!(v["reasoning_budget_tokens"], 4096);
+}
+
+/// Each retry leaves one line for the caller, naming the failure and the
+/// retry; asking again gets none. The interface decides how a retry is
+/// shown — the client never prints, because in the TUI stderr is the screen.
+#[tokio::test]
+async fn each_retry_leaves_one_notice_for_the_caller() {
+    let server = Scripted::spawn(vec![
+        http("503 Service Unavailable", "", "busy"),
+        http("200 OK", "", &ok_body("gg")),
+        http("200 OK", "", &ok_body("again")),
+    ]);
+    let client = server.client();
+    assert!(client.take_notices().is_empty(), "nothing has happened yet");
+    client.send("m", &[], 16, &[]).await.unwrap();
+    let notices = client.take_notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(
+        notices[0].contains("503 Service Unavailable"),
+        "{}",
+        notices[0]
+    );
+    assert!(notices[0].contains("retry 1 of 3"), "{}", notices[0]);
+    assert!(
+        client.take_notices().is_empty(),
+        "a notice is handed over once"
+    );
+
+    // A request that needs no retry has nothing to say.
+    client.send("m", &[], 16, &[]).await.unwrap();
+    assert!(client.take_notices().is_empty());
+}

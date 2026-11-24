@@ -7,9 +7,10 @@ license = "MIT"
 readme = "README.md"
 repository = "https://github.com/dairycow/ganggang"
 homepage = "https://github.com/dairycow/ganggang"
+documentation = "https://dairycow.github.io/ganggang/"
 keywords = ["agent", "ai", "cli", "tui"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = [".cargo/", ".claude/", ".review-*.md", "design.html", "TASKS.md"]
+exclude = [".cargo/", ".claude/", ".github/", ".review-*.md", "AGENTS.md", "design.html", "docs/", "TASKS.md"]
 
 [[bin]]
 name = "gg"
@@ -27,6 +28,9 @@ time = { version = "0.3", features = ["formatting"] }
 toml = "1.2.2"
 ratatui = "0.30.2"
 crossterm = "0.29.0"
+ignore = "0.4"
+regex = "1"
+globset = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

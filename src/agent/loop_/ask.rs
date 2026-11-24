@@ -23,9 +23,12 @@ impl Agent {
     /// resurfaces at the next required send in `run`, which the run
     /// propagates with `?` (deltas themselves are best-effort by design).
     ///
-    /// Streaming also carries the run's stop request into the request and
-    /// its SSE read, so Esc stops a generation instead of only the calls
-    /// after it. A stop request that lands before the response head is an
+    /// Both paths carry the run's stop request: streaming into the request
+    /// and its SSE read, so Esc stops a generation instead of only the
+    /// calls after it, and the non-streaming wait as a race. The loop does
+    /// not wrap this call in a select of its own — dropping the streaming
+    /// future from outside would discard the partial it is about to
+    /// return. A stop request that lands before the response head is an
     /// error; here it becomes an aborted, incomplete outcome rather than a
     /// failed run — `run`'s short-turn path then finishes the run with the
     /// normal abort shape.
@@ -34,23 +37,57 @@ impl Agent {
         messages: &[ChatMessage],
         events: &Sender<AgentEvent>,
     ) -> anyhow::Result<StreamOutcome> {
+        let outcome = self.request(messages, events).await;
+        // Whether it succeeded or not, the retries it took are the run's
+        // news — passed on before the loop acts on the answer.
+        self.relay_notices(events).await?;
+        outcome
+    }
+
+    /// Hand the client's retry notices on as warnings. The client keeps
+    /// them instead of printing, because one of the interfaces owns the
+    /// whole screen and stderr would land in the middle of it; a `Warned`
+    /// is a line on stderr in print mode and a line in the transcript in
+    /// the TUI.
+    pub(in crate::agent) async fn relay_notices(
+        &self,
+        events: &Sender<AgentEvent>,
+    ) -> anyhow::Result<()> {
+        for notice in self.client.take_notices() {
+            events.send(AgentEvent::Warned { message: notice }).await?;
+        }
+        Ok(())
+    }
+
+    /// The request itself: see [`ask`](Self::ask).
+    async fn request(
+        &self,
+        messages: &[ChatMessage],
+        events: &Sender<AgentEvent>,
+    ) -> anyhow::Result<StreamOutcome> {
         if !self.stream {
             // The non-streaming path is complete by construction: the whole
-            // body arrived in one parse. It has no in-flight stop path of
-            // its own — `send` cannot observe the flag mid-body.
-            return Ok(StreamOutcome {
-                response: self
-                    .client
-                    .send(
-                        &self.model,
-                        messages,
-                        self.max_tokens,
-                        &self.tools.declarations(),
-                    )
-                    .await?,
-                complete: true,
-                aborted: false,
-            });
+            // body arrives in one parse. `send` cannot observe the flag
+            // mid-body, so the wait for the body is raced against it — a
+            // stop request then comes back as an aborted outcome holding
+            // nothing, which is the truth: nothing arrived.
+            let tools = self.tools.declarations();
+            let send = self
+                .client
+                .send(&self.model, messages, self.max_tokens, &tools);
+            return tokio::select! {
+                biased;
+                _ = super::wait_for_abort(&self.abort) => Ok(StreamOutcome {
+                    response: empty_response(),
+                    complete: false,
+                    aborted: true,
+                }),
+                res = send => res.map(|response| StreamOutcome {
+                    response,
+                    complete: true,
+                    aborted: false,
+                }),
+            };
         }
         let event_tx = events.clone();
         let send = self
@@ -98,5 +135,6 @@ fn empty_response() -> ChatResponse {
             finish_reason: None,
         }],
         usage: None,
+        timings: None,
     }
 }

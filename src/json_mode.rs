@@ -101,6 +101,9 @@ mod tests {
             },
             AgentEvent::TurnEnded {
                 stop_reason: "tool_calls".into(),
+                usage: None,
+                timings: None,
+                thinking_pct: None,
             },
             AgentEvent::TurnStarted,
             AgentEvent::AssistantText {
@@ -108,6 +111,9 @@ mod tests {
             },
             AgentEvent::TurnEnded {
                 stop_reason: "stop".into(),
+                usage: None,
+                timings: None,
+                thinking_pct: None,
             },
             AgentEvent::RunEnded { turns: 2 },
         ];

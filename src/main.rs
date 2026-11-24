@@ -4,6 +4,8 @@
 
 mod agent;
 mod config;
+#[cfg(test)]
+mod doc_sync;
 mod events;
 mod export;
 mod home;
@@ -98,6 +100,27 @@ struct Cli {
     /// project-file warning.
     #[arg(long)]
     no_hooks: bool,
+
+    /// Reasoning effort sent to supporting endpoints (e.g. "low", "medium", "high", "xhigh", "none").
+    /// Pass "" to clear a provider preset's default.
+    #[arg(long = "reasoning-effort", value_name = "EFFORT")]
+    reasoning_effort: Option<String>,
+
+    /// Cap thinking/reasoning tokens per turn (Strata/local backends). 0 disables any preset cap.
+    #[arg(long = "thinking-budget", value_name = "TOKENS")]
+    thinking_budget: Option<u32>,
+
+    /// Maximum turns per run (0 disables). Soft wrap-up nudge at 80% of budget.
+    #[arg(long = "max-turns", value_name = "N")]
+    max_turns: Option<u32>,
+
+    /// Persist and/or resume this exact session JSONL file path.
+    #[arg(
+        long = "session-file",
+        value_name = "PATH",
+        conflicts_with_all = ["continue", "resume", "no_session"]
+    )]
+    session_file: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -162,22 +185,48 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if cli.mode == Mode::Json {
-        spawn_ctrl_c(abort.clone());
+        let sigterm_hit = Arc::new(AtomicBool::new(false));
+        spawn_shutdown_signals(abort.clone(), sigterm_hit.clone());
         let prompt_arg = cli
             .prompt
             .clone()
             .or_else(|| cli.prompt_positional.clone())
             .unwrap_or_default();
         let prompt = if prompt_arg == "-" {
-            read_stdin().await?
+            tokio::select! {
+                biased;
+                _ = crate::agent::loop_::wait_for_abort(&abort) => {
+                    flush_and_exit(if sigterm_hit.load(Ordering::Acquire) { 143 } else { 130 });
+                }
+                res = read_stdin() => res?,
+            }
         } else {
             prompt_arg
         };
         if prompt.trim().is_empty() {
             bail!("empty prompt");
         }
-        let agent = open_agent(&cli, abort)?;
-        return json_mode::run_json(agent, prompt).await;
+        let agent = tokio::select! {
+            biased;
+            _ = crate::agent::loop_::wait_for_abort(&abort) => {
+                flush_and_exit(if sigterm_hit.load(Ordering::Acquire) { 143 } else { 130 });
+            }
+            res = open_agent(&cli, abort.clone()) => res?,
+        };
+        if sigterm_hit.load(Ordering::Acquire) {
+            flush_and_exit(143);
+        }
+        if abort.load(Ordering::Acquire) {
+            flush_and_exit(130);
+        }
+        let res = json_mode::run_json(agent, prompt).await;
+        if sigterm_hit.load(Ordering::Acquire) {
+            if let Err(e) = &res {
+                eprintln!("gg: {e:#}");
+            }
+            flush_and_exit(143);
+        }
+        return res;
     }
     if cli.prompt_positional.is_some() {
         bail!("a positional prompt is the --mode json spelling; print mode uses -p");
@@ -192,7 +241,21 @@ async fn main() -> anyhow::Result<()> {
         let cwd = std::env::current_dir()?;
         let mut cfg = config::load()?;
         cfg.apply_cli(cli.provider.as_deref(), cli.model.as_deref())?;
-        cfg.active_endpoint().require_auth()?;
+        cfg.apply_reasoning_cli(cli.reasoning_effort.as_deref(), cli.thinking_budget);
+        cfg.apply_max_turns_cli(cli.max_turns);
+        let mut endpoint = cfg.active_endpoint();
+        endpoint.require_auth()?;
+        crate::llm::client::maybe_probe_local_health(&mut endpoint).await;
+        cfg.context_window = endpoint.context_window;
+        cfg.compact_threshold_tokens = endpoint.compact_threshold_tokens;
+        if let Some(p) = cfg.providers.get_mut(&cfg.provider) {
+            if !p.context_window_explicit {
+                p.context_window = endpoint.context_window;
+            }
+            if !p.compact_threshold_explicit {
+                p.compact_threshold_tokens = endpoint.compact_threshold_tokens;
+            }
+        }
         // Hooks are user-level policy (§22), loaded once and shared by the
         // TUI factory. A project hooks file only produces a warning.
         let (hooks, hook_warnings) = agent::hooks::load(&cwd, cli.no_hooks)?;
@@ -260,11 +323,18 @@ async fn main() -> anyhow::Result<()> {
         };
     }
 
-    spawn_ctrl_c(abort.clone());
+    let sigterm_hit = Arc::new(AtomicBool::new(false));
+    spawn_shutdown_signals(abort.clone(), sigterm_hit.clone());
 
     let prompt_arg = cli.prompt.clone().unwrap_or_default();
     let prompt = if prompt_arg == "-" {
-        read_stdin().await?
+        tokio::select! {
+            biased;
+            _ = crate::agent::loop_::wait_for_abort(&abort) => {
+                flush_and_exit(if sigterm_hit.load(Ordering::Acquire) { 143 } else { 130 });
+            }
+            res = read_stdin() => res?,
+        }
     } else {
         prompt_arg
     };
@@ -272,7 +342,19 @@ async fn main() -> anyhow::Result<()> {
         bail!("empty prompt");
     }
 
-    let mut agent = open_agent(&cli, abort)?;
+    let mut agent = tokio::select! {
+        biased;
+        _ = crate::agent::loop_::wait_for_abort(&abort) => {
+            flush_and_exit(if sigterm_hit.load(Ordering::Acquire) { 143 } else { 130 });
+        }
+        res = open_agent(&cli, abort.clone()) => res?,
+    };
+    if sigterm_hit.load(Ordering::Acquire) {
+        flush_and_exit(143);
+    }
+    if abort.load(Ordering::Acquire) {
+        flush_and_exit(130);
+    }
 
     // Events flow through a channel to a drain task so progress renders
     // live on stderr while the run is still going. The drain owns the
@@ -294,12 +376,26 @@ async fn main() -> anyhow::Result<()> {
     let result = agent.run(prompt, &mut tx).await;
     drop(tx);
     let printer = drain.await.context("event renderer task panicked")?;
+    if sigterm_hit.load(Ordering::Acquire) {
+        if let Err(e) = &result {
+            eprintln!("gg: {e:#}");
+        } else if !printer.answer().is_empty() {
+            let _ = writeln!(std::io::stdout(), "{}", printer.answer());
+        }
+        flush_and_exit(143);
+    }
     result?;
 
     // A consumer that closed early (`… | head -c 5`) is a normal end for
     // a producer, not a failure — a failing answer write exits quietly.
     let _ = writeln!(std::io::stdout(), "{}", printer.answer());
     Ok(())
+}
+
+fn flush_and_exit(code: i32) -> ! {
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(code);
 }
 
 /// Write one batch of printer lines: spinner lines start with '\r' and
@@ -318,21 +414,33 @@ fn write_printer_lines(lines: Vec<String>) {
 
 /// Ctrl-C requests an abort; the loop stops between tool calls (§9) and
 /// the run finishes cleanly with whatever it had. A second Ctrl-C forces
-/// an immediate exit — tokio's handler replaces the default disposition,
-/// so without this the process could not be interrupted at all after the
-/// first press (e.g. mid-request, where the abort flag is not yet checked).
-fn spawn_ctrl_c(abort: Arc<AtomicBool>) {
+/// an immediate exit. On Unix, SIGTERM triggers a graceful abort and
+/// sets `sigterm_hit` so the caller can exit 143 after flushing output.
+fn spawn_shutdown_signals(abort: Arc<AtomicBool>, sigterm_hit: Arc<AtomicBool>) {
+    let abort_c = abort.clone();
     tokio::spawn(async move {
         loop {
             if tokio::signal::ctrl_c().await.is_err() {
                 return;
             }
-            if abort.swap(true, Ordering::Relaxed) {
-                std::process::exit(130);
+            if abort_c.swap(true, Ordering::AcqRel) {
+                flush_and_exit(130);
             }
             eprintln!("aborting… (Ctrl-C again to force)");
         }
     });
+    #[cfg(unix)]
+    if let Ok(mut sig) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        tokio::spawn(async move {
+            while sig.recv().await.is_some() {
+                sigterm_hit.store(true, Ordering::Release);
+                if abort.swap(true, Ordering::AcqRel) {
+                    flush_and_exit(143);
+                }
+                eprintln!("received SIGTERM, shutting down gracefully…");
+            }
+        });
+    }
 }
 
 async fn read_stdin() -> anyhow::Result<String> {
@@ -348,7 +456,9 @@ async fn read_stdin() -> anyhow::Result<String> {
 /// CLI flags → session pick. Both interfaces resolve flags through this
 /// one mapping.
 fn pick_of(cli: &Cli) -> tui::SessionPick {
-    if let Some(prefix) = &cli.resume {
+    if let Some(path) = &cli.session_file {
+        tui::SessionPick::Path(path.clone())
+    } else if let Some(prefix) = &cli.resume {
         tui::SessionPick::Prefix(prefix.clone())
     } else if cli.r#continue {
         tui::SessionPick::Latest
@@ -359,11 +469,14 @@ fn pick_of(cli: &Cli) -> tui::SessionPick {
 
 /// Build the Agent print mode runs (every mode persists by default, §13;
 /// -c/--resume replay an existing file).
-fn open_agent(cli: &Cli, abort: Arc<AtomicBool>) -> anyhow::Result<Agent> {
+async fn open_agent(cli: &Cli, abort: Arc<AtomicBool>) -> anyhow::Result<Agent> {
     let mut cfg = config::load()?;
     cfg.apply_cli(cli.provider.as_deref(), cli.model.as_deref())?;
-    let endpoint = cfg.active_endpoint();
+    cfg.apply_reasoning_cli(cli.reasoning_effort.as_deref(), cli.thinking_budget);
+    cfg.apply_max_turns_cli(cli.max_turns);
+    let mut endpoint = cfg.active_endpoint();
     endpoint.require_auth()?;
+    crate::llm::client::maybe_probe_local_health(&mut endpoint).await;
     let cwd = std::env::current_dir()?;
     let (hooks, hook_warnings) = agent::hooks::load(&cwd, cli.no_hooks)?;
     for warning in &hook_warnings {
@@ -412,6 +525,10 @@ fn boot_and_factory(
             model: None,
             list_models: false,
             no_hooks,
+            reasoning_effort: None,
+            thinking_budget: None,
+            max_turns: None,
+            session_file: None,
         };
         assemble_boot(&cfg, endpoint, &cwd, abort, &cli, pick, &hooks)
     });
@@ -495,7 +612,9 @@ fn build_agent(
         endpoint.context_window,
         hooks.clone(),
     )
-    .with_replay_reasoning(endpoint.replay_reasoning))
+    .with_replay_reasoning(endpoint.replay_reasoning)
+    .with_compact_threshold(endpoint.compact_threshold_tokens)
+    .with_max_turns(cfg.max_turns))
 }
 
 /// Resolve a session pick into (store, entries-to-replay, path). New:
@@ -521,6 +640,43 @@ fn open_session_for(
             let store = SessionStore::create(cwd, model)?;
             let path = store.path().to_path_buf();
             return Ok((Some(store), None, Some(path)));
+        }
+        tui::SessionPick::Path(path) => {
+            let resolved = if path.is_absolute() {
+                path
+            } else {
+                cwd.join(path)
+            };
+            let existing_non_empty = match std::fs::metadata(&resolved) {
+                Ok(m) => {
+                    if m.is_dir() {
+                        anyhow::bail!("--session-file {} is a directory", resolved.display());
+                    }
+                    m.len() > 0
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| format!("reading metadata for {}", resolved.display()));
+                }
+            };
+            if existing_non_empty {
+                let (_, mut entries, warnings) = agent::session::io::load(&resolved)?;
+                for warning in warnings {
+                    eprintln!("warning: {warning}");
+                }
+                let mut store = SessionStore::open_existing(&resolved)?;
+                let repaired =
+                    agent::session::io::repair_dangling_tool_calls(&mut entries, &mut store)?;
+                if repaired > 0 {
+                    eprintln!(
+                        "warning: repaired {repaired} interrupted tool call(s) from the previous run"
+                    );
+                }
+                return Ok((Some(store), Some(entries), Some(resolved)));
+            }
+            let store = SessionStore::create_at(resolved.clone(), cwd, model)?;
+            return Ok((Some(store), None, Some(resolved)));
         }
         tui::SessionPick::Latest => {
             let dir = agent::session::io::sessions_dir(cwd)
@@ -592,5 +748,34 @@ mod tests {
         assert!(list.list_models);
         assert!(parse(&["--list-models", "-p", "hi"]).is_err());
         assert!(parse(&["--list-models", "--watch"]).is_err());
+
+        let r = parse(&[
+            "--reasoning-effort",
+            "low",
+            "--thinking-budget",
+            "2048",
+            "-p",
+            "hi",
+        ])
+        .unwrap();
+        assert_eq!(r.reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(r.thinking_budget, Some(2048));
+
+        let w2 = parse(&[
+            "--max-turns",
+            "40",
+            "--session-file",
+            "/tmp/s.jsonl",
+            "-p",
+            "hi",
+        ])
+        .unwrap();
+        assert_eq!(w2.max_turns, Some(40));
+        assert_eq!(
+            w2.session_file.as_deref(),
+            Some(std::path::Path::new("/tmp/s.jsonl"))
+        );
+        assert!(parse(&["--session-file", "/tmp/s.jsonl", "-c", "-p", "hi"]).is_err());
+        assert!(parse(&["--session-file", "/tmp/s.jsonl", "--no-session", "-p", "hi"]).is_err());
     }
 }

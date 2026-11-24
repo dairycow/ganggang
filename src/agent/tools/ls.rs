@@ -109,11 +109,14 @@ included. Entries that cannot be read are skipped with a noted line."
         })
     }
 
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
     fn execute<'a>(&'a self, args: &'a Value, cancel: &'a Cancel) -> BoxFuture<'a, ToolResult> {
         Box::pin(async move {
-            // Bounded work: one directory, capped entries. The stop
-            // request is honored at the boundary; nothing in here is worth
-            // polling it inside.
+            // Bounded work: one directory, read once. Refusing to start is
+            // the whole cancellation story.
             if cancel.is_cancelled() {
                 return ToolResult::err("aborted by user".into());
             }
@@ -121,7 +124,11 @@ included. Entries that cannot be read are skipped with a noted line."
                 Ok(a) => a,
                 Err(e) => return ToolResult::err(e),
             };
-            ls(&self.resolve(args.path.as_deref()))
+            let path = self.resolve(args.path.as_deref());
+            match tokio::task::spawn_blocking(move || ls(&path)).await {
+                Ok(res) => res,
+                Err(e) => ToolResult::err(format!("ls task failed: {e}")),
+            }
         })
     }
 }

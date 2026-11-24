@@ -54,8 +54,8 @@ pub struct Message {
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_error: bool,
     /// Thinking the model did before this message (`reasoning_content`,
-    /// M7.3). Persisted only when non-empty; replay never sends it back —
-    /// the model's thinking is for the human, not the next request.
+    /// M7.3). Persisted when non-empty and replayed according to
+    /// [`ReplayReasoning`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
 }
@@ -84,8 +84,67 @@ pub struct ToolCall {
     pub args_error: Option<String>,
 }
 
+/// How assistant thinking (`reasoning_content`) is replayed on subsequent
+/// requests.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReplayReasoning {
+    /// Never replay `reasoning_content` (default for non-reasoning models).
+    #[default]
+    Never,
+    /// Replay `reasoning_content` only for assistant turns since the last
+    /// `Role::User` message (keeps KV prefix append-only within a tool-use
+    /// turn, drops older thinking at user/compaction boundaries).
+    Turn,
+    /// Replay `reasoning_content` for all assistant turns in the active window.
+    All,
+}
+
+impl ReplayReasoning {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Never => "no",
+            Self::Turn => "turn",
+            Self::All => "yes",
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ReplayReasoning {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = ReplayReasoning;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a boolean or one of \"never\", \"turn\", \"all\"")
+            }
+            fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E> {
+                Ok(if v {
+                    ReplayReasoning::All
+                } else {
+                    ReplayReasoning::Never
+                })
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                match v.trim().to_ascii_lowercase().as_str() {
+                    "never" | "none" | "off" => Ok(ReplayReasoning::Never),
+                    "turn" => Ok(ReplayReasoning::Turn),
+                    "all" | "always" => Ok(ReplayReasoning::All),
+                    other => Err(E::custom(format!(
+                        "invalid replay_reasoning {other:?}; expected boolean or \"never\", \"turn\", \"all\""
+                    ))),
+                }
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
 /// Token usage recorded on assistant entries; the TUI footer totals these.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Usage {
     #[serde(default)]
     pub prompt_tokens: u32,
@@ -93,6 +152,32 @@ pub struct Usage {
     pub completion_tokens: u32,
     #[serde(default)]
     pub total_tokens: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u32>,
+}
+
+/// Percentage of output tokens spent on thinking, if known from usage or
+/// character ratio.
+pub fn thinking_pct(message: &Message) -> Option<u8> {
+    if let Some(u) = &message.usage
+        && let Some(r) = u.reasoning_tokens.filter(|&r| r > 0)
+        && u.completion_tokens > 0
+    {
+        return Some(((r as u64 * 100) / u.completion_tokens as u64).min(100) as u8);
+    }
+    let reason = message.reasoning.as_deref().filter(|r| !r.is_empty())?;
+    let reason_chars = reason.chars().count();
+    let out_chars = message.content.as_deref().map_or(0, |c| c.chars().count())
+        + message
+            .tool_calls
+            .iter()
+            .map(|c| c.args.to_string().chars().count())
+            .sum::<usize>();
+    let total = reason_chars + out_chars;
+    if total == 0 {
+        return None;
+    }
+    Some(((reason_chars * 100) / total).min(100) as u8)
 }
 
 fn is_false(b: &bool) -> bool {
@@ -128,19 +213,36 @@ pub(crate) fn last_entry_id(entry: &Entry) -> String {
 /// The LAST compaction governs (§14): its summary leads as a user note,
 /// then the entries from `firstKeptId` onward replay in full. Raw entries
 /// before the boundary stay in the file — only the replay view shrinks.
-/// `firstKeptId` in gg-written files always names a user message; if a
-/// hand-edited file points mid-span instead, replay snaps forward to the
-/// next user message rather than orphaning a tool result from its call.
+/// `firstKeptId` in gg-written files names a user message (or an assistant
+/// boundary in single-prompt multi-turn runs); if a hand-edited file points
+/// mid-span instead, replay snaps forward to the next user or assistant
+/// message rather than orphaning a tool result from its call.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn to_wire(entries: &[Entry]) -> Vec<ChatMessage> {
-    to_wire_with(entries, false)
+    to_wire_with(entries, ReplayReasoning::Never)
 }
 
-pub fn to_wire_with(entries: &[Entry], replay_reasoning: bool) -> Vec<ChatMessage> {
+pub fn to_wire_with(entries: &[Entry], replay_reasoning: ReplayReasoning) -> Vec<ChatMessage> {
     let plain = |slice: &[Entry]| {
+        let last_user_idx = slice.iter().rposition(
+            |e| matches!(e, Entry::Message { message, .. } if message.role == Role::User),
+        );
         slice
             .iter()
-            .filter_map(|entry| match entry {
-                Entry::Message { message, .. } => Some(message_to_wire(message, replay_reasoning)),
+            .enumerate()
+            .filter_map(|(i, entry)| match entry {
+                Entry::Message { message, .. } => {
+                    let include_reasoning = match replay_reasoning {
+                        ReplayReasoning::Never => false,
+                        ReplayReasoning::All => true,
+                        ReplayReasoning::Turn => last_user_idx.is_none_or(|u| i > u),
+                    };
+                    Some(message_to_wire(
+                        message,
+                        replay_reasoning,
+                        include_reasoning,
+                    ))
+                }
                 Entry::Compaction { .. } => None,
             })
             .collect::<Vec<_>>()
@@ -169,13 +271,52 @@ pub fn to_wire_with(entries: &[Entry], replay_reasoning: bool) -> Vec<ChatMessag
     };
     let kept = entries[start..]
         .iter()
-        .position(|e| matches!(e, Entry::Message { message, .. } if message.role == Role::User))
+        .position(|e| {
+            matches!(
+                e,
+                Entry::Message { message, .. } if matches!(message.role, Role::User | Role::Assistant)
+            )
+        })
         .map(|offset| start + offset);
+    let note_content = match kept {
+        Some(offset)
+            if matches!(
+                &entries[offset],
+                Entry::Message { message, .. } if message.role == Role::Assistant
+            ) =>
+        {
+            let pinned = entries[..offset].iter().rev().find_map(|e| match e {
+                Entry::Message { message, .. }
+                    if message.role == Role::User
+                        && message
+                            .content
+                            .as_deref()
+                            .is_some_and(|c| !c.is_empty() && c != "[aborted by user]") =>
+                {
+                    message.content.as_deref()
+                }
+                _ => None,
+            });
+            match pinned {
+                Some(req) => {
+                    let req_capped = if req.chars().count() > 16_384 {
+                        let cut: String = req.chars().take(16_384).collect();
+                        format!("{cut}\n[truncated]")
+                    } else {
+                        req.to_string()
+                    };
+                    format!(
+                        "[original user request]\n{req_capped}\n\n[conversation before this point was compacted]\n{summary}"
+                    )
+                }
+                None => format!("[conversation before this point was compacted]\n{summary}"),
+            }
+        }
+        _ => format!("[conversation before this point was compacted]\n{summary}"),
+    };
     let note = ChatMessage {
         role: "user".to_string(),
-        content: Some(format!(
-            "[conversation before this point was compacted]\n{summary}"
-        )),
+        content: Some(note_content),
         ..ChatMessage::default()
     };
     match kept {
@@ -185,20 +326,28 @@ pub fn to_wire_with(entries: &[Entry], replay_reasoning: bool) -> Vec<ChatMessag
             out.extend(plain(&entries[offset..]));
             out
         }
-        // No user message at or after the boundary: the note alone
-        // carries the context forward.
+        // No user or assistant message at or after the boundary: the note
+        // alone carries the context forward.
         None => vec![note],
     }
 }
 
-fn message_to_wire(m: &Message, replay_reasoning: bool) -> ChatMessage {
+fn message_to_wire(
+    m: &Message,
+    replay_reasoning: ReplayReasoning,
+    include_reasoning: bool,
+) -> ChatMessage {
     let role = match m.role {
         Role::User => "user",
         Role::Assistant => "assistant",
         Role::ToolResult => "tool",
     };
-    let reasoning_content = if replay_reasoning && m.role == Role::Assistant {
-        Some(m.reasoning.clone().unwrap_or_default())
+    let reasoning_content = if include_reasoning && m.role == Role::Assistant {
+        match replay_reasoning {
+            ReplayReasoning::Never => None,
+            ReplayReasoning::Turn => m.reasoning.clone().filter(|r| !r.is_empty()),
+            ReplayReasoning::All => Some(m.reasoning.clone().unwrap_or_default()),
+        }
     } else {
         None
     };
@@ -259,10 +408,14 @@ pub fn from_response(resp: ChatResponse) -> anyhow::Result<(Message, Vec<String>
         content: wire.content,
         tool_calls,
         tool_call_id: None,
-        usage: resp.usage.map(|u| Usage {
-            prompt_tokens: u.prompt_tokens,
-            completion_tokens: u.completion_tokens,
-            total_tokens: u.total_tokens,
+        usage: resp.usage.map(|u| {
+            let reasoning_tokens = u.effective_reasoning_tokens();
+            Usage {
+                prompt_tokens: u.prompt_tokens,
+                completion_tokens: u.completion_tokens,
+                total_tokens: u.total_tokens,
+                reasoning_tokens,
+            }
         }),
         is_error: false,
         reasoning: wire

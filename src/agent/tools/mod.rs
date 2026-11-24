@@ -4,9 +4,8 @@
 //! fed back to the model — only transport and session IO may abort a run.
 
 use std::future::Future;
-use std::pin::Pin;
-
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -58,7 +57,9 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// An `Arc<AtomicBool>` wrapper over the loop's abort flag: a tool whose
 /// action can run a long time (a shell command, a directory walk) polls it
 /// and stops, so Esc is not dead until the next call boundary. The check is
-/// one relaxed atomic load, cheap enough to repeat inside a walk.
+/// one acquire load — it pairs with the loop's release store, so a tool on
+/// another thread sees a stop request as soon as it is made — and it is
+/// cheap enough to repeat inside a walk.
 #[derive(Clone)]
 pub struct Cancel(Arc<AtomicBool>);
 
@@ -68,7 +69,7 @@ impl Cancel {
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
+        self.0.load(Ordering::Acquire)
     }
 
     /// A flag nothing ever sets, for a caller that must supply a [`Cancel`]
@@ -86,6 +87,12 @@ pub trait Tool: Send + Sync {
     /// JSON Schema for the `parameters` object of the function declaration.
     fn schema(&self) -> Value;
 
+    /// Whether this tool is read-only and safe to run concurrently with other
+    /// read-only tools in the same batch.
+    fn is_read_only(&self) -> bool {
+        false
+    }
+
     /// Run one call. `cancel` is the user's stop request: a tool with an
     /// unbounded or long-running action checks it and stops promptly,
     /// answering with an error result that says it was aborted. It lives as
@@ -95,7 +102,7 @@ pub trait Tool: Send + Sync {
 
 /// Ordered tool set. Order of registration is the order of advertisement.
 #[derive(Default)]
-pub struct Registry(Vec<Box<dyn Tool>>);
+pub struct Registry(Vec<Arc<dyn Tool>>);
 
 impl Registry {
     pub fn new() -> Self {
@@ -103,18 +110,25 @@ impl Registry {
     }
 
     pub fn register(&mut self, tool: Box<dyn Tool>) {
-        self.0.push(tool);
+        self.0.push(Arc::from(tool));
     }
 
     /// Drop tools the allowlist does not name. The caller (CLI/config,
     /// spec §10) validates names beforehand — unknown names never reach
     /// this quietly shrinking the registry.
-    pub fn retain(&mut self, keep: impl FnMut(&Box<dyn Tool>) -> bool) {
-        self.0.retain(keep);
+    pub fn retain(&mut self, mut keep: impl FnMut(&Arc<dyn Tool>) -> bool) {
+        self.0.retain(|t| keep(t));
     }
 
-    pub fn tools(&self) -> &[Box<dyn Tool>] {
+    pub fn tools(&self) -> &[Arc<dyn Tool>] {
         &self.0
+    }
+
+    pub fn is_read_only(&self, name: &str) -> bool {
+        self.0
+            .iter()
+            .find(|t| t.name() == name)
+            .is_some_and(|t| t.is_read_only())
     }
 
     /// The request `tools` array: OpenAI function declarations.
@@ -152,6 +166,50 @@ impl Registry {
         }
         tool.execute(&call.args, cancel).await
     }
+
+    /// Execute a slice of calls concurrently (bounded at 8 in-flight),
+    /// returning results in the exact original call order. Every call gets
+    /// the user's stop request: one that has not started when it lands is
+    /// answered without running, and one already running sees it through
+    /// the same [`Cancel`] a sequential call would.
+    pub async fn dispatch_parallel(&self, calls: &[ToolCall], cancel: &Cancel) -> Vec<ToolResult> {
+        let sem = Arc::new(tokio::sync::Semaphore::new(8));
+        let mut set = tokio::task::JoinSet::new();
+        for (idx, call) in calls.iter().enumerate() {
+            if let Some(detail) = &call.args_error {
+                let msg = format!("arguments were not valid JSON: {detail}");
+                set.spawn(async move { (idx, ToolResult::err(msg)) });
+                continue;
+            }
+            let Some(tool) = self.0.iter().find(|t| t.name() == call.name).cloned() else {
+                let msg = format!("unknown tool: {}", call.name);
+                set.spawn(async move { (idx, ToolResult::err(msg)) });
+                continue;
+            };
+            let args = call.args.clone();
+            let sem = sem.clone();
+            let cancel = cancel.clone();
+            set.spawn(async move {
+                let _permit = sem.acquire_owned().await;
+                if cancel.is_cancelled() {
+                    return (idx, ToolResult::err("aborted before execution".into()));
+                }
+                let res = tool.execute(&args, &cancel).await;
+                (idx, res)
+            });
+        }
+        let mut out: Vec<Option<ToolResult>> = vec![None; calls.len()];
+        while let Some(joined) = set.join_next().await {
+            if let Ok((idx, res)) = joined
+                && let Some(slot) = out.get_mut(idx)
+            {
+                *slot = Some(res);
+            }
+        }
+        out.into_iter()
+            .map(|r| r.unwrap_or_else(|| ToolResult::err("tool task panicked".into())))
+            .collect()
+    }
 }
 
 /// Deserialize a tool's arguments permissively into its own args struct,
@@ -172,6 +230,32 @@ pub(crate) fn display(path: &std::path::Path) -> String {
         out.push(component.as_os_str());
     }
     out.display().to_string()
+}
+
+pub(crate) const PRUNED_DIRS: &[&str] = &[".git", "target", "node_modules"];
+
+pub(crate) fn display_relative(cwd: &std::path::Path, path: &std::path::Path) -> String {
+    let rel = path.strip_prefix(cwd).unwrap_or(path);
+    let rendered = display(rel);
+    if rendered.is_empty() {
+        ".".to_string()
+    } else {
+        rendered
+    }
+}
+
+pub(crate) fn resolve_walk_root(root: &std::path::Path) -> (PathBuf, bool) {
+    let is_symlink = std::fs::symlink_metadata(root)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    if is_symlink {
+        (
+            std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()),
+            true,
+        )
+    } else {
+        (root.to_path_buf(), false)
+    }
 }
 
 /// Names of the default registry's tools, in advertisement order. The
@@ -275,6 +359,46 @@ mod tests {
             .await;
         assert!(result.is_error);
         assert_eq!(result.output, "aborted by user");
+    }
+
+    /// A stop request already in effect answers every call of a parallel
+    /// batch without running any of them — the rule sequential dispatch
+    /// has, because the batch is made of the same calls.
+    #[tokio::test]
+    async fn a_stopped_run_starts_nothing_from_a_parallel_batch() {
+        let mut registry = Registry::new();
+        registry.register(Box::new(Echo));
+        let cancel = Cancel::new(Arc::new(AtomicBool::new(true)));
+        let calls = [
+            call("echo", serde_json::json!({"text": "a"})),
+            call("echo", serde_json::json!({"text": "b"})),
+        ];
+
+        let results = registry.dispatch_parallel(&calls, &cancel).await;
+        assert_eq!(results.len(), 2, "every call still gets its result");
+        assert!(
+            results
+                .iter()
+                .all(|r| r.is_error && r.output == "aborted before execution"),
+            "{results:?}"
+        );
+    }
+
+    /// With nothing stopped, a parallel batch runs every call and reports
+    /// them in the order they were made, whatever order they finish in.
+    #[tokio::test]
+    async fn a_parallel_batch_runs_every_call_and_keeps_their_order() {
+        let mut registry = Registry::new();
+        registry.register(Box::new(Echo));
+        let calls = [
+            call("echo", serde_json::json!({"text": "first"})),
+            call("echo", serde_json::json!({"text": "second"})),
+        ];
+
+        let results = registry.dispatch_parallel(&calls, &Cancel::none()).await;
+        let outputs: Vec<&str> = results.iter().map(|r| r.output.as_str()).collect();
+        assert_eq!(outputs, ["first", "second"]);
+        assert!(results.iter().all(|r| !r.is_error), "{results:?}");
     }
 
     #[test]

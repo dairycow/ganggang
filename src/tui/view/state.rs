@@ -5,9 +5,13 @@
 //! [`layout`](super::super::layout)'s, the style is
 //! [`theme`](super::super::theme)'s, and what a line means is the
 //! transcript model's.
-//! The popup's selection and the run/scroll keys are the other two halves
-//! of the same struct: [`popup`] and [`turn`].
+//!
+//! The struct and its construction live here; its behaviour is split by
+//! what it is about: [`log`] is the conversation (what is pushed, seeded,
+//! and measured), [`turn`] the live run (starting, stopping, recalling,
+//! scrolling), and [`popup`] the suggestion list's selection.
 
+mod log;
 mod popup;
 mod turn;
 
@@ -19,8 +23,7 @@ use super::super::footer::Footer;
 use super::super::history::History;
 use super::super::input::Editor;
 use super::super::theme::Palette;
-use super::super::transcript::{RenderedLine, Transcript};
-use crate::events::AgentEvent;
+use super::super::transcript::Transcript;
 
 /// Everything the draw closure needs; owned by the event loop.
 pub struct State {
@@ -143,155 +146,6 @@ impl State {
     /// The palette in use.
     pub fn palette(&self) -> Palette {
         self.palette
-    }
-
-    /// A run reported its last request's context usage.
-    pub fn set_context_tokens(&mut self, context_tokens: u64) {
-        self.last_context_tokens = context_tokens;
-        self.footer.set_context(context_tokens, self.context_window);
-    }
-
-    pub fn set_model(&mut self, label: &str, context_window: u32) {
-        self.footer.set_model(label);
-        self.context_window = context_window as u64;
-        self.footer
-            .set_context(self.last_context_tokens, self.context_window);
-    }
-
-    pub fn push_user(&mut self, text: &str) {
-        self.transcript.push_user(text);
-    }
-
-    pub fn push_info(&mut self, text: &str) {
-        self.transcript.push_info(text);
-    }
-
-    pub fn push_warning(&mut self, message: &str) {
-        self.transcript.apply(&AgentEvent::Warned {
-            message: message.to_string(),
-        });
-    }
-
-    pub fn push_shell(
-        &mut self,
-        command: &str,
-        output: &str,
-        exit_code: Option<i32>,
-        to_context: bool,
-    ) {
-        self.transcript
-            .push_shell(command, output, exit_code, to_context);
-    }
-
-    /// The last assistant text, for Ctrl+X.
-    pub fn last_answer(&self) -> Option<String> {
-        self.transcript.last_answer().map(String::from)
-    }
-
-    /// Whether the session has nothing to show yet — the transcript empty
-    /// and nothing carried over from a session file. That, not a scroll
-    /// position or a draft, is what the welcome block answers.
-    pub fn is_quiet(&self) -> bool {
-        self.transcript.is_empty()
-    }
-
-    /// Every path that starts work: busy flag + footer indicator, and no
-    /// stopping mark left over from a cancel the last run did not need.
-    pub fn begin_run(&mut self) {
-        self.busy = true;
-        self.interrupt_armed = false;
-        self.footer.set_busy(true);
-        self.footer.set_stopping(false);
-    }
-
-    pub fn record_totals(&mut self, tokens_in: u64, tokens_out: u64, entries: usize) {
-        self.tokens_in = tokens_in;
-        self.tokens_out = tokens_out;
-        self.entries = entries;
-    }
-
-    /// Seed the view from persisted entries (resume): transcript blocks
-    /// from the disk-known conversation, footer totals from its usage.
-    /// Without this a resumed session renders blank and reports 0 tokens
-    /// until the first new run.
-    pub fn seed_from_entries(&mut self, entries: &[crate::agent::session::Entry]) {
-        self.transcript.extend_from_entries(entries);
-        let (tokens_in, tokens_out) = super::super::agent_task::usage_totals(entries);
-        self.footer.set_usage(tokens_in, tokens_out);
-        self.record_totals(tokens_in, tokens_out, entries.len());
-    }
-
-    /// `/new` / `/resume`: the view starts describing the new session.
-    /// The transcript keeps prior content — it is what the human saw.
-    pub fn new_session(
-        &mut self,
-        session_path: Option<std::path::PathBuf>,
-        sessions_disabled: bool,
-    ) {
-        self.session_path = session_path;
-        self.sessions_disabled = sessions_disabled;
-        self.entries = 0;
-        self.tokens_in = 0;
-        self.tokens_out = 0;
-        // A recall from the old session has nothing to do with the new one;
-        // a Ctrl+C that was waiting to be confirmed is over too.
-        self.history.reset();
-        self.set_stopping(false);
-        self.interrupt_armed = false;
-        let where_ = self
-            .session_path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "not persisted".into());
-        self.transcript
-            .push_info(&format!("— new session — {where_}"));
-    }
-
-    /// Run-level failures render as warnings in the transcript — the same
-    /// shape a `Warned` event uses.
-    pub fn push_failure(&mut self, error: &str) {
-        self.transcript.apply(&AgentEvent::Warned {
-            message: format!("run failed: {error}"),
-        });
-    }
-
-    /// Command failures (a bad /resume index, a missing skill) are local
-    /// mistakes, not run failures — their own shape, no alarm prefix.
-    pub fn push_command_error(&mut self, message: &str) {
-        self.transcript.push_command_error(message);
-    }
-
-    pub fn apply(&mut self, event: &AgentEvent) {
-        self.transcript.apply(event);
-    }
-
-    /// Ctrl+O: expand the most recent collapsed call; when all are
-    /// expanded, collapse them all (the transcript's documented rule).
-    pub fn toggle_expand(&mut self) {
-        self.transcript.toggle_expand();
-    }
-
-    /// Ctrl+T: show/hide the model's thinking (stored either way).
-    pub fn toggle_thinking(&mut self) {
-        self.transcript.toggle_thinking();
-    }
-
-    /// The transcript's rendered lines, for the draw pass and for the
-    /// scroll clamp's lower bound.
-    pub(super) fn lines(&self) -> Vec<RenderedLine> {
-        self.transcript.render()
-    }
-
-    /// The spinner's next frame, called from the event loop's 100 ms timer
-    /// arm — which the loop arms only while a run is live, so an idle view
-    /// never wakes a frame on a timer.
-    pub fn tick_spinner(&mut self) {
-        self.footer.tick();
-    }
-
-    /// Whether anything is turning a spinner right now.
-    pub fn spinning(&self) -> bool {
-        self.footer.spinning()
     }
 
     // Test seams: the transcript and scroll offset are view-internal; the

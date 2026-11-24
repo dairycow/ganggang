@@ -26,6 +26,7 @@ pub struct Restart {
 /// conversation.
 pub fn restart_plan(
     cfg: &Config,
+    cwd: &Path,
     session: Option<&Path>,
     draft: &str,
     original: &[OsString],
@@ -36,18 +37,22 @@ pub fn restart_plan(
         "session file {} is gone; --watch cannot continue it (start a fresh one with /new)",
         session.display()
     );
-    let id = session_id(session)?;
     save_draft(session, draft)?;
+    let in_sessions_dir = crate::agent::session::io::sessions_dir(cwd)
+        .is_some_and(|dir| session.parent() == Some(dir.as_path()));
+    let args = match session_id(session) {
+        Ok(id) if in_sessions_dir && id.len() == 8 && id.chars().all(|c| c.is_ascii_hexdigit()) => {
+            restart_args(original, &id)
+        }
+        _ => restart_args_with_file(original, session),
+    };
     Ok(Restart {
         binary: cfg.binary.clone(),
-        args: restart_args(original, &id),
+        args,
     })
 }
 
-/// The argv for the new process: the original minus session selection,
-/// plus `--resume <id>`. `--watch` and every other flag survive, so the
-/// restarted run keeps watching and stays the same kind of run.
-pub fn restart_args(original: &[OsString], session_id: &str) -> Vec<OsString> {
+fn strip_session_flags(original: &[OsString]) -> Vec<OsString> {
     let mut args = Vec::with_capacity(original.len() + 2);
     let mut iter = original.iter();
     while let Some(arg) = iter.next() {
@@ -55,15 +60,30 @@ pub fn restart_args(original: &[OsString], session_id: &str) -> Vec<OsString> {
         match text.as_ref() {
             "-c" | "--continue" | "--no-session" => {}
             // clap takes both spellings; the value goes with the flag.
-            "--resume" => {
+            "--resume" | "--session-file" => {
                 iter.next();
             }
-            _ if text.starts_with("--resume=") => {}
+            _ if text.starts_with("--resume=") || text.starts_with("--session-file=") => {}
             _ => args.push(arg.clone()),
         }
     }
+    args
+}
+
+/// The argv for the new process: the original minus session selection,
+/// plus `--resume <id>`. `--watch` and every other flag survive, so the
+/// restarted run keeps watching and stays the same kind of run.
+pub fn restart_args(original: &[OsString], session_id: &str) -> Vec<OsString> {
+    let mut args = strip_session_flags(original);
     args.push(OsString::from("--resume"));
     args.push(OsString::from(session_id));
+    args
+}
+
+fn restart_args_with_file(original: &[OsString], session: &Path) -> Vec<OsString> {
+    let mut args = strip_session_flags(original);
+    args.push(OsString::from("--session-file"));
+    args.push(session.as_os_str().to_os_string());
     args
 }
 
@@ -236,11 +256,11 @@ mod tests {
             binary: dir.path().join("gg"),
             roots: Vec::new(),
         };
-        assert!(restart_plan(&cfg, None, "", &[]).is_err());
+        assert!(restart_plan(&cfg, dir.path(), None, "", &[]).is_err());
 
         let missing = dir.path().join("20261123-161234-abcd1234.jsonl");
         assert!(
-            restart_plan(&cfg, Some(&missing), "", &[]).is_err(),
+            restart_plan(&cfg, dir.path(), Some(&missing), "", &[]).is_err(),
             "a vanished session cannot be resumed"
         );
     }
@@ -265,6 +285,46 @@ mod tests {
                 "deepseek",
                 "--model",
                 "deepseek-flash",
+            ])
+        );
+    }
+
+    #[test]
+    fn restart_args_strips_session_file_and_plan_falls_back_for_custom_names() {
+        let original = argv(&["--watch", "--session-file", "/tmp/custom.jsonl"]);
+        assert_eq!(
+            restart_args(&original, "deadbeef"),
+            argv(&["--watch", "--resume", "deadbeef"])
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            root: dir.path().to_path_buf(),
+            profile: super::super::config::Profile::Debug,
+            binary: dir.path().join("gg"),
+            roots: Vec::new(),
+        };
+        let hyphenated = dir.path().join("my-custom-session.jsonl");
+        std::fs::write(&hyphenated, "{}\n").unwrap();
+        let plan1 = restart_plan(&cfg, dir.path(), Some(&hyphenated), "", &original).unwrap();
+        assert_eq!(
+            plan1.args,
+            argv(&[
+                "--watch",
+                "--session-file",
+                hyphenated.to_string_lossy().as_ref()
+            ])
+        );
+
+        let external_hex = dir.path().join("20261123-161234-abcd1234.jsonl");
+        std::fs::write(&external_hex, "{}\n").unwrap();
+        let plan2 = restart_plan(&cfg, dir.path(), Some(&external_hex), "", &original).unwrap();
+        assert_eq!(
+            plan2.args,
+            argv(&[
+                "--watch",
+                "--session-file",
+                external_hex.to_string_lossy().as_ref()
             ])
         );
     }

@@ -196,3 +196,48 @@ async fn aborting_before_the_response_head_is_an_abort_error() {
         "a stop request is never retried"
     );
 }
+
+/// The wait before a retry belongs to the stop request too: a long
+/// `Retry-After` is not sat out once the user has asked for no more
+/// requests, and none is made.
+#[tokio::test]
+async fn a_stop_request_ends_a_long_retry_after_wait() {
+    let server = Scripted::spawn(vec![http(
+        "429 Too Many Requests",
+        "Retry-After: 30\r\n",
+        "slow down",
+    )]);
+    let flag = Arc::new(AtomicBool::new(false));
+    let setter = {
+        let flag = flag.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            flag.store(true, Ordering::SeqCst);
+        })
+    };
+    let started = std::time::Instant::now();
+    let err = tokio::time::timeout(
+        Duration::from_secs(5),
+        server
+            .client()
+            .send_stream("m", &[], 64, &[], &flag, |_| Box::pin(async {})),
+    )
+    .await
+    .expect("the wait must end on the stop request, not on the Retry-After")
+    .unwrap_err();
+    setter.join().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "the backoff was sat out: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        format!("{err:#}").contains("aborted by user"),
+        "the stop request, not the 429, is the verdict: {err:#}"
+    );
+    assert_eq!(
+        server.attempts.load(Ordering::SeqCst),
+        1,
+        "no retry was made"
+    );
+}

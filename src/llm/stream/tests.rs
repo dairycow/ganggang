@@ -83,6 +83,7 @@ fn assembles_a_text_stream_into_the_non_streaming_response() {
             "finish_reason": "stop",
         }],
         "usage": {"prompt_tokens": 66, "completion_tokens": 41, "total_tokens": 107},
+        "timings": {"predicted_n": 41},
     }))
     .unwrap();
     assert_eq!(asm.finish(), expected);
@@ -395,4 +396,22 @@ fn delta_reasoning_fallback_populates_thinking_and_reasoning_content() {
         resp.choices[0].message.reasoning_content.as_deref(),
         Some("step 1")
     );
+}
+
+#[test]
+fn assembles_full_strata_timings_and_usage() {
+    let lines = [
+        r#"{"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}"#,
+        r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"timings":{"cache_n":0,"prompt_n":42,"prompt_ms":1653.5,"prompt_per_second":25.4,"predicted_n":22,"predicted_ms":520.2,"predicted_per_second":42.3}}"#,
+        r#"{"choices":[],"usage":{"prompt_tokens":42,"completion_tokens":22,"total_tokens":64}}"#,
+    ];
+    let mut asm = Assembler::default();
+    for line in lines {
+        asm.feed(serde_json::from_str(line).unwrap());
+    }
+    let resp = asm.finish();
+    let timings = resp.timings.expect("timings captured");
+    assert_eq!(timings.decode_tok_per_sec(), Some(42.3));
+    assert_eq!(timings.prompt_tok_per_sec(), Some(25.4));
+    assert_eq!(resp.usage.unwrap().total_tokens, 64);
 }

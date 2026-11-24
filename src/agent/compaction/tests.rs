@@ -29,11 +29,21 @@ fn msg_entry(id: &str, role: Role, content: &str, usage: Option<Usage>) -> Entry
 fn trigger_fires_past_the_reserved_line() {
     let window = 131_072u32;
     let line = window - RESERVE;
-    assert!(!should_compact(line, window), "exactly at the line holds");
-    assert!(should_compact(line + 1, window), "one past triggers");
-    assert!(!should_compact(0, window));
+    assert!(
+        !should_compact(line, window, None),
+        "exactly at the line holds"
+    );
+    assert!(should_compact(line + 1, window, None), "one past triggers");
+    assert!(!should_compact(0, window, None));
     // Degenerate tiny window: reserve exceeds it entirely.
-    assert!(should_compact(1, 8_000));
+    assert!(should_compact(1, 8_000, None));
+
+    // Threshold clamps below window - RESERVE when smaller, and is
+    // clamped by window - RESERVE when larger.
+    assert!(!should_compact(65_536, 262_144, Some(65_536)));
+    assert!(should_compact(65_537, 262_144, Some(65_536)));
+    assert!(!should_compact(window - RESERVE, window, Some(200_000)));
+    assert!(should_compact(window - RESERVE + 1, window, Some(200_000)));
 }
 
 /// Usage comes from the LAST assistant entry that has one — not the
@@ -50,6 +60,7 @@ fn context_tokens_come_from_the_last_assistant_usage() {
                 prompt_tokens: 100,
                 completion_tokens: 20,
                 total_tokens: 120,
+                ..Usage::default()
             }),
         ),
         msg_entry("t1", Role::ToolResult, "output", None),
@@ -61,6 +72,7 @@ fn context_tokens_come_from_the_last_assistant_usage() {
                 prompt_tokens: 300,
                 completion_tokens: 40,
                 total_tokens: 340,
+                ..Usage::default()
             }),
         ),
     ];
@@ -104,6 +116,7 @@ fn entry_estimates_measure_own_text_only() {
             prompt_tokens: 9_999,
             completion_tokens: 9_999,
             total_tokens: 19_998,
+            ..Usage::default()
         }),
     );
     assert_eq!(entry_token_estimate(&e), 100);
@@ -256,4 +269,73 @@ fn second_compaction_walks_only_the_active_region() {
     ];
     // Walk stops at t2 (suffix 16k); snapping back opens on u2.
     assert_eq!(cut_point(&cut_inside).as_deref(), Some("u2"));
+}
+
+#[test]
+fn single_run_multi_turn_cuts_at_assistant_boundary_and_repeats() {
+    let entries = vec![
+        big("u1", Role::User, 1_000),
+        big("a1", Role::Assistant, 6_000),
+        big("t1", Role::ToolResult, 6_000),
+        big("a2", Role::Assistant, 6_000),
+        big("t2", Role::ToolResult, 6_000),
+        big("a3", Role::Assistant, 6_000),
+        big("t3", Role::ToolResult, 6_000),
+    ];
+    let first = cut_point(&entries).expect("assistant boundary cut");
+    assert_eq!(first, "a2");
+
+    // Second compaction after a1/t1 were summarized:
+    let mut with_cmp = entries;
+    with_cmp.push(compaction_entry("a2"));
+    with_cmp.push(big("a4", Role::Assistant, 6_000));
+    with_cmp.push(big("t4", Role::ToolResult, 6_000));
+    let second = cut_point(&with_cmp).expect("second assistant boundary cut");
+    assert_eq!(second, "a3");
+}
+
+#[test]
+fn cut_point_with_counts_reasoning_when_replayed() {
+    let mut a1 = big("a1", Role::Assistant, 1_000);
+    if let Entry::Message { message, .. } = &mut a1 {
+        message.reasoning = Some("r".repeat(12_000 * 4));
+    }
+    let entries = vec![
+        big("u1", Role::User, 1_000),
+        a1,
+        big("t1", Role::ToolResult, 1_000),
+        big("a2", Role::Assistant, 5_000),
+        big("t2", Role::ToolResult, 5_000),
+    ];
+    // Without reasoning: 13k <= KEEP_RECENT -> None.
+    assert_eq!(cut_point_with(&entries, ReplayReasoning::Never), None);
+    // With reasoning: 25k > KEEP_RECENT -> cuts at a2.
+    assert_eq!(
+        cut_point_with(&entries, ReplayReasoning::Turn).as_deref(),
+        Some("a2")
+    );
+}
+
+#[test]
+fn cut_point_with_turn_reasoning_ignores_prior_turns_and_abort_markers() {
+    let mut a1 = big("a1", Role::Assistant, 1_000);
+    if let Entry::Message { message, .. } = &mut a1 {
+        message.reasoning = Some("r".repeat(12_000 * 4));
+    }
+    let entries = vec![
+        big("u1", Role::User, 1_000),
+        a1,
+        big("t1", Role::ToolResult, 1_000),
+        msg_entry("abort1", Role::User, "[aborted by user]", None),
+        big("u2", Role::User, 1_000),
+        big("a2", Role::Assistant, 5_000),
+        big("t2", Role::ToolResult, 5_000),
+    ];
+    // In Turn mode, a1's reasoning is before u2 so it is not replayed (14k <= 20k -> None).
+    assert_eq!(cut_point_with(&entries, ReplayReasoning::Turn), None);
+    // In All mode, a1's reasoning IS replayed (26k > 20k) and must snap to u2, never abort1.
+    assert_eq!(
+        cut_point_with(&entries, ReplayReasoning::All).as_deref(),
+        Some("u2")
+    );
 }

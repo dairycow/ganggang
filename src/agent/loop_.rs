@@ -1,12 +1,15 @@
 //! The turn engine: request → tool calls → results → repeat (spec §9).
 //!
 //! Straight-line async on purpose. Tool failures are values the model can
-//! read; only transport and session errors propagate. There is no turn cap
-//! — a runaway loop is stopped by the user via the abort flag. The one
-//! exception is the continuation budget ([`cut`]): a truncated answer earns
-//! a bounded number of "keep going" turns, then the run ends cleanly.
+//! read; only transport and session errors propagate. Runaway loops are
+//! stopped by the user via the abort flag (Esc / Ctrl+C / SIGTERM) or an
+//! optional `--max-turns` / `GG_MAX_TURNS` cap. The cap bounds one thing
+//! more than it did: a truncated answer earns a few "keep going" turns
+//! ([`cut`]), and those count toward it like any other.
 
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use tokio::sync::mpsc::Sender;
 
@@ -15,18 +18,52 @@ use crate::llm::types::ChatMessage;
 
 use super::Agent;
 use super::compaction;
-use super::hooks::PreOutcome;
 use super::session::{self, Role};
-use super::tools::{Cancel, ToolResult};
+use super::tools::Cancel;
 
 mod ask;
 mod cut;
+mod dispatch;
 mod record;
 
+pub(crate) async fn wait_for_abort(abort: &Arc<AtomicBool>) {
+    loop {
+        if abort.load(Ordering::Acquire) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+pub(super) fn soft_nudge_turn(limit: u32) -> u32 {
+    ((limit as u64 * 4) / 5).clamp(2, limit as u64) as u32
+}
+
 impl Agent {
+    /// Record an abort marker in the session and emit `Warned` + `RunAborted`.
+    pub(super) async fn emit_abort(
+        &mut self,
+        events: &mut Sender<AgentEvent>,
+    ) -> anyhow::Result<()> {
+        self.push_message(Role::User, Some("[aborted by user]".into()))?;
+        events
+            .send(AgentEvent::Warned {
+                message: "run aborted".into(),
+            })
+            .await?;
+        events.send(AgentEvent::RunAborted).await?;
+        Ok(())
+    }
+
     /// Run one user input to completion: turn 1 asks the model, tool calls
-    /// are dispatched sequentially, each batch loops back into a new turn
-    /// until the model answers without wanting tools.
+    /// are dispatched (concurrently for contiguous read-only calls), each
+    /// batch loops back into a new turn until the model answers without
+    /// wanting tools.
+    ///
+    /// A turn that falls short — the stream was cut, the answer hit
+    /// `max_tokens`, or the user stopped it — is decided before anything
+    /// else happens to it ([`cut`]): its tool calls never run, and the run
+    /// either asks for the rest or ends with the partial answer standing.
     pub async fn run(
         &mut self,
         input: String,
@@ -35,9 +72,9 @@ impl Agent {
         // Every run starts with a clean stop-request state: a flag latched
         // by an earlier run (or an interface path that forgot to reset it)
         // would phantom-abort this one between tool calls.
-        self.abort.store(false, Ordering::Relaxed);
+        self.abort.store(false, Ordering::Release);
         // The tool-facing view of that same flag: one handle for every call
-        // this run dispatches, so a running tool can notice the stop request
+        // this run dispatches, so a running tool notices the stop request
         // instead of only being skipped between calls.
         let cancel = Cancel::new(self.abort.clone());
         // Set when a batch reports trigger-true/NothingToDo, so the
@@ -56,17 +93,18 @@ impl Agent {
         }
 
         let mut turns = 0u32;
-        // Continuations this run has spent on a truncated answer (§ cut).
+        let mut wrap_up_nudged = false;
+        // Continuations this run has spent on a short answer (§ cut).
         let mut continuations = 0u32;
         loop {
+            if self.abort.load(Ordering::Acquire) {
+                self.emit_abort(events).await?;
+                return Ok(());
+            }
             turns += 1;
             events.send(AgentEvent::TurnStarted).await?;
 
-            // The system prompt is rebuilt per request (spec §12: cheap,
-            // no invalidation bugs); the session entries replay after it.
             let system = self.system_prompt();
-            // The single most useful debugging affordance a harness can
-            // have (§12): dump the first assembled prompt on demand.
             if turns == 1 && std::env::var("GG_DEBUG_PROMPT").is_ok_and(|v| v == "1") {
                 eprintln!("{system}");
             }
@@ -76,9 +114,62 @@ impl Agent {
                 ..ChatMessage::default()
             }];
             messages.extend(session::to_wire_with(&self.entries, self.replay_reasoning));
+
+            if let Some(limit) = self.max_turns
+                && limit >= 2
+                && turns >= soft_nudge_turn(limit)
+            {
+                if !wrap_up_nudged {
+                    wrap_up_nudged = true;
+                    events
+                        .send(AgentEvent::Warned {
+                            message: format!(
+                                "approaching max_turns ({turns}/{limit}); nudging model to wrap up"
+                            ),
+                        })
+                        .await?;
+                }
+                let remaining = limit.saturating_sub(turns);
+                let notice = if remaining == 0 {
+                    format!(
+                        "[system notice: this is your final turn ({turns}/{limit}, 0 turn(s) remaining). Do not call any tools; provide your final response now.]"
+                    )
+                } else {
+                    format!(
+                        "[system notice: you are on turn {turns} of {limit} ({remaining} turn(s) remaining). Wrap up your work and return your final response soon without starting new exploration.]"
+                    )
+                };
+                // The notice rides the request's last message: the last
+                // tool result, or — on a continuation turn — the
+                // instruction to keep going. A message of its own after
+                // either would put two of a kind in a row, which strict
+                // providers refuse.
+                if let Some(last) = messages
+                    .last_mut()
+                    .filter(|m| m.role == "tool" || m.role == "user")
+                {
+                    let existing = last.content.take().unwrap_or_default();
+                    last.content = Some(if existing.is_empty() {
+                        notice
+                    } else {
+                        format!("{existing}\n\n{notice}")
+                    });
+                } else {
+                    messages.push(ChatMessage {
+                        role: "user".to_string(),
+                        content: Some(notice),
+                        ..ChatMessage::default()
+                    });
+                }
+            }
+
+            // The request, with the stop request wired in: a stream stops
+            // when the user asks and comes back with what arrived, and a
+            // non-streaming wait is raced against the same flag.
             let outcome = self.ask(&messages, events).await?;
             // Read before `from_response` consumes the response: the wire
-            // type stays the single place finish reasons exist.
+            // type stays the single place finish reasons and timings exist.
+            let timings = outcome.response.timings.clone();
             let truncated = outcome
                 .response
                 .choices
@@ -100,6 +191,8 @@ impl Agent {
                 None
             };
             let (message, warnings) = session::from_response(outcome.response)?;
+            let turn_usage = message.usage;
+            let thinking_pct = session::thinking_pct(&message);
             for warning in warnings {
                 events.send(AgentEvent::Warned { message: warning }).await?;
             }
@@ -131,22 +224,32 @@ impl Agent {
                 }
             }
 
-            // GAP 2 + GAP 11: a stream cut or a `length` finish means what
-            // arrived is a PREFIX of an answer, not an answer. Keep it (it
-            // is already persisted and, on the streaming path, already on
-            // the user's screen) and ask for the rest — bounded, visible,
-            // and never by replaying the partial's tool calls.
+            // A stream cut or a `length` finish means what arrived is a
+            // PREFIX of an answer, not an answer: keep it (it is already
+            // persisted and, on the streaming path, already on screen) and
+            // ask for the rest — bounded, visible, and never by running the
+            // partial's tool calls.
             if let Some(cut) = short {
+                let turn = cut::ShortTurn {
+                    number: turns,
+                    request: &messages,
+                    telemetry: cut::Telemetry {
+                        usage: turn_usage,
+                        timings: timings.clone(),
+                        thinking_pct,
+                    },
+                };
+                let tool_call_ids = message
+                    .tool_calls
+                    .iter()
+                    .map(|c| c.id.clone())
+                    .collect::<Vec<_>>();
                 match self
                     .handle_cut(
                         cut,
-                        &message
-                            .tool_calls
-                            .iter()
-                            .map(|c| c.id.clone())
-                            .collect::<Vec<_>>(),
+                        &tool_call_ids,
                         &mut continuations,
-                        &messages,
+                        turn,
                         events,
                         &mut noop_compaction_warned,
                     )
@@ -157,16 +260,9 @@ impl Agent {
                     cut::After::Continue => continue,
                     cut::After::EndRun => break,
                     cut::After::Aborted => {
-                        // The continuation was a request the user had
-                        // already disowned; the loop's abort shape finishes
-                        // the run with every entry it has.
-                        self.push_message(Role::User, Some("[aborted by user]".into()))?;
-                        events
-                            .send(AgentEvent::Warned {
-                                message: "run aborted".into(),
-                            })
-                            .await?;
-                        events.send(AgentEvent::RunAborted).await?;
+                        // The loop's abort shape finishes the run with every
+                        // entry it has.
+                        self.emit_abort(events).await?;
                         return Ok(());
                     }
                 }
@@ -186,135 +282,49 @@ impl Agent {
                 events
                     .send(AgentEvent::TurnEnded {
                         stop_reason: "stop".into(),
+                        usage: turn_usage,
+                        timings,
+                        thinking_pct,
                     })
                     .await?;
                 break;
             }
 
-            for (index, call) in message.tool_calls.iter().enumerate() {
-                // The one guard the spec allows between tool calls: the
-                // user's stop request. Everything before it stays recorded.
-                if self.abort.load(Ordering::Relaxed) {
-                    // Calls that will never run still need tool_results —
-                    // a replayed request with an unanswered tool_call is
-                    // rejected by strict providers (§8: a call is never
-                    // dropped, so its answer must exist too).
-                    for unanswered in &message.tool_calls[index..] {
-                        self.push_tool_result(
-                            &unanswered.id,
-                            &ToolResult {
-                                output: "aborted before execution".into(),
-                                is_error: true,
-                            },
-                        )?;
-                    }
-                    self.push_message(Role::User, Some("[aborted by user]".into()))?;
-                    events
-                        .send(AgentEvent::Warned {
-                            message: "run aborted".into(),
-                        })
-                        .await?;
-                    events.send(AgentEvent::RunAborted).await?;
-                    return Ok(());
-                }
-
-                events
-                    .send(AgentEvent::ToolCallStarted {
-                        name: call.name.clone(),
-                        id: call.id.clone(),
-                        args: call.args.clone(),
-                    })
-                    .await?;
-                // §22: pre_tool hooks sit between Started and dispatch. A
-                // call whose provider arguments failed to parse skips them:
-                // dispatch's args error is the answer, not a policy call.
-                let pre = if call.args_error.is_none() {
-                    self.hooks
-                        .pre_tool(call, session_id.as_deref(), &self.cwd, &self.abort)
-                        .await
-                } else {
-                    PreOutcome::Allow {
-                        warnings: Vec::new(),
-                    }
-                };
-                let (result, executed) = match pre {
-                    PreOutcome::Allow { warnings } => {
-                        for warning in warnings {
-                            events.send(AgentEvent::Warned { message: warning }).await?;
-                        }
-                        // Invalid provider arguments are never an execution:
-                        // dispatch records the parse error and post hooks stay
-                        // away, like both tool events (§22).
-                        //
-                        // dispatch is also the gate for a stop request: the
-                        // flag is already in effect there, so a stopped run
-                        // never starts another tool.
-                        let result = self.tools.dispatch(call, &cancel).await;
-                        // A call the user stopped while it ran is not an
-                        // execution a `post_tool` hook should observe — the
-                        // same rule as a call that never executed. The tool
-                        // result shape cannot say "cancelled", so the loop
-                        // decides from the flag it owns.
-                        let executed =
-                            call.args_error.is_none() && !self.abort.load(Ordering::Relaxed);
-                        (result, executed)
-                    }
-                    PreOutcome::Deny { reason, warnings } => {
-                        for warning in warnings {
-                            events.send(AgentEvent::Warned { message: warning }).await?;
-                        }
-                        (
-                            ToolResult::err(format!("denied by pre_tool hook: {reason}")),
-                            false,
-                        )
-                    }
-                    PreOutcome::Interrupted => {
-                        (ToolResult::err("aborted before execution".into()), false)
-                    }
-                };
-                self.push_tool_result(&call.id, &result)?;
-                events
-                    .send(AgentEvent::ToolCallFinished {
-                        name: call.name.clone(),
-                        id: call.id.clone(),
-                        output: result.output.clone(),
-                        is_error: result.is_error,
-                    })
-                    .await?;
-                // The result is recorded before post hooks run, so a slow
-                // formatter cannot change what the model was told.
-                if executed {
-                    for warning in self
-                        .hooks
-                        .post_tool(call, &result, session_id.as_deref(), &self.cwd, &self.abort)
-                        .await
-                    {
-                        events.send(AgentEvent::Warned { message: warning }).await?;
-                    }
-                }
+            if self
+                .execute_tool_batch(&message.tool_calls, session_id.as_deref(), &cancel, events)
+                .await?
+            {
+                return Ok(());
             }
 
             // The batch finished with the user asking to stop: every call
             // already has its result, so the session is replay-safe — but
             // honoring the stop here spares a whole extra request the user
-            // has already disowned. (Checked between calls above for the
-            // mid-batch case, which synthesizes the missing results.)
-            if self.abort.load(Ordering::Relaxed) {
-                self.push_message(Role::User, Some("[aborted by user]".into()))?;
-                events
-                    .send(AgentEvent::Warned {
-                        message: "run aborted".into(),
-                    })
-                    .await?;
-                events.send(AgentEvent::RunAborted).await?;
+            // has already disowned.
+            if self.abort.load(Ordering::Acquire) {
+                self.emit_abort(events).await?;
                 return Ok(());
             }
 
             events
                 .send(AgentEvent::TurnEnded {
                     stop_reason: "tool_calls".into(),
+                    usage: turn_usage,
+                    timings,
+                    thinking_pct,
                 })
                 .await?;
+
+            if let Some(limit) = self.max_turns
+                && turns >= limit
+            {
+                events
+                    .send(AgentEvent::Warned {
+                        message: format!("reached max_turns ({limit}); stopping run"),
+                    })
+                    .await?;
+                break;
+            }
 
             // §14: the compaction check sits exactly here — after a tool
             // batch, before the next request builds. Context tokens from
@@ -322,9 +332,17 @@ impl Agent {
             // none); the whole action degrades to a `Warned` on failure.
             let context_tokens = compaction::context_tokens_of(&self.entries)
                 .unwrap_or_else(|| compaction::estimate_wire_tokens(&messages));
-            if compaction::should_compact(context_tokens, self.context_window) {
+            if compaction::should_compact(
+                context_tokens,
+                self.context_window,
+                self.compact_threshold_tokens,
+            ) {
                 self.maybe_compact(None, events, &mut noop_compaction_warned)
                     .await?;
+                if self.abort.load(Ordering::Acquire) {
+                    self.emit_abort(events).await?;
+                    return Ok(());
+                }
             }
         }
 

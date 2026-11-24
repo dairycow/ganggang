@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
+use serde::Deserialize;
 use serde_json::Value;
 
 use super::anthropic;
@@ -11,6 +12,87 @@ use super::retry::{self, Backoff, Verdict};
 use super::stream::{self, StreamOutcome};
 use super::types::{ChatMessage, ChatRequest, ChatResponse, StreamOptions};
 use super::{ApiKind, AuthStyle};
+
+/// Permissive `/health` response from local servers (e.g. Strata).
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct HealthInfo {
+    #[serde(default)]
+    pub max_context: Option<u32>,
+    #[serde(default)]
+    pub kv_resident: Option<u32>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub service: Option<String>,
+}
+
+/// Derive `<base>/health` from an OpenAI-style `base_url` (stripping a
+/// trailing `/` and `/v1`).
+pub(crate) fn health_url(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    let root = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
+    format!("{root}/health")
+}
+
+/// True when `base_url` points to a loopback host (`127.0.0.1`, `localhost`,
+/// `[::1]`, etc.) without being fooled by URL userinfo.
+pub(crate) fn is_local_url(base_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(host);
+    bare.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Probe `/health` on local/Strata endpoints to fill `context_window` and
+/// `compact_threshold_tokens` when not explicitly configured.
+pub async fn maybe_probe_local_health(endpoint: &mut crate::config::Endpoint) {
+    if endpoint.context_window_explicit && endpoint.compact_threshold_explicit {
+        return;
+    }
+    if endpoint.provider != "strata" && !is_local_url(&endpoint.base_url) {
+        return;
+    }
+    let Some(info) = probe_health(&endpoint.base_url).await else {
+        return;
+    };
+    if !endpoint.context_window_explicit
+        && let Some(max_ctx) = info.max_context.filter(|&c| c > 0)
+    {
+        endpoint.context_window = max_ctx;
+    }
+    if !endpoint.compact_threshold_explicit
+        && let Some(kv) = info.kv_resident.filter(|&c| c > 0)
+    {
+        endpoint.compact_threshold_tokens = Some(kv);
+    }
+}
+
+/// Best-effort probe of `/health` with short timeouts (500ms connect, 2s
+/// total). Returns `None` on any error, non-2xx status, or invalid JSON.
+pub async fn probe_health(base_url: &str) -> Option<HealthInfo> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_millis(500))
+        .timeout(Duration::from_secs(2))
+        .build()
+        .ok()?;
+    let url = health_url(base_url);
+    let resp = client.get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<HealthInfo>().await.ok()
+}
 
 /// One client per process, reused across every turn of the agent loop.
 /// reqwest::Client owns a connection pool; building it per request throws that
@@ -22,6 +104,7 @@ pub struct LlmClient {
     auth: AuthStyle,
     api_key: Option<String>,
     reasoning_effort: Option<String>,
+    reasoning_budget_tokens: Option<u32>,
     session_id: String,
     session_header: Option<String>,
     /// The retry budget for transient transport failures (§ client docs).
@@ -30,6 +113,9 @@ pub struct LlmClient {
     /// AND body, so it bounds a stream too. Generations longer than a few
     /// minutes are the reason it is a setting (GAP 2), not a constant.
     request_timeout: Duration,
+    /// Retries made since the caller last asked ([`Self::take_notices`]).
+    /// The client does not print them: in the TUI stderr is the screen.
+    notices: std::sync::Mutex<Vec<String>>,
 }
 
 impl LlmClient {
@@ -53,10 +139,12 @@ impl LlmClient {
             auth: AuthStyle::Auto,
             api_key: None,
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
             session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
             session_header,
             retry: Backoff::default(),
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            notices: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -65,7 +153,8 @@ impl LlmClient {
             .with_api(endpoint.api)
             .with_auth(endpoint.auth)
             .with_api_key(endpoint.api_key.clone())
-            .with_reasoning_effort(endpoint.reasoning_effort.clone()))
+            .with_reasoning_effort(endpoint.reasoning_effort.clone())
+            .with_reasoning_budget_tokens(endpoint.reasoning_budget_tokens))
     }
 
     pub fn with_api(mut self, api: ApiKind) -> Self {
@@ -86,6 +175,11 @@ impl LlmClient {
 
     pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
         self.reasoning_effort = effort;
+        self
+    }
+
+    pub fn with_reasoning_budget_tokens(mut self, budget: Option<u32>) -> Self {
+        self.reasoning_budget_tokens = budget.filter(|&n| n > 0);
         self
     }
 
@@ -118,6 +212,15 @@ impl LlmClient {
     /// when an endpoint switch rebuilds it, like the retry budget.
     pub fn request_timeout_secs(&self) -> u64 {
         self.request_timeout.as_secs()
+    }
+
+    /// The retries made since this was last asked, oldest first — one line
+    /// each, saying what failed, which retry is coming and how long it
+    /// waits. For the caller to pass on to the user through whatever
+    /// interface it owns; nothing is printed here.
+    pub fn take_notices(&self) -> Vec<String> {
+        let mut notices = self.notices.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut *notices)
     }
 
     /// Test seam: decide like production, never sleep.
@@ -178,6 +281,7 @@ impl LlmClient {
                     stream: None,
                     stream_options: None,
                     reasoning_effort: self.reasoning_effort.as_deref(),
+                    reasoning_budget_tokens: self.reasoning_budget_tokens,
                 };
                 let (url, request) = build_request(
                     self.apply_auth(
@@ -255,6 +359,7 @@ impl LlmClient {
                         include_usage: true,
                     }),
                     reasoning_effort: self.reasoning_effort.as_deref(),
+                    reasoning_budget_tokens: self.reasoning_budget_tokens,
                 };
                 build_request(
                     self.apply_auth(
@@ -301,9 +406,10 @@ impl LlmClient {
     }
 
     /// The retry loop both call paths share. `abort` is the streaming
-    /// path's stop request: it ends the wait for the response head with
-    /// [`ABORTED`] and rules out another attempt. `None` is the
-    /// non-streaming path, which has no way to observe one mid-flight.
+    /// path's stop request: it ends the wait for the response head and the
+    /// wait before a retry with [`ABORTED`], and rules out another
+    /// attempt. `None` is the non-streaming path, whose caller races the
+    /// whole call against the same flag instead.
     async fn attempts(
         &self,
         url: &str,
@@ -336,7 +442,21 @@ impl LlmClient {
                     let Some(wait) = self.retry_in(&failure, nth, url) else {
                         return Err(failure.error);
                     };
-                    tokio::time::sleep(wait).await;
+                    // The wait before a retry belongs to the stop request
+                    // too: a `Retry-After` can be half a minute, and the
+                    // user who asked for no more requests should not sit
+                    // it out.
+                    match abort {
+                        Some(flag) => {
+                            if stream::until_abort(flag, tokio::time::sleep(wait))
+                                .await
+                                .is_none()
+                            {
+                                return Err(anyhow::anyhow!(ABORTED));
+                            }
+                        }
+                        None => tokio::time::sleep(wait).await,
+                    }
                     nth += 1;
                 }
             }
@@ -391,18 +511,21 @@ impl LlmClient {
     }
 
     /// The retry decision for one failed attempt: `None` ends the call,
-    /// otherwise the warning the user sees and the wait before the retry.
-    /// Retries are visible on stderr, so no layer above the client has to
-    /// learn they happened.
+    /// otherwise the wait before the retry — and a line for the user, kept
+    /// until the caller asks for it, that says what failed and what is
+    /// being done about it.
     fn retry_in(&self, failure: &Failure, nth: u32, url: &str) -> Option<Duration> {
         let wait = failure.retry.retry_delay(&self.retry, nth)?;
-        eprintln!(
-            "warning: POST {url}: {} — retry {} of {} in {} ms",
-            failure.reason,
-            nth + 1,
-            self.retry.max_retries,
-            wait.as_millis()
-        );
+        self.notices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(format!(
+                "POST {url}: {} — retry {} of {} in {} ms",
+                failure.reason,
+                nth + 1,
+                self.retry.max_retries,
+                wait.as_millis()
+            ));
         Some(wait)
     }
 }
@@ -478,5 +601,7 @@ fn is_opencode_url(base_url: &str) -> bool {
 #[cfg(test)]
 mod stream_tests;
 
+#[cfg(test)]
+mod health_tests;
 #[cfg(test)]
 mod tests;

@@ -1,7 +1,8 @@
-//! The run's half of [`State`](super::super::State): what a run starting and ending does to the
-//! view, what one Ctrl+C means, prompt recall, and the transcript's scroll
-//! position. The struct, the transcript accessors, and the footer plumbing
-//! are in [`state`](super::super::state).
+//! The run's half of [`State`](super::State): what a run starting and
+//! ending does to the view (the footer's busy mark and spinner, and whether
+//! there is anything to show at all), what one Ctrl+C means, prompt recall,
+//! and the transcript's scroll position. The struct is in
+//! [`state`](super), the conversation in [`log`](super::log).
 
 use crate::tui::history::{Arrow, history_for};
 
@@ -101,6 +102,34 @@ impl crate::tui::view::State {
 
     pub fn scroll_down(&mut self, by: u16) {
         self.offset_from_bottom = self.offset_from_bottom.saturating_sub(by);
+    }
+
+    /// Whether the session has nothing to show yet — the transcript empty
+    /// and nothing carried over from a session file. That, not a scroll
+    /// position or a draft, is what the welcome block answers.
+    pub fn is_quiet(&self) -> bool {
+        self.transcript.is_empty()
+    }
+
+    /// Every path that starts work: busy flag + footer indicator, and no
+    /// stopping mark left over from a cancel the last run did not need.
+    pub fn begin_run(&mut self) {
+        self.busy = true;
+        self.interrupt_armed = false;
+        self.footer.set_busy(true);
+        self.footer.set_stopping(false);
+    }
+
+    /// The spinner's next frame, called from the event loop's 100 ms timer
+    /// arm — which the loop arms only while a run is live, so an idle view
+    /// never wakes a frame on a timer.
+    pub fn tick_spinner(&mut self) {
+        self.footer.tick();
+    }
+
+    /// Whether anything is turning a spinner right now.
+    pub fn spinning(&self) -> bool {
+        self.footer.spinning()
     }
 }
 

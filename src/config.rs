@@ -12,8 +12,48 @@ use std::collections::BTreeMap;
 
 use anyhow::Context;
 
+use crate::agent::session::ReplayReasoning;
 use crate::llm::{ApiKind, AuthStyle};
 pub use providers::{Endpoint, ProviderConfig};
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct EnvOverrides {
+    base_url: Option<String>,
+    max_tokens: Option<u32>,
+    api_key: Option<Option<String>>,
+    context_window: Option<u32>,
+    reasoning_effort: Option<Option<String>>,
+    reasoning_budget_tokens: Option<Option<u32>>,
+    compact_threshold_tokens: Option<Option<u32>>,
+}
+
+impl EnvOverrides {
+    fn apply(&self, ep: &mut Endpoint) {
+        if let Some(v) = &self.base_url {
+            ep.base_url = v.clone();
+        }
+        if let Some(v) = self.max_tokens {
+            ep.max_tokens = v;
+        }
+        if let Some(v) = &self.api_key {
+            ep.api_key = v.clone();
+        }
+        if let Some(v) = self.context_window {
+            ep.context_window = v;
+            ep.context_window_explicit = true;
+        }
+        if let Some(v) = &self.reasoning_effort {
+            ep.reasoning_effort = v.clone();
+        }
+        if let Some(v) = self.reasoning_budget_tokens {
+            ep.reasoning_budget_tokens = v;
+        }
+        if let Some(v) = self.compact_threshold_tokens {
+            ep.compact_threshold_tokens = v;
+            ep.compact_threshold_explicit = true;
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -25,8 +65,13 @@ pub struct Config {
     pub max_tokens: u32,
     pub api_key: Option<String>,
     pub context_window: u32,
-    pub replay_reasoning: bool,
+    pub context_window_explicit: bool,
+    pub replay_reasoning: ReplayReasoning,
     pub reasoning_effort: Option<String>,
+    pub reasoning_budget_tokens: Option<u32>,
+    pub compact_threshold_tokens: Option<u32>,
+    pub compact_threshold_explicit: bool,
+    pub max_turns: Option<u32>,
     pub bash_timeout_secs: u64,
     /// Extra attempts a transient LLM transport failure earns (0 turns
     /// retrying off). The policy itself lives in `llm::retry`.
@@ -37,6 +82,7 @@ pub struct Config {
     pub request_timeout_secs: u64,
     pub tools: Vec<String>,
     pub providers: BTreeMap<String, ProviderConfig>,
+    env_overrides: EnvOverrides,
 }
 
 impl Default for Config {
@@ -55,8 +101,13 @@ impl Default for Config {
             max_tokens: ep.max_tokens,
             api_key: ep.api_key,
             context_window: ep.context_window,
+            context_window_explicit: ep.context_window_explicit,
             replay_reasoning: ep.replay_reasoning,
             reasoning_effort: ep.reasoning_effort,
+            reasoning_budget_tokens: ep.reasoning_budget_tokens,
+            compact_threshold_tokens: ep.compact_threshold_tokens,
+            compact_threshold_explicit: ep.compact_threshold_explicit,
+            max_turns: None,
             bash_timeout_secs: 30,
             max_retries: 3,
             request_timeout_secs: 600,
@@ -65,6 +116,7 @@ impl Default for Config {
                 .map(|s| s.to_string())
                 .collect(),
             providers,
+            env_overrides: EnvOverrides::default(),
         }
     }
 }
@@ -85,8 +137,12 @@ impl Config {
             api_key_env,
             max_tokens: self.max_tokens,
             context_window: self.context_window,
+            context_window_explicit: self.context_window_explicit,
             replay_reasoning: self.replay_reasoning,
             reasoning_effort: self.reasoning_effort.clone(),
+            reasoning_budget_tokens: self.reasoning_budget_tokens,
+            compact_threshold_tokens: self.compact_threshold_tokens,
+            compact_threshold_explicit: self.compact_threshold_explicit,
         }
     }
 
@@ -111,47 +167,70 @@ impl Config {
             .or(model_provider)
             .unwrap_or_else(|| self.provider.clone());
         let pcfg = lookup_provider(&self.providers, &target_provider)?;
-        let ep = pcfg.resolve(model_id);
+        let mut ep = pcfg.resolve(model_id);
+        self.env_overrides.apply(&mut ep);
         self.apply_endpoint(&ep);
         validate(self)
+    }
+
+    pub fn apply_reasoning_cli(&mut self, effort: Option<&str>, budget: Option<u32>) {
+        if let Some(v) = effort {
+            let trimmed = v.trim();
+            self.reasoning_effort = (!trimmed.is_empty()).then(|| trimmed.to_string());
+        }
+        if let Some(b) = budget {
+            self.reasoning_budget_tokens = (b > 0).then_some(b);
+        }
+    }
+
+    pub fn apply_max_turns_cli(&mut self, max_turns: Option<u32>) {
+        if let Some(n) = max_turns {
+            self.max_turns = (n > 0).then_some(n);
+        }
     }
 
     pub fn resolve_switch(&self, spec: &str) -> anyhow::Result<Endpoint> {
         let spec = spec.trim();
         anyhow::ensure!(!spec.is_empty(), "model specification must not be empty");
         let canon = providers::canonical_provider_name(spec);
-        if let Some(pcfg) = self.providers.get(canon) {
-            return Ok(pcfg.resolve(None));
-        }
-        if let Some((p, m)) = providers::split_provider_model(spec, &self.providers) {
+        let mut ep = if let Some(pcfg) = self.providers.get(canon) {
+            pcfg.resolve(None)
+        } else if let Some((p, m)) = providers::split_provider_model(spec, &self.providers) {
             let pcfg = lookup_provider(&self.providers, p)?;
-            return Ok(pcfg.resolve(Some(m)));
-        }
-        if let Some(cur) = self.providers.get(&self.provider)
+            pcfg.resolve(Some(m))
+        } else if let Some(cur) = self.providers.get(&self.provider)
             && cur.models.iter().any(|m| m.id == spec)
         {
-            return Ok(cur.resolve(Some(spec)));
-        }
-        let matches: Vec<&ProviderConfig> = self
-            .providers
-            .values()
-            .filter(|p| p.models.iter().any(|m| m.id == spec))
-            .collect();
-        match matches.as_slice() {
-            [one] => Ok(one.resolve(Some(spec))),
-            [] => {
-                let cur = lookup_provider(&self.providers, &self.provider)?;
-                Ok(cur.resolve(Some(spec)))
+            cur.resolve(Some(spec))
+        } else {
+            let matches: Vec<&ProviderConfig> = self
+                .providers
+                .values()
+                .filter(|p| p.models.iter().any(|m| m.id == spec))
+                .collect();
+            match matches.as_slice() {
+                [one] => one.resolve(Some(spec)),
+                [] => {
+                    let cur = lookup_provider(&self.providers, &self.provider)?;
+                    cur.resolve(Some(spec))
+                }
+                many => {
+                    let choices: Vec<String> =
+                        many.iter().map(|p| format!("{}/{spec}", p.name)).collect();
+                    anyhow::bail!(
+                        "model {spec:?} exists on multiple providers; specify one of: {}",
+                        choices.join(", ")
+                    );
+                }
             }
-            many => {
-                let choices: Vec<String> =
-                    many.iter().map(|p| format!("{}/{spec}", p.name)).collect();
-                anyhow::bail!(
-                    "model {spec:?} exists on multiple providers; specify one of: {}",
-                    choices.join(", ")
-                );
-            }
+        };
+        if ep.api_key.is_none()
+            && ep.api_key_env.is_some()
+            && let Some(Some(key)) = &self.env_overrides.api_key
+        {
+            ep.api_key = Some(key.clone());
         }
+        Ok(ep)
     }
 
     fn apply_endpoint(&mut self, ep: &Endpoint) {
@@ -163,8 +242,12 @@ impl Config {
         self.api_key = ep.api_key.clone();
         self.max_tokens = ep.max_tokens;
         self.context_window = ep.context_window;
+        self.context_window_explicit = ep.context_window_explicit;
         self.replay_reasoning = ep.replay_reasoning;
         self.reasoning_effort = ep.reasoning_effort.clone();
+        self.reasoning_budget_tokens = ep.reasoning_budget_tokens;
+        self.compact_threshold_tokens = ep.compact_threshold_tokens;
+        self.compact_threshold_explicit = ep.compact_threshold_explicit;
     }
 }
 
@@ -180,8 +263,11 @@ struct FileConfig {
     max_tokens: Option<u32>,
     api_key: Option<String>,
     context_window: Option<u32>,
-    replay_reasoning: Option<bool>,
+    replay_reasoning: Option<ReplayReasoning>,
     reasoning_effort: Option<String>,
+    reasoning_budget_tokens: Option<u32>,
+    compact_threshold_tokens: Option<u32>,
+    max_turns: Option<u32>,
     bash_timeout_secs: Option<u64>,
     max_retries: Option<u32>,
     request_timeout_secs: Option<u64>,
@@ -291,6 +377,7 @@ pub fn merge(
         }
         if let Some(v) = project.context_window.or(user.context_window) {
             ep.context_window = v;
+            ep.context_window_explicit = true;
         }
         if let Some(v) = project.replay_reasoning.or(user.replay_reasoning) {
             ep.replay_reasoning = v;
@@ -298,24 +385,62 @@ pub fn merge(
         if let Some(v) = pick(&user.reasoning_effort, &project.reasoning_effort) {
             ep.reasoning_effort = (!v.is_empty()).then_some(v);
         }
+        if let Some(v) = project
+            .reasoning_budget_tokens
+            .or(user.reasoning_budget_tokens)
+        {
+            ep.reasoning_budget_tokens = (v > 0).then_some(v);
+        }
+        if let Some(v) = project
+            .compact_threshold_tokens
+            .or(user.compact_threshold_tokens)
+        {
+            ep.compact_threshold_tokens = (v > 0).then_some(v);
+            ep.compact_threshold_explicit = true;
+        }
     }
 
+    let mut env_overrides = EnvOverrides::default();
     if let Some(v) = env_value(env, "GG_BASE_URL") {
-        ep.base_url = v;
+        env_overrides.base_url = Some(v);
     }
-    ep.max_tokens = parse_env(
-        env_value(env, "GG_MAX_TOKENS"),
-        "GG_MAX_TOKENS",
-        ep.max_tokens,
-    )?;
+    if let Some(raw) = env_value(env, "GG_MAX_TOKENS") {
+        env_overrides.max_tokens = Some(parse_env(Some(raw), "GG_MAX_TOKENS", ep.max_tokens)?);
+    }
     if let Some(v) = env_value(env, "GG_API_KEY") {
-        ep.api_key = (!v.is_empty()).then_some(v);
+        env_overrides.api_key = Some((!v.is_empty()).then_some(v));
     }
-    ep.context_window = parse_env(
-        env_value(env, "GG_CONTEXT_WINDOW"),
-        "GG_CONTEXT_WINDOW",
-        ep.context_window,
-    )?;
+    if let Some(raw) = env_value(env, "GG_CONTEXT_WINDOW") {
+        env_overrides.context_window = Some(parse_env(
+            Some(raw),
+            "GG_CONTEXT_WINDOW",
+            ep.context_window,
+        )?);
+    }
+    if let Some(v) = env_value(env, "GG_REASONING_EFFORT") {
+        let trimmed = v.trim();
+        env_overrides.reasoning_effort = Some((!trimmed.is_empty()).then(|| trimmed.to_string()));
+    }
+    if let Some(raw) = env_value(env, "GG_THINKING_BUDGET") {
+        let parsed: u32 = parse_env(Some(raw), "GG_THINKING_BUDGET", 0)?;
+        env_overrides.reasoning_budget_tokens = Some((parsed > 0).then_some(parsed));
+    }
+    if let Some(raw) = env_value(env, "GG_COMPACT_THRESHOLD") {
+        let parsed: u32 = parse_env(Some(raw), "GG_COMPACT_THRESHOLD", 0)?;
+        env_overrides.compact_threshold_tokens = Some((parsed > 0).then_some(parsed));
+    }
+    env_overrides.apply(&mut ep);
+    let file_max_turns = project
+        .max_turns
+        .or(user.max_turns)
+        .and_then(|n| (n > 0).then_some(n));
+    let max_turns = match env_value(env, "GG_MAX_TURNS") {
+        Some(raw) => {
+            let parsed: u32 = parse_env(Some(raw), "GG_MAX_TURNS", 0)?;
+            (parsed > 0).then_some(parsed)
+        }
+        None => file_max_turns,
+    };
 
     let cfg = Config {
         provider: ep.provider,
@@ -326,8 +451,13 @@ pub fn merge(
         max_tokens: ep.max_tokens,
         api_key: ep.api_key,
         context_window: ep.context_window,
+        context_window_explicit: ep.context_window_explicit,
         replay_reasoning: ep.replay_reasoning,
         reasoning_effort: ep.reasoning_effort,
+        reasoning_budget_tokens: ep.reasoning_budget_tokens,
+        compact_threshold_tokens: ep.compact_threshold_tokens,
+        compact_threshold_explicit: ep.compact_threshold_explicit,
+        max_turns,
         bash_timeout_secs: parse_env(
             env_value(env, "GG_BASH_TIMEOUT"),
             "GG_BASH_TIMEOUT",
@@ -357,6 +487,7 @@ pub fn merge(
         )?,
         tools: pick_list(&user.tools, &project.tools).unwrap_or(defaults.tools),
         providers,
+        env_overrides,
     };
     validate(&cfg)?;
     Ok(cfg)

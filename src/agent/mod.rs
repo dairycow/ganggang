@@ -51,8 +51,15 @@ pub struct Agent {
     /// The compaction ceiling (§14, config `context_window`): the run
     /// compacts once the conversation crowds past window − reserve.
     pub(super) context_window: u32,
+    /// Optional lower compaction threshold (e.g. local VRAM KV cliff).
+    pub(super) compact_threshold_tokens: Option<u32>,
+    /// Optional per-run turn budget (`--max-turns` / `GG_MAX_TURNS`).
+    pub(super) max_turns: Option<u32>,
+    /// Frozen UTC date (`YYYY-MM-DD`) captured at Agent creation so
+    /// midnight UTC never invalidates the KV prefix mid-session.
+    pub(super) prompt_date: String,
     /// Whether replayed assistant messages must include `reasoning_content`.
-    pub(super) replay_reasoning: bool,
+    pub(super) replay_reasoning: session::ReplayReasoning,
     /// Stable per-agent session id for provider routing headers (e.g. OpenCode Go).
     pub(super) session_id: String,
     /// User-level hooks (§22). Loaded once per process; a run consults them
@@ -95,14 +102,27 @@ impl Agent {
             store,
             stream,
             context_window,
-            replay_reasoning: false,
+            compact_threshold_tokens: None,
+            max_turns: None,
+            prompt_date: context::today_utc_iso(),
+            replay_reasoning: session::ReplayReasoning::Never,
             session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
             hooks,
         }
     }
 
-    pub fn with_replay_reasoning(mut self, replay: bool) -> Self {
+    pub fn with_replay_reasoning(mut self, replay: session::ReplayReasoning) -> Self {
         self.replay_reasoning = replay;
+        self
+    }
+
+    pub fn with_compact_threshold(mut self, threshold: Option<u32>) -> Self {
+        self.compact_threshold_tokens = threshold.filter(|&t| t > 0);
+        self
+    }
+
+    pub fn with_max_turns(mut self, max_turns: Option<u32>) -> Self {
+        self.max_turns = max_turns.filter(|&n| n > 0);
         self
     }
 
@@ -119,6 +139,7 @@ impl Agent {
         self.max_tokens = endpoint.max_tokens;
         self.context_window = endpoint.context_window;
         self.replay_reasoning = endpoint.replay_reasoning;
+        self.compact_threshold_tokens = endpoint.compact_threshold_tokens;
         Ok(())
     }
 
@@ -132,13 +153,23 @@ impl Agent {
     /// each request through this, and the TUI's `/context` shows exactly
     /// the same assembly.
     pub fn system_prompt(&self) -> String {
-        context::build_system_prompt(&self.cwd, &self.tools, &self.agents_files, &self.skills)
+        context::build_system_prompt_with_date(
+            &self.cwd,
+            &self.tools,
+            &self.agents_files,
+            &self.skills,
+            &self.prompt_date,
+        )
     }
 
     /// The recorded history: usage totals, compaction walks, and the
     /// resume path all read through this.
     pub fn entries(&self) -> &[session::Entry] {
         &self.entries
+    }
+
+    pub fn replay_reasoning(&self) -> session::ReplayReasoning {
+        self.replay_reasoning
     }
 
     /// Ensure the session file exists. `--watch` restarts resume by id, so

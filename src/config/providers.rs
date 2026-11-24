@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+use crate::agent::session::ReplayReasoning;
 use crate::llm::{ApiKind, AuthStyle};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,8 +14,10 @@ pub struct ModelSpec {
     pub base_url: Option<String>,
     pub max_tokens: Option<u32>,
     pub context_window: Option<u32>,
-    pub replay_reasoning: Option<bool>,
+    pub replay_reasoning: Option<ReplayReasoning>,
     pub reasoning_effort: Option<String>,
+    pub reasoning_budget_tokens: Option<u32>,
+    pub compact_threshold_tokens: Option<u32>,
 }
 
 impl ModelSpec {
@@ -27,6 +30,8 @@ impl ModelSpec {
             context_window: None,
             replay_reasoning: None,
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
+            compact_threshold_tokens: None,
         }
     }
 
@@ -43,8 +48,10 @@ impl ModelSpec {
             base_url: Some(base_url.to_string()),
             max_tokens: None,
             context_window: None,
-            replay_reasoning: Some(false),
+            replay_reasoning: Some(ReplayReasoning::Never),
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
+            compact_threshold_tokens: None,
         }
     }
 }
@@ -60,8 +67,12 @@ pub struct ProviderConfig {
     pub default_model: String,
     pub max_tokens: u32,
     pub context_window: u32,
-    pub replay_reasoning: bool,
+    pub context_window_explicit: bool,
+    pub replay_reasoning: ReplayReasoning,
     pub reasoning_effort: Option<String>,
+    pub reasoning_budget_tokens: Option<u32>,
+    pub compact_threshold_tokens: Option<u32>,
+    pub compact_threshold_explicit: bool,
     pub models: Vec<ModelSpec>,
 }
 
@@ -85,12 +96,28 @@ impl ProviderConfig {
             context_window: spec
                 .and_then(|s| s.context_window)
                 .unwrap_or(self.context_window),
+            context_window_explicit: self.context_window_explicit
+                || spec.is_some_and(|s| s.context_window.is_some()),
             replay_reasoning: spec
                 .and_then(|s| s.replay_reasoning)
                 .unwrap_or(self.replay_reasoning),
             reasoning_effort: spec
-                .and_then(|s| s.reasoning_effort.clone())
-                .or_else(|| self.reasoning_effort.clone()),
+                .and_then(|s| s.reasoning_effort.as_deref())
+                .map(|s| {
+                    let t = s.trim();
+                    (!t.is_empty()).then(|| t.to_string())
+                })
+                .unwrap_or_else(|| self.reasoning_effort.clone()),
+            reasoning_budget_tokens: spec
+                .and_then(|s| s.reasoning_budget_tokens)
+                .map(|v| (v > 0).then_some(v))
+                .unwrap_or(self.reasoning_budget_tokens),
+            compact_threshold_tokens: spec
+                .and_then(|s| s.compact_threshold_tokens)
+                .map(|v| (v > 0).then_some(v))
+                .unwrap_or(self.compact_threshold_tokens),
+            compact_threshold_explicit: self.compact_threshold_explicit
+                || spec.is_some_and(|s| s.compact_threshold_tokens.is_some()),
         }
     }
 }
@@ -106,8 +133,12 @@ pub struct Endpoint {
     pub api_key_env: Option<String>,
     pub max_tokens: u32,
     pub context_window: u32,
-    pub replay_reasoning: bool,
+    pub context_window_explicit: bool,
+    pub replay_reasoning: ReplayReasoning,
     pub reasoning_effort: Option<String>,
+    pub reasoning_budget_tokens: Option<u32>,
+    pub compact_threshold_tokens: Option<u32>,
+    pub compact_threshold_explicit: bool,
 }
 
 impl Endpoint {
@@ -150,8 +181,10 @@ pub(super) struct FileProviderConfig {
     pub model: Option<String>,
     pub max_tokens: Option<u32>,
     pub context_window: Option<u32>,
-    pub replay_reasoning: Option<bool>,
+    pub replay_reasoning: Option<ReplayReasoning>,
     pub reasoning_effort: Option<String>,
+    pub reasoning_budget_tokens: Option<u32>,
+    pub compact_threshold_tokens: Option<u32>,
     pub models: Option<Vec<FileModelEntry>>,
 }
 
@@ -169,8 +202,10 @@ pub(super) struct FileModelSpec {
     pub base_url: Option<String>,
     pub max_tokens: Option<u32>,
     pub context_window: Option<u32>,
-    pub replay_reasoning: Option<bool>,
+    pub replay_reasoning: Option<ReplayReasoning>,
     pub reasoning_effort: Option<String>,
+    pub reasoning_budget_tokens: Option<u32>,
+    pub compact_threshold_tokens: Option<u32>,
 }
 
 impl From<FileModelEntry> for ModelSpec {
@@ -185,6 +220,8 @@ impl From<FileModelEntry> for ModelSpec {
                 context_window: s.context_window,
                 replay_reasoning: s.replay_reasoning,
                 reasoning_effort: s.reasoning_effort,
+                reasoning_budget_tokens: s.reasoning_budget_tokens,
+                compact_threshold_tokens: s.compact_threshold_tokens,
             },
         }
     }
@@ -210,10 +247,14 @@ pub fn builtin_providers() -> BTreeMap<String, ProviderConfig> {
             api_key: None,
             api_key_env: None,
             default_model: "qwen3.8-flash-next-iq3_s".to_string(),
-            max_tokens: 4096,
+            max_tokens: 16_384,
             context_window: 131_072,
-            replay_reasoning: false,
-            reasoning_effort: None,
+            context_window_explicit: false,
+            replay_reasoning: ReplayReasoning::Turn,
+            reasoning_effort: Some("medium".to_string()),
+            reasoning_budget_tokens: Some(4096),
+            compact_threshold_tokens: Some(65_536),
+            compact_threshold_explicit: false,
             models: vec![ModelSpec::id_only("qwen3.8-flash-next-iq3_s")],
         },
     );
@@ -230,8 +271,12 @@ pub fn builtin_providers() -> BTreeMap<String, ProviderConfig> {
             default_model: "glm-5.3-flash".to_string(),
             max_tokens: 16_384,
             context_window: 1_000_000,
-            replay_reasoning: true,
+            context_window_explicit: false,
+            replay_reasoning: ReplayReasoning::All,
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
+            compact_threshold_tokens: None,
+            compact_threshold_explicit: false,
             models: vec![
                 ModelSpec::id_only("glm-5.3-flash"),
                 ModelSpec::id_only("glm-5.3"),
@@ -254,8 +299,12 @@ pub fn builtin_providers() -> BTreeMap<String, ProviderConfig> {
             default_model: "deepseek-v4.1-flash".to_string(),
             max_tokens: 16_384,
             context_window: 1_000_000,
-            replay_reasoning: true,
+            context_window_explicit: false,
+            replay_reasoning: ReplayReasoning::All,
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
+            compact_threshold_tokens: None,
+            compact_threshold_explicit: false,
             models: vec![
                 ModelSpec::id_only("deepseek-v4.1-flash"),
                 ModelSpec::id_only("deepseek-v4-pro"),
@@ -270,7 +319,7 @@ pub fn builtin_providers() -> BTreeMap<String, ProviderConfig> {
                 ModelSpec::with_ctx("beam-free", 1_048_576),
                 {
                     let mut s = ModelSpec::with_ctx("hy4", 1_048_576);
-                    s.replay_reasoning = Some(false);
+                    s.replay_reasoning = Some(ReplayReasoning::Never);
                     s
                 },
                 ModelSpec::id_only("step-5-preview"),
@@ -296,19 +345,23 @@ pub fn builtin_providers() -> BTreeMap<String, ProviderConfig> {
             default_model: "deepseek-flash".to_string(),
             max_tokens: 16_384,
             context_window: 1_000_000,
-            replay_reasoning: true,
+            context_window_explicit: false,
+            replay_reasoning: ReplayReasoning::All,
             reasoning_effort: None,
+            reasoning_budget_tokens: None,
+            compact_threshold_tokens: None,
+            compact_threshold_explicit: false,
             models: vec![
                 ModelSpec::id_only("deepseek-flash"),
                 ModelSpec::id_only("deepseek-v4-pro"),
                 {
                     let mut s = ModelSpec::with_ctx("deepseek-chat", 131_072);
-                    s.replay_reasoning = Some(false);
+                    s.replay_reasoning = Some(ReplayReasoning::Never);
                     s
                 },
                 {
                     let mut s = ModelSpec::with_ctx("deepseek-reasoner", 131_072);
-                    s.replay_reasoning = Some(true);
+                    s.replay_reasoning = Some(ReplayReasoning::All);
                     s
                 },
             ],
@@ -348,12 +401,20 @@ pub(super) fn apply_provider_layer(
             }
             if let Some(v) = patch.context_window {
                 existing.context_window = v;
+                existing.context_window_explicit = true;
             }
             if let Some(v) = patch.replay_reasoning {
                 existing.replay_reasoning = v;
             }
             if let Some(v) = patch.reasoning_effort {
                 existing.reasoning_effort = (!v.is_empty()).then_some(v);
+            }
+            if let Some(v) = patch.reasoning_budget_tokens {
+                existing.reasoning_budget_tokens = (v > 0).then_some(v);
+            }
+            if let Some(v) = patch.compact_threshold_tokens {
+                existing.compact_threshold_tokens = (v > 0).then_some(v);
+                existing.compact_threshold_explicit = true;
             }
             if let Some(models) = patch.models {
                 existing.models = models.into_iter().map(ModelSpec::from).collect();
@@ -381,8 +442,12 @@ pub(super) fn apply_provider_layer(
                     default_model,
                     max_tokens: patch.max_tokens.unwrap_or(4096),
                     context_window: patch.context_window.unwrap_or(131_072),
-                    replay_reasoning: patch.replay_reasoning.unwrap_or(false),
+                    context_window_explicit: patch.context_window.is_some(),
+                    replay_reasoning: patch.replay_reasoning.unwrap_or(ReplayReasoning::Never),
                     reasoning_effort: patch.reasoning_effort.filter(|s| !s.is_empty()),
+                    reasoning_budget_tokens: patch.reasoning_budget_tokens.filter(|&v| v > 0),
+                    compact_threshold_tokens: patch.compact_threshold_tokens.filter(|&v| v > 0),
+                    compact_threshold_explicit: patch.compact_threshold_tokens.is_some(),
                     models,
                 },
             );

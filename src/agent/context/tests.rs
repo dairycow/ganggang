@@ -20,6 +20,8 @@ fn sections_appear_in_spec_order_with_no_files_or_skills() {
         .expect("working dir last");
     assert!(preamble_at < tools_at);
     assert!(tools_at < workdir_at);
+    assert!(prompt.contains("Prefer dedicated tools over bash"));
+    assert!(prompt.contains("never prefix commands with cd <cwd> &&"));
 
     // Absent inputs omit their sections entirely — no placeholder headers.
     assert!(!prompt.contains("AGENTS.md"));
@@ -199,4 +201,16 @@ fn skills_advertise_name_description_path_and_hide_disabled() {
         !prompt.contains("hidden"),
         "disabled skills are not advertised"
     );
+}
+
+#[test]
+fn build_system_prompt_with_date_pins_the_supplied_date() {
+    let prompt = build_system_prompt_with_date(
+        Path::new("/tmp/p"),
+        &default_tools(),
+        &[],
+        &[],
+        "2026-01-02",
+    );
+    assert!(prompt.contains("date: 2026-01-02"));
 }

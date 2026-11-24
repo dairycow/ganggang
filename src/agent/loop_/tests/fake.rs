@@ -39,6 +39,30 @@ impl FakeServer {
     ) -> Self {
         serve_hooked(responses, "application/json", false, on_request)
     }
+
+    /// Answers with whole raw HTTP responses, exactly as given (status
+    /// line, headers, body) — for scripts about the transport itself, a
+    /// retried 429 say, where the status is the point.
+    pub(super) fn spawn_raw(responses: Vec<String>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_request_body(&mut stream);
+                seen.lock()
+                    .unwrap()
+                    .push(serde_json::from_str(&request).unwrap());
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        FakeServer {
+            base_url: format!("http://{addr}"),
+            requests,
+        }
+    }
 }
 
 /// The accept loop both spawners share: one body per connection,

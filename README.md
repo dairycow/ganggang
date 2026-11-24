@@ -4,6 +4,8 @@ A small, sharp agentic harness in Rust. One agent loop, four-plus tools, an
 interactive TUI — modelled on [pi](https://github.com/earendil-works/pi),
 built to be read.
 
+📖 **[Read the User Guide →](https://dairycow.github.io/ganggang/)**
+
 `gg` defaults to a local [Strata](https://github.com/Niko1221/Strata) server — no cloud, no accounts, no telemetry — and also speaks OpenAI Chat Completions and Anthropic Messages endpoints with built-in provider presets and custom `[providers.<name>]` configs.
 
 ## Install & run
@@ -30,15 +32,16 @@ curl -s 127.0.0.1:8080/health
 ## The pieces
 
 - **Agent loop** (§09 of the design): request → tool calls → results → repeat
-  until answered. Sequential tool execution, streaming responses. No turn cap
-  — you are the runaway check; a truncated answer is the one exception,
-  continued at most 3 times. A cut stream keeps its partial answer. Esc
-  (or Ctrl+C) aborts the run: the in-flight request or stream is cut within
-  ~100 ms — the connection closes instead of waiting out the generation — a
-  running `bash` command loses its whole process group, a `grep`/`find` walk
-  stops, and the next tool call never starts. What the stopped stream had
-  already streamed in is kept as the answer, never replayed and never
-  continued: you asked it to stop.
+  until answered. Contiguous read-only tool calls run concurrently, responses
+  stream, and an optional `--max-turns` caps the run. Without it you are the
+  runaway check; a truncated answer is the one exception, continued at most
+  3 times (and it counts toward the cap). A cut stream keeps its partial
+  answer. Esc (or Ctrl+C) aborts the run: the in-flight request or stream is
+  cut within ~100 ms — the connection closes instead of waiting out the
+  generation — a running `bash` command loses its whole process group, a
+  `grep`/`find` walk stops, and the next tool call never starts. What the
+  stopped stream had already streamed in is kept as the answer, never
+  replayed and never continued: you asked it to stop.
 - **Tools** (§10): `read`, `bash`, `edit`, `write` — plus `grep`, `find`,
   `ls` for search. Plain values in and out; every truncation is visible in
   the output; tool failures are values the model reacts to, never crashes.
@@ -59,8 +62,9 @@ curl -s 127.0.0.1:8080/health
   to cwd ride along as context.
 - **Sessions** (§13): append-only JSONL under `~/.gg/sessions/`. `gg -c`
   continues the newest for the directory; `--resume <id|prefix>` picks one;
-  `--no-session` opts out. Crash mid-run? The file still loads — torn tails
-  and interrupted tool calls are repaired on resume.
+  `--session-file <path>` targets an exact file; `--no-session` opts out.
+  Crash mid-run? The file still loads — torn tails and interrupted tool calls
+  are repaired on resume.
 - **Compaction** (§14): when context crowds the window, older history is
   summarized in one extra call and kept as a `Compaction` entry — raw
   history is never destroyed. `/compact [instructions]` runs it on demand.
@@ -164,9 +168,10 @@ context (`!!` doesn't).
 
 ## Configuration & Providers (§16)
 
-Precedence: CLI flags (`-P`/`--provider`, `-m`/`--model`, `--tools`) > environment
+Precedence: CLI flags (`-P`/`--provider`, `-m`/`--model`, `--tools`, `--reasoning-effort`, `--thinking-budget`, `--max-turns`, `--session-file`) > environment
 (`GG_PROVIDER`, `GG_BASE_URL`, `GG_MODEL`, `GG_MAX_TOKENS`, `GG_API_KEY`,
 `GG_CONTEXT_WINDOW`, `GG_BASH_TIMEOUT`, `GG_MAX_RETRIES`, `GG_REQUEST_TIMEOUT`,
+`GG_REASONING_EFFORT`, `GG_THINKING_BUDGET`, `GG_COMPACT_THRESHOLD`, `GG_MAX_TURNS`,
 `GG_DEBUG_PROMPT=1` to dump the
 assembled system prompt to stderr, plus provider env vars `ZHIPU_API_KEY`,
 `OPENCODE_API_KEY`, `DEEPSEEK_API_KEY`) > `.gg/config.toml` >
@@ -199,7 +204,7 @@ Built-in providers: `strata` (local default), `glm-coding-plan` (Z.AI,
 alias `zai-coding-plan`), `opencode-go` (routes OpenAI Completions and
 Anthropic Messages per model), and `deepseek`. Custom `[providers.<name>]`
 sections are also supported (`base_url`, `model`, optional `api =
-"openai-completions"` | `"anthropic-messages"`, `api_key_env`, etc.).
+"open-ai-completions"` | `"anthropic-messages"`, `api_key_env`, etc.).
 
 ```sh
 gg --list-models
@@ -209,8 +214,10 @@ gg -m opencode-go/claude-haiku-5-5 -p "…"
 
 ```toml
 provider = "strata"
-max_tokens = 4096
-context_window = 131072   # match `strata launch --context`
+max_tokens = 16384
+# context_window = 131072   # auto-probed from Strata /health when unset
+# reasoning_effort = "medium"       # strata default
+# reasoning_budget_tokens = 4096    # strata default (0 disables)
 bash_timeout_secs = 30
 max_retries = 3           # extra attempts on a transient transport failure
 request_timeout_secs = 600  # whole-response timeout (a stream included)
@@ -304,9 +311,11 @@ watch sessions sort below real conversations in `-c`/`/resume`.
 ```sh
 cargo fmt --all && cargo test && cargo clippy --all-targets -- -D warnings
 scripts/smoke.sh      # live acceptance against a running Strata (print mode)
+scripts/eval.sh       # local-compute eval suite (tool discipline, tokens, latency)
 scripts/hooks-live.sh # hooks: deny path, observe paths, --no-hooks, project hooks
 scripts/tui-live.sh   # the TUI's terminal hand-off through tmux: Ctrl+G, !, tty state
 scripts/watch-live.sh # --watch: rebuild, re-exec, session continuity, draft carry
+scripts/sync-docs.sh  # regenerate + verify the user guide's reference pages (docs/)
 ```
 
-The spec is `design.html` — read it first; `TASKS.md` tracks the build.
+The spec is `design.html` — read it first; `TASKS.md` tracks the build. The user guide's sources are the mdBook in `docs/`; `AGENTS.md` explains how docs stay in sync.

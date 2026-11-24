@@ -35,6 +35,9 @@ fn plain_answer_renders_user_then_assistant() {
     });
     t.apply(&AgentEvent::TurnEnded {
         stop_reason: "stop".into(),
+        usage: None,
+        timings: None,
+        thinking_pct: None,
     });
     t.apply(&AgentEvent::RunEnded { turns: 1 });
 
@@ -76,6 +79,9 @@ fn tool_round_trip_collapses_calls_and_marks_errors() {
     });
     t.apply(&AgentEvent::TurnEnded {
         stop_reason: "tool_calls".into(),
+        usage: None,
+        timings: None,
+        thinking_pct: None,
     });
     t.apply(&AgentEvent::TurnStarted);
     t.apply(&AgentEvent::AssistantText {

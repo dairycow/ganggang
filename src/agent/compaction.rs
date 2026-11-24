@@ -1,13 +1,16 @@
 //! Context compaction (spec §14): trigger math, the cut-point walk, the
 //! summarize call, and the loop hook that sequences them.
 //!
-//! Two constants, pi's defaults, no config: the reserve kept free in the
-//! window and the recent history compaction preserves.
+//! Two pi defaults (`RESERVE` and `KEEP_RECENT`), plus an optional lower
+//! `compact_threshold_tokens` ceiling for local-compute KV residency.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
 use tokio::sync::mpsc::Sender;
 
-use super::session::{self, Entry, Message, Role, last_entry_id};
+use super::session::{self, Entry, Message, ReplayReasoning, Role, last_entry_id};
 use crate::events::AgentEvent;
 use crate::llm::client::LlmClient;
 use crate::llm::types::ChatMessage;
@@ -45,6 +48,9 @@ pub fn estimate_wire_tokens(messages: &[ChatMessage]) -> u32 {
         .iter()
         .map(|m| {
             m.content.as_deref().map_or(0, |c| c.chars().count())
+                + m.reasoning_content
+                    .as_deref()
+                    .map_or(0, |r| r.chars().count())
                 + m.tool_calls
                     .iter()
                     .map(|c| c.function.name.chars().count() + c.function.arguments.chars().count())
@@ -54,11 +60,21 @@ pub fn estimate_wire_tokens(messages: &[ChatMessage]) -> u32 {
     (chars / 4) as u32
 }
 
+/// Effective compaction line: `min(threshold, window - RESERVE)` when a
+/// positive threshold is configured, otherwise `window - RESERVE`.
+pub fn compact_line(context_window: u32, threshold: Option<u32>) -> u32 {
+    let ceiling = context_window.saturating_sub(RESERVE);
+    match threshold.filter(|&t| t > 0) {
+        Some(t) => t.min(ceiling),
+        None => ceiling,
+    }
+}
+
 /// The trigger (§14): checked after a tool batch, before the next
 /// request builds. `saturating_sub` keeps a window smaller than the
 /// reserve from underflowing into a never-triggering comparison.
-pub fn should_compact(context_tokens: u32, context_window: u32) -> bool {
-    context_tokens > context_window.saturating_sub(RESERVE)
+pub fn should_compact(context_tokens: u32, context_window: u32, threshold: Option<u32>) -> bool {
+    context_tokens > compact_line(context_window, threshold)
 }
 
 /// Per-entry token estimate for the cut-point walk (§14: "walk back
@@ -72,9 +88,24 @@ pub fn should_compact(context_tokens: u32, context_window: u32) -> bool {
 /// to ~4× `KEEP_RECENT` real tokens. The direction is safe for large
 /// windows; under a small window, keep the estimate honest by matching
 /// `context_window` to the server's real one.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn entry_token_estimate(entry: &Entry) -> u32 {
+    entry_token_estimate_with(entry, false)
+}
+
+pub(super) fn entry_token_estimate_with(entry: &Entry, include_reasoning: bool) -> u32 {
     let chars = match entry {
-        Entry::Message { message, .. } => message_token_chars(message),
+        Entry::Message { message, .. } => {
+            message_token_chars(message)
+                + if include_reasoning {
+                    message
+                        .reasoning
+                        .as_deref()
+                        .map_or(0, |r| r.chars().count())
+                } else {
+                    0
+                }
+        }
         Entry::Compaction { summary, .. } => summary.chars().count(),
     };
     (chars / 4) as u32
@@ -112,12 +143,32 @@ fn active_start(entries: &[Entry]) -> usize {
 /// compaction's boundary onward, so a second compaction re-summarizes
 /// what accumulated since, never the already-summarized dead history —
 /// and keeps the maximal suffix estimated at or under `KEEP_RECENT`,
-/// snapped to a user-message boundary so a tool_result is never
-/// separated from its assistant call. `None` when no boundary sits
-/// inside the region: cutting there would orphan a span, so the session
-/// waits for more history.
+/// snapped to a user-message boundary (or an assistant-message boundary in
+/// single-prompt multi-turn runs) so a tool_result is never separated from
+/// its assistant call. `None` when no boundary sits inside the region:
+/// cutting there would orphan a span, so the session waits for more history.
+#[allow(dead_code)]
 pub(super) fn cut_point(entries: &[Entry]) -> Option<String> {
+    cut_point_with(entries, ReplayReasoning::Never)
+}
+
+pub(super) fn cut_point_with(
+    entries: &[Entry],
+    replay_reasoning: ReplayReasoning,
+) -> Option<String> {
     let active_start = active_start(entries);
+    let is_user = |e: &Entry| {
+        matches!(
+            e,
+            Entry::Message { message, .. }
+                if message.role == Role::User
+                    && message.content.as_deref() != Some("[aborted by user]")
+        )
+    };
+    let last_user_idx = entries[active_start..]
+        .iter()
+        .rposition(is_user)
+        .map(|offset| active_start + offset);
 
     // Walk back accumulating estimates; `kept_from` is the oldest index
     // whose suffix still fits the budget. It starts at the newest entry:
@@ -131,7 +182,12 @@ pub(super) fn cut_point(entries: &[Entry]) -> Option<String> {
         .rev()
         .take(entries.len().saturating_sub(active_start))
     {
-        accumulated += entry_token_estimate(entry) as u64;
+        let include_reasoning = match replay_reasoning {
+            ReplayReasoning::Never => false,
+            ReplayReasoning::All => true,
+            ReplayReasoning::Turn => last_user_idx.is_none_or(|u| index > u),
+        };
+        accumulated += entry_token_estimate_with(entry, include_reasoning) as u64;
         if accumulated > KEEP_RECENT as u64 {
             break;
         }
@@ -143,52 +199,117 @@ pub(super) fn cut_point(entries: &[Entry]) -> Option<String> {
         return None;
     }
 
-    // Snap to a user-message boundary (pi's span rule — a tool_result is
-    // never separated from its assistant call). Backward first: the kept
-    // region then includes the whole span the walk stopped in, erring
-    // toward more history. But a final assistant answer carries no token
-    // mass, so the walk often slides PAST a user boundary onto that
-    // zero-size tail; when snapping back would reach the region's head
-    // (drop nothing), snap FORWARD instead — the dropped region then
-    // still ends on complete spans.
-    let is_user =
-        |e: &Entry| matches!(e, Entry::Message { message, .. } if message.role == Role::User);
-    let backward = entries[active_start..=kept_from]
+    // Tier 1: snap to a user-message boundary (backward first, then forward).
+    let backward_user = entries[active_start..=kept_from]
         .iter()
         .rposition(is_user)
         .map(|offset| active_start + offset)
         .filter(|&snapped| snapped > active_start);
-    let forward = entries[kept_from..]
+    let forward_user = entries[kept_from..]
         .iter()
         .position(is_user)
         .map(|offset| kept_from + offset)
         .filter(|&snapped| snapped > active_start);
-    let snapped = backward.or(forward)?;
+    if let Some(snapped) = backward_user.or(forward_user) {
+        return Some(last_entry_id(&entries[snapped]));
+    }
+
+    // Tier 2 (single-prompt multi-turn fallback): snap to an assistant
+    // entry strictly after `active_start` that has at least one earlier
+    // assistant entry in `entries[active_start..idx]`.
+    let is_assistant =
+        |e: &Entry| matches!(e, Entry::Message { message, .. } if message.role == Role::Assistant);
+    let has_prior_assistant =
+        |idx: usize| idx > active_start && entries[active_start..idx].iter().any(is_assistant);
+    let backward_asst = entries[active_start..=kept_from]
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(offset, e)| {
+            let idx = active_start + offset;
+            (is_assistant(e) && has_prior_assistant(idx)).then_some(idx)
+        });
+    let forward_asst = entries[kept_from..]
+        .iter()
+        .enumerate()
+        .find_map(|(offset, e)| {
+            let idx = kept_from + offset;
+            (is_assistant(e) && has_prior_assistant(idx)).then_some(idx)
+        });
+    let snapped = backward_asst.or(forward_asst)?;
     Some(last_entry_id(&entries[snapped]))
 }
 
-/// One extra, non-streaming LLM call over the wire view of the region
-/// being dropped — which already collapses anything older into the
-/// previous summary note, so nothing summarized before is lost. Errors
-/// propagate; the caller degrades to a `Warned` and continues.
+fn format_transcript_for_summary(dropped_wire: &[ChatMessage]) -> String {
+    let mut sections = Vec::with_capacity(dropped_wire.len());
+    for msg in dropped_wire {
+        match msg.role.as_str() {
+            "user" => {
+                let text = msg.content.as_deref().unwrap_or("").trim();
+                if !text.is_empty() {
+                    sections.push(format!("User:\n{text}"));
+                }
+            }
+            "assistant" => {
+                let mut part = String::from("Assistant:");
+                if let Some(reason) = msg.reasoning_content.as_deref().filter(|r| !r.is_empty()) {
+                    part.push_str(&format!("\n[thinking]\n{reason}"));
+                }
+                if let Some(text) = msg.content.as_deref().filter(|c| !c.is_empty()) {
+                    part.push_str(&format!("\n{text}"));
+                }
+                for tc in &msg.tool_calls {
+                    part.push_str(&format!(
+                        "\n[tool_call {}({})]",
+                        tc.function.name, tc.function.arguments
+                    ));
+                }
+                sections.push(part);
+            }
+            "tool" => {
+                let id = msg.tool_call_id.as_deref().unwrap_or("unknown");
+                let text = msg.content.as_deref().unwrap_or("");
+                sections.push(format!("Tool result ({id}):\n{text}"));
+            }
+            other => {
+                let text = msg.content.as_deref().unwrap_or("");
+                sections.push(format!("{other}:\n{text}"));
+            }
+        }
+    }
+    sections.join("\n\n")
+}
+
+/// One extra, non-streaming LLM call over a text-serialized transcript of
+/// the region being dropped — which already collapses anything older into the
+/// previous summary note, so nothing summarized before is lost. Returns
+/// `Ok(None)` if aborted mid-request.
 pub(super) async fn summarize(
     client: &LlmClient,
     model: &str,
     max_tokens: u32,
     dropped_wire: &[ChatMessage],
     instructions: Option<&str>,
-) -> anyhow::Result<String> {
+    abort: &Arc<AtomicBool>,
+) -> anyhow::Result<Option<String>> {
     let mut prompt = SUMMARIZE_INSTRUCTION.to_string();
     if let Some(focus) = instructions.filter(|s| !s.trim().is_empty()) {
         prompt.push_str(&format!("\nFocus: {focus}"));
     }
-    let mut messages = vec![ChatMessage {
+    let transcript = format_transcript_for_summary(dropped_wire);
+    prompt.push_str(&format!(
+        "\n\n<conversation>\n{transcript}\n</conversation>\n\nProvide the continuation summary now."
+    ));
+    let messages = vec![ChatMessage {
         role: "user".to_string(),
         content: Some(prompt),
         ..ChatMessage::default()
     }];
-    messages.extend_from_slice(dropped_wire);
-    let response = client.send(model, &messages, max_tokens, &[]).await?;
+    let response = tokio::select! {
+        biased;
+        _ = super::loop_::wait_for_abort(abort) => return Ok(None),
+        res = client.send(model, &messages, max_tokens, &[]) => res?,
+    };
     response
         .choices
         .into_iter()
@@ -196,6 +317,7 @@ pub(super) async fn summarize(
         .and_then(|choice| choice.message.content)
         .filter(|text| !text.trim().is_empty())
         .context("summarize response had no content")
+        .map(Some)
 }
 
 /// What one compaction attempt did — the callers turn this into events
@@ -210,6 +332,7 @@ pub enum CompactOutcome {
         first_kept_id: String,
     },
     Failed(String),
+    Aborted,
 }
 
 impl super::Agent {
@@ -226,7 +349,11 @@ impl super::Agent {
         events: &mut Sender<AgentEvent>,
         noop_warned: &mut bool,
     ) -> anyhow::Result<()> {
-        let message = match self.compact_once(instructions).await? {
+        let outcome = self.compact_once(instructions).await?;
+        // A retry the summary request needed is news whatever the attempt
+        // concluded, and it is this run's: said here, with the rest.
+        self.relay_notices(events).await?;
+        let message = match outcome {
             CompactOutcome::NothingToDo => {
                 if !*noop_warned {
                     *noop_warned = true;
@@ -250,6 +377,7 @@ impl super::Agent {
             CompactOutcome::Failed(detail) => {
                 format!("compaction failed ({detail}); continuing un-compacted")
             }
+            CompactOutcome::Aborted => return Ok(()),
         };
         events.send(AgentEvent::Warned { message }).await?;
         Ok(())
@@ -264,7 +392,7 @@ impl super::Agent {
         &mut self,
         instructions: Option<&str>,
     ) -> anyhow::Result<CompactOutcome> {
-        let Some(first_kept_id) = cut_point(&self.entries) else {
+        let Some(first_kept_id) = cut_point_with(&self.entries, self.replay_reasoning) else {
             return Ok(CompactOutcome::NothingToDo);
         };
         let Some(kept_at) = self
@@ -274,28 +402,28 @@ impl super::Agent {
         else {
             return Ok(CompactOutcome::NothingToDo);
         };
-        // The dropped region's wire view comes from the CURRENT replay
-        // view minus the kept suffix — not from the raw slice, whose
-        // positional range cannot contain the previous `Compaction`
-        // entry (append-only files put it after the entries it covers).
-        // Slicing the full view this way carries the previous summary
-        // note into this summarize call, so nothing summarized before is
-        // lost. The kept suffix is always plain: any compaction inside
-        // it positionally points its boundary further back, so
-        // `to_wire` replays it raw — exactly the full view's suffix.
-        let full_view = session::to_wire_with(&self.entries, self.replay_reasoning);
-        let kept_view = session::to_wire_with(&self.entries[kept_at..], self.replay_reasoning);
-        let dropped_wire = full_view[..full_view.len() - kept_view.len()].to_vec();
+        let summarize_replay = match self.replay_reasoning {
+            ReplayReasoning::All => ReplayReasoning::All,
+            _ => ReplayReasoning::Never,
+        };
+        let full_view = session::to_wire_with(&self.entries, summarize_replay);
+        let kept_view = session::to_wire_with(&self.entries[kept_at..], summarize_replay);
+        let dropped_wire = full_view[..full_view.len().saturating_sub(kept_view.len())].to_vec();
+        if self.abort.load(Ordering::Acquire) {
+            return Ok(CompactOutcome::Aborted);
+        }
         match summarize(
             &self.client,
             &self.model,
             self.max_tokens,
             &dropped_wire,
             instructions,
+            &self.abort,
         )
         .await
         {
-            Ok(summary) => {
+            Ok(None) => Ok(CompactOutcome::Aborted),
+            Ok(Some(summary)) => {
                 // Only the newly-summarized live entries count: `kept_at`
                 // includes the dead history earlier compactions already
                 // folded into the summary this call carried forward.

@@ -1,8 +1,9 @@
 //! Continuation scripts (GAP 2 + GAP 11): a `length` finish or a stream
 //! cut keeps its partial answer and asks for the rest — visibly, a bounded
-//! number of times, with the session left replay-safe.
+//! number of times, with the session left replay-safe. A continuation is a
+//! turn, so the run's turn budget is spent on it too.
 
-use serde_json::json;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -13,8 +14,10 @@ use super::super::fake::{
 use super::super::{
     Echo, Registry, drive, drive_streaming, drive_with_abort, event_values, messages_of,
 };
+use crate::agent::Agent;
 use crate::agent::loop_::cut::{CONTINUE_INSTRUCTION as CONTINUE, MAX_CONTINUATIONS};
 use crate::agent::session::Role;
+use crate::llm::client::LlmClient;
 
 /// A `length` finish is no longer only a warning: the partial answer is
 /// kept, exactly one continuation user message rides the next request, and
@@ -291,4 +294,188 @@ async fn a_cut_stream_continues_the_answer_instead_of_losing_it() {
         vec![Some("half an"), Some("swer")],
         "the partial survives on its own entry, and the continuation's answer follows it"
     );
+}
+
+/// The same run under a turn budget: non-streaming, no tools.
+async fn drive_capped(server: &FakeServer, max_turns: u32, prompt: &str) -> (Agent, Vec<Value>) {
+    let client = LlmClient::new(&server.base_url).unwrap();
+    let mut agent = Agent::new(
+        client,
+        Registry::new(),
+        "fake-model".into(),
+        512,
+        Arc::new(AtomicBool::new(false)),
+        std::env::temp_dir(),
+        None,
+        false,
+        131_072,
+        Default::default(),
+    )
+    .with_max_turns(Some(max_turns));
+    let (mut tx, mut rx) = tokio::sync::mpsc::channel(128);
+    agent.run(prompt.into(), &mut tx).await.unwrap();
+    drop(tx);
+    let mut events = Vec::new();
+    while let Some(ev) = rx.recv().await {
+        events.push(ev);
+    }
+    (agent, event_values(&events))
+}
+
+fn warned(values: &[Value]) -> Vec<&str> {
+    values
+        .iter()
+        .filter(|e| e["type"] == "warned")
+        .filter_map(|e| e["message"].as_str())
+        .collect()
+}
+
+/// A short turn on the budget's last turn is not continued: the request
+/// that asks for the rest would be the one past the cap. The partial
+/// stands, and one warning says both things.
+#[tokio::test]
+async fn a_truncated_answer_on_the_last_turn_is_not_continued() {
+    let server = FakeServer::spawn(vec![
+        length_response("partial answ"),
+        text_response("never"),
+    ]);
+    let (agent, values) = drive_capped(&server, 1, "hi").await;
+
+    assert_eq!(
+        warned(&values),
+        vec!["response truncated by max_tokens=512; reached max_turns — the partial answer stands"],
+        "{values:?}"
+    );
+    assert_eq!(
+        values.last().unwrap(),
+        &json!({"type": "run_ended", "turns": 1})
+    );
+    assert_eq!(
+        server.requests.lock().unwrap().len(),
+        1,
+        "no continuation request"
+    );
+    // And no continuation entry was recorded either.
+    assert!(
+        !agent
+            .entries()
+            .iter()
+            .any(|e| format!("{e:?}").contains(CONTINUE)),
+        "{:?}",
+        agent.entries()
+    );
+}
+
+/// Continuations are turns: they spend the budget, and the wrap-up notice
+/// rides the continuation instruction rather than adding a second user
+/// message after it.
+#[tokio::test]
+async fn continuations_count_toward_the_turn_budget_and_carry_the_wrap_up_notice() {
+    let server = FakeServer::spawn(vec![
+        length_response("partial"),
+        length_response(" more"),
+        text_response("done"),
+    ]);
+    let (agent, values) = drive_capped(&server, 3, "hi").await;
+
+    assert_eq!(
+        values.last().unwrap(),
+        &json!({"type": "run_ended", "turns": 3}),
+        "{values:?}"
+    );
+    assert!(
+        warned(&values)
+            .iter()
+            .any(|w| w.contains("approaching max_turns (2/3)")),
+        "{values:?}"
+    );
+    assert!(
+        !warned(&values)
+            .iter()
+            .any(|w| w.contains("reached max_turns")),
+        "the answer completed inside the budget: {values:?}"
+    );
+
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 3, "the original and two continuations");
+    for (request, notice) in [
+        (&requests[1], "turn 2 of 3 (1 turn(s) remaining)"),
+        (
+            &requests[2],
+            "this is your final turn (3/3, 0 turn(s) remaining)",
+        ),
+    ] {
+        let messages = request["messages"].as_array().unwrap();
+        let last = messages.last().unwrap();
+        assert_eq!(last["role"], "user", "the continuation instruction");
+        let content = last["content"].as_str().unwrap();
+        assert!(content.starts_with(CONTINUE), "{content}");
+        assert!(content.contains(notice), "{content}");
+        // ...and nothing of its own after it: two user messages in a row
+        // is a shape strict providers refuse.
+        let before = &messages[messages.len() - 2];
+        assert_ne!(before["role"], "user", "{request}");
+    }
+    // The notice is ephemeral: nothing of it reached the session.
+    assert!(
+        !agent
+            .entries()
+            .iter()
+            .any(|e| format!("{e:?}").contains("system notice")),
+        "{:?}",
+        agent.entries()
+    );
+}
+
+/// A third truncation on the budget's last turn stops where a complete
+/// answer would have: at the cap, with the partial standing.
+#[tokio::test]
+async fn a_run_that_keeps_truncating_stops_at_the_turn_budget() {
+    let server = FakeServer::spawn(vec![
+        length_response("one"),
+        length_response("two"),
+        length_response("three"),
+        text_response("never sent"),
+    ]);
+    let (_, values) = drive_capped(&server, 3, "hi").await;
+
+    assert_eq!(
+        warned(&values),
+        vec![
+            "response truncated by max_tokens=512; continuing from the partial answer (1/3)",
+            // Turn 2 is past the nudge line: the budget's own warning.
+            "approaching max_turns (2/3); nudging model to wrap up",
+            "response truncated by max_tokens=512; continuing from the partial answer (2/3)",
+            "response truncated by max_tokens=512; reached max_turns — the partial answer stands",
+        ],
+        "{values:?}"
+    );
+    assert_eq!(
+        values.last().unwrap(),
+        &json!({"type": "run_ended", "turns": 3})
+    );
+    assert_eq!(server.requests.lock().unwrap().len(), 3);
+}
+
+/// A short turn reports its usage like a complete one: the footer's
+/// context figure and the token totals would otherwise skip it.
+#[tokio::test]
+async fn a_cut_turn_carries_its_usage_on_its_turn_ended() {
+    let server = FakeServer::spawn(vec![
+        length_response("partial answ"),
+        text_response("er, and that is the rest"),
+    ]);
+    let (_, _, events) = drive(&server.base_url, Registry::new(), "hi").await;
+    let values = event_values(&events);
+    let ended: Vec<&Value> = values
+        .iter()
+        .filter(|e| e["type"] == "turn_ended")
+        .collect();
+    assert_eq!(ended.len(), 2);
+    for turn in &ended {
+        assert_eq!(turn["usage"]["prompt_tokens"], 10, "{turn}");
+        assert_eq!(turn["usage"]["completion_tokens"], 5, "{turn}");
+    }
+    assert_eq!(ended[0]["stop_reason"], "length");
+    assert_eq!(ended[1]["stop_reason"], "stop");
 }

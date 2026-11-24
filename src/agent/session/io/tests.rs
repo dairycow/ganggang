@@ -470,3 +470,48 @@ fn a_created_session_is_discoverable_in_its_cwd_dir() {
     let found = latest_in(&dir).expect("created session is listed");
     assert_eq!(found.path, store.path());
 }
+
+#[test]
+fn create_at_handles_missing_and_empty_files_and_refuses_non_empty() {
+    let root = tmp_root("create-at");
+    let nested = root.join("sub").join("custom.jsonl");
+    let mut store = SessionStore::create_at(nested.clone(), Path::new("/proj/c"), "m").unwrap();
+    store
+        .append(&entry_message(Some("hello"), vec![], None, false))
+        .unwrap();
+    let (_, entries, warnings) = load(&nested).unwrap();
+    assert!(warnings.is_empty());
+    assert_eq!(entries.len(), 1);
+
+    // Non-empty existing file is refused.
+    assert!(SessionStore::create_at(nested, Path::new("/proj/c"), "m").is_err());
+
+    // 0-byte existing file (like mktemp) is initialized cleanly.
+    let empty = root.join("empty.jsonl");
+    std::fs::write(&empty, b"").unwrap();
+    let mut store2 = SessionStore::create_at(empty.clone(), Path::new("/proj/c"), "m").unwrap();
+    store2
+        .append(&entry_message(Some("hi"), vec![], None, false))
+        .unwrap();
+    assert_eq!(load(&empty).unwrap().1.len(), 1);
+
+    // Directory path is rejected.
+    assert!(SessionStore::create_at(root.clone(), Path::new("/proj/c"), "m").is_err());
+
+    // Bare relative filename (empty parent()) does not fail create_dir_all("").
+    let mut bare =
+        SessionStore::create_at(PathBuf::from("bare.jsonl"), Path::new("/proj/c"), "m").unwrap();
+    bare.path = root.join("bare-unused.jsonl");
+
+    // TOCTOU: file becomes non-empty between create_at and first append.
+    let toctou = root.join("toctou.jsonl");
+    let mut store3 = SessionStore::create_at(toctou.clone(), Path::new("/proj/c"), "m").unwrap();
+    std::fs::write(&toctou, b"{\"type\":\"session\"}\n").unwrap();
+    assert!(
+        store3
+            .append(&entry_message(Some("late"), vec![], None, false))
+            .is_err()
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

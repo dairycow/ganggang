@@ -163,3 +163,37 @@ fn short_paths_are_shown_whole() {
     assert_eq!(shorten(Path::new("/")), "/");
     assert_eq!(shorten(Path::new("/home")), "/home");
 }
+
+/// The throughput figures are fields like the rest: there when the backend
+/// reports them, absent when it does not, and gone with a new session.
+#[test]
+fn telemetry_renders_tps_and_thinking_pct_when_set() {
+    let mut f = footer();
+    let plain = text(&f);
+    assert!(
+        !plain.contains("t/s") && !plain.contains("think"),
+        "{plain}"
+    );
+
+    f.set_decode_tps(Some(62.4));
+    f.set_thinking_pct(Some(45));
+    let shown = text(&f);
+    assert!(shown.contains("62.4 t/s"), "{shown}");
+    assert!(shown.contains("think 45%"), "{shown}");
+    // Both are facts, not alarms: muted like the token counts.
+    assert_eq!(colour(&f, "t/s"), Some(Color::Rgb(0x98, 0xA0, 0xA6)));
+    assert_eq!(colour(&f, "think"), Some(Color::Rgb(0x98, 0xA0, 0xA6)));
+
+    f.clear_telemetry();
+    let cleared = text(&f);
+    assert!(!cleared.contains("t/s"), "{cleared}");
+    assert!(!cleared.contains("think"), "{cleared}");
+    assert!(!cleared.contains("ctx"), "{cleared}");
+}
+
+#[test]
+fn set_context_clamps_above_100_without_u8_wrapping() {
+    let mut f = footer();
+    f.set_context(400_000, 100_000);
+    assert!(text(&f).contains("ctx 100%"), "{}", text(&f));
+}

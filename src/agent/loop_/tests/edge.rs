@@ -6,6 +6,7 @@
 
 mod cancel;
 mod continuation;
+mod retry;
 mod stream_abort;
 
 use std::sync::Arc;
