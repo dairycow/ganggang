@@ -91,14 +91,9 @@ Exact characters and rules from `src/tui/`:
 
 When an SVG icon or emblem is needed (HTML headers, docs favicon, social cards), use a minimal geometric silhouette or tufted scarlet crest motif built strictly from palette colours (`#D94B4B`, `#E07A4F`, `#16191C`, `#E9E3D7`). Avoid cartoon birds, gradients, neon glows, or heavy drop shadows.
 
-## Canonical source vs legacy drift
+## Canonical source
 
-`src/tui/theme.rs` is the single source of truth. Older files in the repository predate this palette and must not be copied for new visual work:
-
-- `design.html`: Tokyo-Night blue (`#7aa2f7`)
-- `src/export.rs`: blue (`#4a89dc`) on `#14161a`
-- `session-analysis-01a207a2.html`: crimson (`#e84c3d`)
-- `docs/book.toml`: default mdBook `coal` theme
+`src/tui/theme.rs` is the single source of truth for the 15-role palette. `docs/theme/ganggang.css`, `docs/theme/favicon.svg`, and `src/export.rs` all implement this same palette.
 
 ## Verification checklist
 

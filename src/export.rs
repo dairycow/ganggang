@@ -74,25 +74,28 @@ fn esc(text: &str) -> String {
 const CSS: &str = r#"
 :root { color-scheme: dark; }
 body { margin: 0 auto; max-width: 52rem; padding: 1.5rem 1rem 4rem;
-       background: #14161a; color: #cdd3dc; font: 15px/1.55 sans-serif; }
-header { border-bottom: 1px solid #2a2f37; padding-bottom: .75rem;
+       background: #16191C; color: #E9E3D7;
+       font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { border-bottom: 1px solid #3A4047; padding-bottom: .75rem;
          margin-bottom: 1.25rem; }
-h1 { font-size: 1rem; margin: 0 0 .25rem; color: #e8ebef; }
-.meta { color: #7d8590; font-size: .8rem; }
+h1 { font-size: 1rem; margin: 0 0 .25rem; color: #E9E3D7; }
+.meta { color: #98A0A6; font-size: .8rem; }
 .user, .assistant, .tool, .compaction { margin: 1rem 0; }
-.user { border-left: 3px solid #4a89dc; padding: .25rem 0 .25rem .75rem; }
-.assistant { border-left: 3px solid #3c414b; padding: .25rem 0 .25rem .75rem; }
-.tool { border-left: 3px solid #2a2f37; padding: .25rem 0 .25rem .75rem; }
-.compaction { border-left: 3px dashed #555961; color: #7d8590;
+.user { border-left: 3px solid #D94B4B; padding: .25rem 0 .25rem .75rem; }
+.assistant { border-left: 3px solid #3A4047; padding: .25rem 0 .25rem .75rem; }
+.tool { border-left: 3px solid #3A4047; padding: .25rem 0 .25rem .75rem; }
+.compaction { border-left: 3px dashed #D9A441; color: #98A0A6;
               padding: .25rem 0 .25rem .75rem; font-size: .85rem; }
-pre { background: #1b1e24; border: 1px solid #2a2f37; border-radius: 4px;
+pre { background: #2A2F35; border: 1px solid #3A4047; border-radius: 4px;
       padding: .6rem .75rem; overflow-x: auto; font-size: .82rem;
+      font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+      color: #C7D0C0;
       white-space: pre-wrap; word-break: break-word; margin: .4rem 0; }
 details { margin: .3rem 0; }
-summary { cursor: pointer; color: #7d8590; font-size: .85rem; }
-details.thinking summary { color: #6b7280; font-style: italic; }
-.tool summary { color: #9aa4b1; }
-.usage { color: #555961; font-size: .75rem; margin-top: .2rem; }
+summary { cursor: pointer; color: #98A0A6; font-size: .85rem; }
+details.thinking summary { color: #6B7379; font-style: italic; }
+.tool summary { color: #E07A4F; }
+.usage { color: #6B7379; font-size: .75rem; margin-top: .2rem; }
 "#;
 
 /// Render one session as a complete HTML document. Tool results are
@@ -209,7 +212,7 @@ pub fn render_html(header: &SessionHeader, entries: &[Entry]) -> String {
                 summary, timestamp, ..
             } => {
                 body.push_str(&format!(
-                    "<div class=\"compaction\" title=\"{ts}\">⇄ context compacted — \
+                    "<div class=\"compaction\" title=\"{ts}\">⇄ context compacted: \
                      <details><summary>summary</summary><pre>{}</pre></details></div>\n",
                     esc(summary),
                     ts = esc(timestamp)

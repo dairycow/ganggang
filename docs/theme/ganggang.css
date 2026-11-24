@@ -1,0 +1,68 @@
+/* ganggang (gg) brand stylesheet for the mdBook coal theme.
+   Palette: src/tui/theme.rs (canonical). Zero external references. */
+
+.coal {
+  --bg: #16191C !important;
+  --fg: #E9E3D7 !important;
+  --sidebar-bg: #202429 !important;
+  --sidebar-fg: #98A0A6 !important;
+  --sidebar-non-existant: #6B7379 !important;
+  --sidebar-active: #D94B4B !important;
+  --sidebar-spacer: #3A4047 !important;
+  --scrollbar: #3A4047 !important;
+  --icons: #98A0A6 !important;
+  --icons-hover: #E9E3D7 !important;
+  --links: #E07A4F !important;
+  --inline-code-color: #C7D0C0 !important;
+  --theme-popup-bg: #202429 !important;
+  --theme-popup-border: #3A4047 !important;
+  --theme-hover: #3A2B2B !important;
+  --quote-bg: #202429 !important;
+  --quote-border: #D94B4B !important;
+  --table-border-color: #3A4047 !important;
+  --table-header-bg: #202429 !important;
+  --table-alternate-bg: #202429 !important;
+  --searchbar-border-color: #3A4047 !important;
+  --searchbar-bg: #2A2F35 !important;
+  --searchbar-fg: #E9E3D7 !important;
+  --searchbar-shadow-color: #16191C !important;
+  --searchresults-header-fg: #E9E3D7 !important;
+  --searchresults-border-color: #3A4047 !important;
+  --searchresults-li-bg: #3A2B2B !important;
+  --search-mark-bg: #D9A441 !important;
+}
+
+.coal {
+  color-scheme: dark;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.coal pre > code,
+.coal code {
+  background: #2A2F35;
+  color: #C7D0C0;
+  border: 1px solid #3A4047;
+  border-radius: 4px;
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+}
+
+.coal pre > code {
+  padding: 0.75rem 1rem;
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+.coal :not(pre) > code {
+  padding: 0.1rem 0.35rem;
+  font-size: 0.85em;
+}
+
+.coal h1 {
+  border-bottom: 2px solid #D94B4B;
+  padding-bottom: 0.4rem;
+}
+
+.coal .sidebar-scrollbox a.active,
+.coal .sidebar-scrollbox a:hover {
+  border-left: 3px solid #D94B4B;
+}
