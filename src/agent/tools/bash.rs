@@ -17,6 +17,8 @@ use serde_json::Value;
 
 use super::{BoxFuture, Cancel, Tool, ToolResult, parse_args};
 
+mod hint;
+
 const OUTPUT_CAP: usize = 10 * 1024;
 
 pub struct BashTool {
@@ -339,7 +341,12 @@ impl Tool for BashTool {
                         Some(c) => c.to_string(),
                         None => "killed by signal".to_string(),
                     };
-                    let result = format!("[exit code: {code}]\n{output}");
+                    let mut result = format!("[exit code: {code}]\n{output}");
+                    // A shell command that duplicates a native tool gets a
+                    // one-line nudge; the command itself ran regardless.
+                    if let Some(h) = hint::workaround_hint(&args.command, &self.cwd) {
+                        result.push_str(&format!("\n[hint: {h}]"));
+                    }
                     if status.success() {
                         ToolResult::ok(result)
                     } else {

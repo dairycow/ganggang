@@ -287,3 +287,115 @@ async fn cancellation_reports_output_that_arrived_before_the_kill() {
     assert!(r.output.contains("[partial output]"), "{}", r.output);
     assert!(r.output.contains("before-cancel"), "{}", r.output);
 }
+
+/// The nudge is decided from the command text alone: a pipe stays inside
+/// one segment, quotes and `KEY=value` prefixes do not hide the command
+/// word, and a tool workaround outranks a redundant `cd`.
+#[test]
+fn workaround_hint_names_the_native_tool() {
+    let cwd = Path::new("/work/dir");
+    const READ: &str = "use native read (supports offset/limit and negative offset), outline, or edit instead of bash";
+    let hinted = [
+        ("cat src/main.rs", READ),
+        ("sed -n '1,20p' src/main.rs", READ),
+        ("head -5 README.md", READ),
+        ("grep -rn panic src/", "use native grep instead of bash"),
+        ("find . -name '*.rs'", "use native find instead of bash"),
+        ("ls -la src/", "use native ls or find instead of bash"),
+        (
+            "/usr/bin/python3 -c \"open('a.txt').write('x')\"",
+            "use native read, edit, or write instead of inline python in bash",
+        ),
+        (
+            "cd /work/dir && echo ok",
+            "bash already runs in the working directory; omit cd",
+        ),
+        ("cd '/work/dir/' && cat a.txt", READ),
+        ("FOO=1 BAR=2 grep x y", "use native grep instead of bash"),
+    ];
+    for (command, expected) in hinted {
+        assert_eq!(
+            hint::workaround_hint(command, cwd),
+            Some(expected),
+            "{command}"
+        );
+    }
+}
+
+/// Normal commands, and pipelines whose tail is a coreutils tool, are left
+/// alone: the nudge is for workarounds, not for ordinary shell use.
+#[test]
+fn workaround_hint_leaves_normal_commands_alone() {
+    let cwd = Path::new("/work/dir");
+    for command in [
+        "echo hi",
+        "cargo test | tail -20",
+        "git diff | grep foo",
+        "printf 'a\\nb\\n' | grep a",
+        "python3 -c \"print(1+1)\"",
+        "./run_checks.sh",
+        "echo 'cat file'",
+        "cd /other/dir && echo ok",
+    ] {
+        assert_eq!(
+            hint::workaround_hint(command, cwd),
+            None,
+            "no hint expected for {command}"
+        );
+    }
+}
+
+/// The tool appends the nudge after the output, keeping the exit code and
+/// the error flag of the command itself.
+#[tokio::test]
+async fn a_workaround_command_gets_a_hint_line() {
+    let cwd = std::env::temp_dir();
+    let tool = BashTool::new(cwd.clone(), 30);
+    let cases = [
+        ("cat /dev/null", "use native read"),
+        ("sed '' /dev/null", "use native read"),
+        ("head -n 1 /dev/null", "use native read"),
+        ("grep a /dev/null; true", "use native grep"),
+        ("find . -maxdepth 0", "use native find"),
+        ("ls", "use native ls or find"),
+        (
+            "python3 -c \"open('/dev/null', 'w').write('x')\"",
+            "use native read, edit, or write",
+        ),
+        (
+            &format!("cd {} && echo ok", cwd.display()),
+            "bash already runs in the working directory; omit cd",
+        ),
+    ];
+    for (command, hint) in cases {
+        let r = tool
+            .execute(&serde_json::json!({"command": command}), &no_cancel())
+            .await;
+        assert!(
+            r.output.contains(&format!("[hint: {hint}")),
+            "expected a hint for {command}: {}",
+            r.output
+        );
+    }
+}
+
+/// Ordinary shell use gets no hint line at all.
+#[tokio::test]
+async fn an_ordinary_command_gets_no_hint() {
+    let tool = BashTool::new(std::env::temp_dir(), 30);
+    for command in [
+        "echo hi",
+        "cargo test | tail -20",
+        "printf 'a\\nb\\n' | grep a",
+        "python3 -c \"print(1+1)\"",
+    ] {
+        let r = tool
+            .execute(&serde_json::json!({"command": command}), &no_cancel())
+            .await;
+        assert!(
+            !r.output.contains("[hint:"),
+            "no hint expected for {command}: {}",
+            r.output
+        );
+    }
+}
