@@ -1,6 +1,6 @@
 //! Provider presets, per-model overrides, and endpoint resolution.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 
@@ -29,26 +29,6 @@ impl ModelSpec {
             max_tokens: None,
             context_window: None,
             replay_reasoning: None,
-            reasoning_effort: None,
-            reasoning_budget_tokens: None,
-            compact_threshold_tokens: None,
-        }
-    }
-
-    fn with_ctx(id: &str, context_window: u32) -> Self {
-        let mut s = Self::id_only(id);
-        s.context_window = Some(context_window);
-        s
-    }
-
-    fn anthropic(id: &str, base_url: &str) -> Self {
-        Self {
-            id: id.to_string(),
-            api: Some(ApiKind::AnthropicMessages),
-            base_url: Some(base_url.to_string()),
-            max_tokens: None,
-            context_window: None,
-            replay_reasoning: Some(ReplayReasoning::Never),
             reasoning_effort: None,
             reasoning_budget_tokens: None,
             compact_threshold_tokens: None,
@@ -189,6 +169,8 @@ pub(super) struct FileProviderConfig {
     pub reasoning_budget_tokens: Option<u32>,
     pub compact_threshold_tokens: Option<u32>,
     pub models: Option<Vec<FileModelEntry>>,
+    /// `disabled = true` removes the provider instead of patching it.
+    pub disabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -237,149 +219,53 @@ pub fn canonical_provider_name(name: &str) -> &str {
     }
 }
 
+/// The shipped presets, embedded as data (not Rust literals) so the table
+/// is inspectable, diffable against the generated reference page, and
+/// overridable or removable from config like any other provider.
+const PRESETS_TOML: &str = include_str!("presets.toml");
+
+#[derive(Deserialize)]
+struct PresetFile {
+    #[serde(default)]
+    providers: BTreeMap<String, FileProviderConfig>,
+}
+
+/// Parse the embedded presets through the same path a user's
+/// `[providers.<name>]` table takes, so presets and config cannot drift
+/// apart. Their values are *defaults*: only config marks a limit explicit,
+/// which is what suppresses `/health` probing.
 pub fn builtin_providers() -> BTreeMap<String, ProviderConfig> {
+    let parsed: PresetFile =
+        toml::from_str(PRESETS_TOML).expect("embedded provider presets parse as TOML");
     let mut map = BTreeMap::new();
-
-    map.insert(
-        "strata".to_string(),
-        ProviderConfig {
-            name: "strata".to_string(),
-            base_url: "http://127.0.0.1:8080/v1".to_string(),
-            api: ApiKind::OpenAiCompletions,
-            auth: AuthStyle::Auto,
-            api_key: None,
-            api_key_env: None,
-            default_model: "qwen3.8-flash-next-iq3_s".to_string(),
-            max_tokens: 16_384,
-            context_window: 131_072,
-            context_window_explicit: false,
-            replay_reasoning: ReplayReasoning::Turn,
-            reasoning_effort: Some("medium".to_string()),
-            reasoning_budget_tokens: Some(4096),
-            compact_threshold_tokens: Some(65_536),
-            compact_threshold_explicit: false,
-            models: vec![ModelSpec::id_only("qwen3.8-flash-next-iq3_s")],
-        },
-    );
-
-    map.insert(
-        "glm-coding-plan".to_string(),
-        ProviderConfig {
-            name: "glm-coding-plan".to_string(),
-            base_url: "https://api.z.ai/api/coding/paas/v4".to_string(),
-            api: ApiKind::OpenAiCompletions,
-            auth: AuthStyle::Auto,
-            api_key: None,
-            api_key_env: Some("ZHIPU_API_KEY".to_string()),
-            default_model: "glm-5.3-flash".to_string(),
-            max_tokens: 16_384,
-            context_window: 1_000_000,
-            context_window_explicit: false,
-            replay_reasoning: ReplayReasoning::All,
-            reasoning_effort: None,
-            reasoning_budget_tokens: None,
-            compact_threshold_tokens: None,
-            compact_threshold_explicit: false,
-            models: vec![
-                ModelSpec::id_only("glm-5.3-flash"),
-                ModelSpec::id_only("glm-5.3"),
-                ModelSpec::id_only("glm-5.3-highspeed"),
-                ModelSpec::id_only("glm-5.4"),
-            ],
-        },
-    );
-
-    let go_anthropic = "https://opencode.ai/inference/go/anthropic";
-    map.insert(
-        "opencode-go".to_string(),
-        ProviderConfig {
-            name: "opencode-go".to_string(),
-            base_url: "https://opencode.ai/inference/go/openai/v1".to_string(),
-            api: ApiKind::OpenAiCompletions,
-            auth: AuthStyle::Auto,
-            api_key: None,
-            api_key_env: Some("OPENCODE_API_KEY".to_string()),
-            default_model: "deepseek-v4.1-flash".to_string(),
-            max_tokens: 16_384,
-            context_window: 1_000_000,
-            context_window_explicit: false,
-            replay_reasoning: ReplayReasoning::All,
-            reasoning_effort: None,
-            reasoning_budget_tokens: None,
-            compact_threshold_tokens: None,
-            compact_threshold_explicit: false,
-            models: vec![
-                ModelSpec::id_only("deepseek-v4.1-flash"),
-                ModelSpec::id_only("deepseek-v4-pro"),
-                ModelSpec::id_only("glm-5.3-flash"),
-                ModelSpec::id_only("glm-5.3"),
-                ModelSpec::with_ctx("kimi-k3.1-pro", 1_048_576),
-                ModelSpec::with_ctx("kimi-k3", 1_048_576),
-                ModelSpec::with_ctx("kimi-k2.7-code", 262_144),
-                ModelSpec::id_only("minimax-m3.1-flash"),
-                ModelSpec::with_ctx("mimo-v2.6-pro", 1_048_576),
-                ModelSpec::with_ctx("mimo-v2.6-flash", 1_048_576),
-                ModelSpec::with_ctx("beam-free", 1_048_576),
-                {
-                    let mut s = ModelSpec::with_ctx("hy4", 1_048_576);
-                    s.replay_reasoning = Some(ReplayReasoning::Never);
-                    s
-                },
-                ModelSpec::id_only("step-5-preview"),
-                ModelSpec::anthropic("claude-haiku-5-5", go_anthropic),
-                ModelSpec::anthropic("qwen4-max", go_anthropic),
-                ModelSpec::anthropic("qwen3.8-max", go_anthropic),
-                ModelSpec::anthropic("qwen3.8-flash", go_anthropic),
-                ModelSpec::anthropic("qwen3.7-plus", go_anthropic),
-                ModelSpec::anthropic("minimax-m3", go_anthropic),
-            ],
-        },
-    );
-
-    map.insert(
-        "deepseek".to_string(),
-        ProviderConfig {
-            name: "deepseek".to_string(),
-            base_url: "https://api.deepseek.com".to_string(),
-            api: ApiKind::OpenAiCompletions,
-            auth: AuthStyle::Auto,
-            api_key: None,
-            api_key_env: Some("DEEPSEEK_API_KEY".to_string()),
-            default_model: "deepseek-flash".to_string(),
-            max_tokens: 16_384,
-            context_window: 1_000_000,
-            context_window_explicit: false,
-            replay_reasoning: ReplayReasoning::All,
-            reasoning_effort: None,
-            reasoning_budget_tokens: None,
-            compact_threshold_tokens: None,
-            compact_threshold_explicit: false,
-            models: vec![
-                ModelSpec::id_only("deepseek-flash"),
-                ModelSpec::id_only("deepseek-v4-pro"),
-                {
-                    let mut s = ModelSpec::with_ctx("deepseek-chat", 131_072);
-                    s.replay_reasoning = Some(ReplayReasoning::Never);
-                    s
-                },
-                {
-                    let mut s = ModelSpec::with_ctx("deepseek-reasoner", 131_072);
-                    s.replay_reasoning = Some(ReplayReasoning::All);
-                    s
-                },
-            ],
-        },
-    );
-
+    apply_provider_layer(&mut map, parsed.providers, &mut BTreeSet::new())
+        .expect("embedded provider presets are complete provider tables");
+    for provider in map.values_mut() {
+        provider.context_window_explicit = false;
+        provider.compact_threshold_explicit = false;
+    }
     map
 }
 
 pub(super) fn apply_provider_layer(
     providers: &mut BTreeMap<String, ProviderConfig>,
     layer: BTreeMap<String, FileProviderConfig>,
+    removed: &mut BTreeSet<String>,
 ) -> anyhow::Result<()> {
     for (raw_name, patch) in layer {
         let name = canonical_provider_name(&raw_name).to_string();
+        // `disabled = true` subtracts a preset (or a provider an earlier
+        // layer added). One-way by design: removal is final for the merge,
+        // so a project file can neither resurrect nor re-patch what an
+        // earlier layer switched off.
+        if patch.disabled == Some(true) {
+            providers.remove(&name);
+            removed.insert(name);
+            continue;
+        }
+        if removed.contains(&name) {
+            continue;
+        }
         if let Some(existing) = providers.get_mut(&name) {
             if let Some(v) = patch.base_url {
                 existing.base_url = v;
@@ -471,6 +357,17 @@ pub(super) fn resolve_provider_keys(
             provider.api_key = Some(val.clone());
         }
     }
+}
+
+/// `Some(prefix)` when `spec` is `prefix/model` and `prefix` names a
+/// provider that config removed — the caller reports the removal instead of
+/// silently treating the whole spec as a model id.
+pub(super) fn disabled_provider_prefix<'a>(
+    spec: &'a str,
+    disabled: &BTreeSet<String>,
+) -> Option<&'a str> {
+    let (lhs, rhs) = spec.split_once('/')?;
+    (!rhs.is_empty() && disabled.contains(canonical_provider_name(lhs))).then_some(lhs)
 }
 
 pub(super) fn split_provider_model<'a>(

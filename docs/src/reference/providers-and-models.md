@@ -16,17 +16,12 @@ Built-in provider presets, generated from the provider table. `zai-coding-plan` 
 | Model | Wire API | Context window | Max tokens | Replays reasoning | Base URL |
 |---|---|---|---|---|---|
 | `deepseek-flash` (default) | `openai-completions` | 1000000 | 16384 | yes | `https://api.deepseek.com` |
-| `deepseek-v4-pro` | `openai-completions` | 1000000 | 16384 | yes | `https://api.deepseek.com` |
-| `deepseek-chat` | `openai-completions` | 131072 | 16384 | no | `https://api.deepseek.com` |
-| `deepseek-reasoner` | `openai-completions` | 131072 | 16384 | yes | `https://api.deepseek.com` |
 
 ## glm-coding-plan
 
 | Model | Wire API | Context window | Max tokens | Replays reasoning | Base URL |
 |---|---|---|---|---|---|
 | `glm-5.3-flash` (default) | `openai-completions` | 1000000 | 16384 | yes | `https://api.z.ai/api/coding/paas/v4` |
-| `glm-5.3` | `openai-completions` | 1000000 | 16384 | yes | `https://api.z.ai/api/coding/paas/v4` |
-| `glm-5.3-highspeed` | `openai-completions` | 1000000 | 16384 | yes | `https://api.z.ai/api/coding/paas/v4` |
 | `glm-5.4` | `openai-completions` | 1000000 | 16384 | yes | `https://api.z.ai/api/coding/paas/v4` |
 
 ## opencode-go

@@ -204,7 +204,9 @@ Built-in providers: `strata` (local default), `glm-coding-plan` (Z.AI,
 alias `zai-coding-plan`), `opencode-go` (routes OpenAI Completions and
 Anthropic Messages per model), and `deepseek`. Custom `[providers.<name>]`
 sections are also supported (`base_url`, `model`, optional `api =
-"open-ai-completions"` | `"anthropic-messages"`, `api_key_env`, etc.).
+"open-ai-completions"` | `"anthropic-messages"`, `api_key_env`, etc.),
+and a preset you never use can be removed with `[providers.<name>]
+disabled = true`.
 
 ```sh
 gg --list-models

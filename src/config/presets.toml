@@ -1,0 +1,79 @@
+# Shipped provider presets, embedded at compile time (`include_str!`) and
+# parsed through the same path a user's `[providers.<name>]` table takes.
+# Everything here is data: override any key from `~/.gg/config.toml`, or
+# remove a preset outright with `[providers.<name>] disabled = true`.
+#
+# These values are defaults, not user overrides — a preset's
+# `context_window`/`compact_threshold_tokens` never count as explicit, so
+# `strata` keeps probing `/health`.
+
+[providers.strata]
+base_url = "http://127.0.0.1:8080/v1"
+api = "open-ai-completions"
+auth = "auto"
+model = "qwen3.8-flash-next-iq3_s"
+max_tokens = 16384
+context_window = 131072
+replay_reasoning = "turn"
+reasoning_effort = "medium"
+reasoning_budget_tokens = 4096
+compact_threshold_tokens = 65536
+models = ["qwen3.8-flash-next-iq3_s"]
+
+[providers.glm-coding-plan]
+base_url = "https://api.z.ai/api/coding/paas/v4"
+api = "open-ai-completions"
+auth = "auto"
+api_key_env = "ZHIPU_API_KEY"
+model = "glm-5.3-flash"
+max_tokens = 16384
+context_window = 1000000
+replay_reasoning = "all"
+models = [
+  "glm-5.3-flash",
+  "glm-5.4",
+]
+
+[providers.opencode-go]
+base_url = "https://opencode.ai/inference/go/openai/v1"
+api = "open-ai-completions"
+auth = "auto"
+api_key_env = "OPENCODE_API_KEY"
+model = "deepseek-v4.1-flash"
+max_tokens = 16384
+context_window = 1000000
+replay_reasoning = "all"
+models = [
+  "deepseek-v4.1-flash",
+  "deepseek-v4-pro",
+  "glm-5.3-flash",
+  "glm-5.3",
+  { id = "kimi-k3.1-pro", context_window = 1048576 },
+  { id = "kimi-k3", context_window = 1048576 },
+  { id = "kimi-k2.7-code", context_window = 262144 },
+  "minimax-m3.1-flash",
+  { id = "mimo-v2.6-pro", context_window = 1048576 },
+  { id = "mimo-v2.6-flash", context_window = 1048576 },
+  { id = "beam-free", context_window = 1048576 },
+  { id = "hy4", context_window = 1048576, replay_reasoning = "never" },
+  "step-5-preview",
+  { id = "claude-haiku-5-5", api = "anthropic-messages", base_url = "https://opencode.ai/inference/go/anthropic", replay_reasoning = "never" },
+  { id = "qwen4-max", api = "anthropic-messages", base_url = "https://opencode.ai/inference/go/anthropic", replay_reasoning = "never" },
+  { id = "qwen3.8-max", api = "anthropic-messages", base_url = "https://opencode.ai/inference/go/anthropic", replay_reasoning = "never" },
+  { id = "qwen3.8-flash", api = "anthropic-messages", base_url = "https://opencode.ai/inference/go/anthropic", replay_reasoning = "never" },
+  { id = "qwen3.7-plus", api = "anthropic-messages", base_url = "https://opencode.ai/inference/go/anthropic", replay_reasoning = "never" },
+  { id = "minimax-m3", api = "anthropic-messages", base_url = "https://opencode.ai/inference/go/anthropic", replay_reasoning = "never" },
+]
+
+[providers.deepseek]
+base_url = "https://api.deepseek.com"
+api = "open-ai-completions"
+auth = "auto"
+api_key_env = "DEEPSEEK_API_KEY"
+model = "deepseek-flash"
+max_tokens = 16384
+context_window = 1000000
+replay_reasoning = "all"
+models = [
+  "deepseek-flash",
+]

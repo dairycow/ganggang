@@ -253,6 +253,135 @@ fn builtin_presets_and_alias_resolve() {
     assert_eq!(cfg_alias.model, "glm-5.3-flash");
 }
 
+/// The presets are data (`presets.toml`), so nothing else pins their
+/// contents: this test does, including the fields the generated reference
+/// page cannot show. A preset's limits are defaults, never explicit (that
+/// is what keeps `strata` probing `/health`).
+#[test]
+fn presets_keep_their_shipped_values() {
+    let providers = providers::builtin_providers();
+    let strata = &providers["strata"];
+    assert_eq!(strata.base_url, "http://127.0.0.1:8080/v1");
+    assert_eq!(strata.default_model, "qwen3.8-flash-next-iq3_s");
+    assert_eq!(strata.max_tokens, 16_384);
+    assert_eq!(strata.context_window, 131_072);
+    assert!(!strata.context_window_explicit);
+    assert_eq!(strata.replay_reasoning, ReplayReasoning::Turn);
+    assert_eq!(strata.reasoning_effort.as_deref(), Some("medium"));
+    assert_eq!(strata.reasoning_budget_tokens, Some(4096));
+    assert_eq!(strata.compact_threshold_tokens, Some(65_536));
+    assert!(!strata.compact_threshold_explicit);
+    assert!(strata.api_key_env.is_none());
+
+    let go = &providers["opencode-go"];
+    assert_eq!(go.api_key_env.as_deref(), Some("OPENCODE_API_KEY"));
+    assert_eq!(go.replay_reasoning, ReplayReasoning::All);
+    // One preset, two wire protocols: the Anthropic models ride their own
+    // base URL and never replay reasoning.
+    let anthropic = go
+        .models
+        .iter()
+        .find(|m| m.id == "claude-haiku-5-5")
+        .expect("claude-haiku-5-5 is an opencode-go model");
+    assert_eq!(anthropic.api, Some(ApiKind::AnthropicMessages));
+    assert_eq!(
+        anthropic.base_url.as_deref(),
+        Some("https://opencode.ai/inference/go/anthropic")
+    );
+    assert_eq!(anthropic.replay_reasoning, Some(ReplayReasoning::Never));
+    let hy4 = go
+        .models
+        .iter()
+        .find(|m| m.id == "hy4")
+        .expect("hy4 is an opencode-go model");
+    assert_eq!(hy4.context_window, Some(1_048_576));
+    assert_eq!(hy4.replay_reasoning, Some(ReplayReasoning::Never));
+    assert_eq!(go.models.len(), 19);
+
+    let deepseek = &providers["deepseek"];
+    let ids: Vec<&str> = deepseek.models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, ["deepseek-flash"]);
+
+    let glm = &providers["glm-coding-plan"];
+    let ids: Vec<&str> = glm.models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, ["glm-5.3-flash", "glm-5.4"]);
+
+    for provider in providers.values() {
+        assert!(
+            !provider.context_window_explicit && !provider.compact_threshold_explicit,
+            "preset {} must not mark a limit explicit",
+            provider.name
+        );
+    }
+}
+
+#[test]
+fn disabled_removes_a_preset_for_every_later_layer() {
+    // A preset is subtractable, not merely overridable: `disabled = true`
+    // wins over a later layer that tries to patch the provider back in.
+    let cfg = merge(
+        Config::default(),
+        Some("[providers.opencode-go]\ndisabled = true\n"),
+        Some("[providers.opencode-go]\nmodel = \"glm-5.3\"\n"),
+        &[],
+    )
+    .unwrap();
+    assert!(!cfg.providers.contains_key("opencode-go"));
+    assert_eq!(
+        cfg.providers.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["deepseek", "glm-coding-plan", "strata"]
+    );
+    // The name no longer resolves, and a spec naming it says why instead
+    // of silently becoming a model id on the active provider.
+    let err = cfg.resolve_switch("opencode-go/glm-5.3").unwrap_err();
+    assert!(format!("{err:#}").contains("disabled"), "{err:#}");
+    let err = cfg.resolve_switch("opencode-go").unwrap_err();
+    assert!(format!("{err:#}").contains("disabled"), "{err:#}");
+}
+
+#[test]
+fn disabled_custom_provider_and_active_provider_error() {
+    // Disabling something that never existed is a no-op, not an error.
+    let cfg = merge(
+        Config::default(),
+        Some("[providers.ghost]\ndisabled = true\n"),
+        None,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(cfg.provider, "strata");
+
+    // Switching off the provider you are pointed at fails loudly at load.
+    let err = merge(
+        Config::default(),
+        Some("provider = \"deepseek\"\n[providers.deepseek]\ndisabled = true\n"),
+        None,
+        &[],
+    )
+    .unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("disabled"), "{msg}");
+    assert!(msg.contains("deepseek"), "{msg}");
+
+    // `-P` on a removed provider fails too, and names what is left.
+    let cfg = merge(
+        Config::default(),
+        Some("[providers.deepseek]\ndisabled = true\n"),
+        None,
+        &[],
+    )
+    .unwrap();
+    let mut cfg = cfg;
+    let err = cfg.apply_cli(Some("deepseek"), None).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("disabled"), "{msg}");
+    let err = cfg
+        .apply_cli(None, Some("deepseek/deepseek-flash"))
+        .unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("disabled"), "{msg}");
+}
+
 #[test]
 fn per_provider_layer_preserves_builtin_fields_and_resolves_env_keys() {
     let user = r#"
@@ -378,7 +507,7 @@ fn resolve_switch_and_require_auth() {
     let ep2 = cfg.resolve_switch("claude-haiku-5-5").unwrap();
     assert_eq!(ep2.label(), "opencode-go/claude-haiku-5-5");
 
-    let err = cfg.resolve_switch("glm-5.3").unwrap_err();
+    let err = cfg.resolve_switch("glm-5.3-flash").unwrap_err();
     assert!(format!("{err:#}").contains("multiple providers"));
 
     let adhoc = cfg.resolve_switch("my-custom-lora").unwrap();
@@ -537,10 +666,10 @@ fn env_overrides_survive_apply_cli_and_resolve_switch() {
         ]),
     )
     .unwrap();
-    cfg.apply_cli(Some("deepseek"), Some("deepseek-v4-pro"))
+    cfg.apply_cli(Some("deepseek"), Some("deepseek-flash"))
         .unwrap();
     assert_eq!(cfg.provider, "deepseek");
-    assert_eq!(cfg.model, "deepseek-v4-pro");
+    assert_eq!(cfg.model, "deepseek-flash");
     assert_eq!(cfg.base_url, "http://127.0.0.1:9999/v1");
     assert_eq!(cfg.max_tokens, 4096);
     assert_eq!(cfg.api_key.as_deref(), Some("env-key"));

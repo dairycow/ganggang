@@ -8,7 +8,7 @@
 
 pub mod providers;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Context;
 
@@ -83,6 +83,10 @@ pub struct Config {
     pub request_timeout_secs: u64,
     pub tools: Vec<String>,
     pub providers: BTreeMap<String, ProviderConfig>,
+    /// Presets (or earlier layers' providers) removed with
+    /// `disabled = true`. Kept so a later `-P`/`-m` naming one says why it
+    /// is gone instead of blaming a typo.
+    pub disabled_providers: BTreeSet<String>,
     env_overrides: EnvOverrides,
 }
 
@@ -118,6 +122,7 @@ impl Default for Config {
                 .map(|s| s.to_string())
                 .collect(),
             providers,
+            disabled_providers: BTreeSet::new(),
             env_overrides: EnvOverrides::default(),
         }
     }
@@ -156,7 +161,16 @@ impl Config {
         let (model_provider, model_id) = match model {
             Some(m) => match providers::split_provider_model(m, &self.providers) {
                 Some((p, id)) => (Some(p.to_string()), Some(id)),
-                None => (None, Some(m)),
+                None => {
+                    if let Some(p) =
+                        providers::disabled_provider_prefix(m, &self.disabled_providers)
+                    {
+                        anyhow::bail!(
+                            "provider {p:?} is disabled by `[providers.{p}] disabled = true`"
+                        );
+                    }
+                    (None, Some(m))
+                }
             },
             None => (None, None),
         };
@@ -169,6 +183,10 @@ impl Config {
         let target_provider = cli_provider
             .or(model_provider)
             .unwrap_or_else(|| self.provider.clone());
+        anyhow::ensure!(
+            !self.disabled_providers.contains(&target_provider),
+            "provider {target_provider:?} is disabled by `[providers.{target_provider}] disabled = true`"
+        );
         let pcfg = lookup_provider(&self.providers, &target_provider)?;
         let mut ep = pcfg.resolve(model_id);
         ep.model_explicit = model_id.is_some();
@@ -205,6 +223,15 @@ impl Config {
     ) -> anyhow::Result<Endpoint> {
         let spec = spec.trim();
         anyhow::ensure!(!spec.is_empty(), "model specification must not be empty");
+        anyhow::ensure!(
+            !self
+                .disabled_providers
+                .contains(providers::canonical_provider_name(spec)),
+            "provider {spec:?} is disabled by `[providers.{spec}] disabled = true`"
+        );
+        if let Some(p) = providers::disabled_provider_prefix(spec, &self.disabled_providers) {
+            anyhow::bail!("provider {p:?} is disabled by `[providers.{p}] disabled = true`");
+        }
         let canon = providers::canonical_provider_name(spec);
         let mut ep = if let Some(pcfg) = self.providers.get(canon) {
             let mut ep = pcfg.resolve(None);
@@ -342,8 +369,9 @@ pub fn merge(
     let project = parse_layer(project_toml, "project config (.gg/config.toml)")?;
 
     let mut providers = defaults.providers.clone();
-    providers::apply_provider_layer(&mut providers, user.providers)?;
-    providers::apply_provider_layer(&mut providers, project.providers)?;
+    let mut removed: BTreeSet<String> = BTreeSet::new();
+    providers::apply_provider_layer(&mut providers, user.providers, &mut removed)?;
+    providers::apply_provider_layer(&mut providers, project.providers, &mut removed)?;
     providers::resolve_provider_keys(&mut providers, env);
 
     let pick = |u: &Option<String>, p: &Option<String>| p.clone().or_else(|| u.clone());
@@ -374,6 +402,10 @@ pub fn merge(
     let active_provider = env_provider
         .or(env_model_provider)
         .unwrap_or_else(|| file_provider.clone());
+    anyhow::ensure!(
+        !removed.contains(&active_provider),
+        "provider {active_provider:?} is disabled by `[providers.{active_provider}] disabled = true`"
+    );
     let pcfg = lookup_provider(&providers, &active_provider)?;
     let apply_file_flat = active_provider == file_provider;
 
@@ -515,6 +547,7 @@ pub fn merge(
         )?,
         tools: pick_list(&user.tools, &project.tools).unwrap_or(defaults.tools),
         providers,
+        disabled_providers: removed,
         env_overrides,
     };
     validate(&cfg)?;

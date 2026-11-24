@@ -71,9 +71,21 @@ models = ["my-model", { id = "my-long-model", context_window = 262144 }]
 model = "deepseek-v4-pro"
 ```
 
-Provider keys: `base_url`, `api`, `auth`, `api_key`, `api_key_env`, `model`, `max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`, and `models`. Each `models` entry is a bare id or a table with `id` plus optional `api`, `base_url`, `max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`. A provider with `api_key_env` and no key set refuses to start, naming the variable to export.
+Provider keys: `base_url`, `api`, `auth`, `api_key`, `api_key_env`, `model`, `max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`, `models`, and `disabled`. Each `models` entry is a bare id or a table with `id` plus optional `api`, `base_url`, `max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`. A provider with `api_key_env` and no key set refuses to start, naming the variable to export.
 
-Choose at the command line with `-P deepseek`, `-m deepseek-v4-pro`, or `-m opencode-go/claude-haiku-5-5` (`provider/model`). Naming conflicting providers in `-P` and `-m` is an error.
+### Removing a built-in provider
+
+The built-in providers are shipped as data, not compiled-in special cases: every field above is what the preset itself uses. Override what you need, or take the whole provider off the list with `disabled = true`:
+
+```toml
+# ~/.gg/config.toml
+[providers.opencode-go]
+disabled = true
+```
+
+A disabled provider disappears from `/model`, `--list-models`, `-P`, and `-m` — a `-P opencode-go` or `opencode-go/...` naming it fails with the reason instead of becoming a model id on the active provider. Removal is final for the merge: a project `.gg/config.toml` cannot patch or resurrect a provider an earlier layer switched off. Disabling a provider that does not exist is a no-op, and switching off the provider you are pointed at (via `provider = "…"`, `GG_PROVIDER`, or a `provider/model` prefix) is an error at startup, since there is nothing left to run.
+
+Choose at the command line with `-P deepseek`, `-m deepseek-flash`, or `-m opencode-go/claude-haiku-5-5` (`provider/model`). Naming conflicting providers in `-P` and `-m` is an error.
 
 ## Environment variables
 
