@@ -509,3 +509,82 @@ fn thinking_pct_prefers_usage_reasoning_tokens_then_char_ratio() {
     };
     assert_eq!(thinking_pct(&m3), Some(60));
 }
+
+#[test]
+fn notices_ride_the_last_noticeable_entry_across_normal_and_compacted_histories() {
+    let msg = |role: Role, content: Option<&str>| Message {
+        role,
+        content: content.map(String::from),
+        tool_calls: Vec::new(),
+        tool_call_id: (role == Role::ToolResult).then(|| "call_1".into()),
+        usage: None,
+        is_error: false,
+        reasoning: None,
+    };
+    let entry = |id: &str, role: Role, content: Option<&str>| Entry::Message {
+        id: id.into(),
+        parent_id: None,
+        timestamp: now_iso(),
+        message: msg(role, content),
+    };
+
+    // Normal [User, Assistant, ToolResult]: notice rides ToolResult ("t1").
+    let normal = vec![
+        entry("u1", Role::User, Some("go")),
+        entry("a1", Role::Assistant, None),
+        entry("t1", Role::ToolResult, Some("ok")),
+    ];
+    assert_eq!(last_noticeable_entry_id(&normal).as_deref(), Some("t1"));
+    let mut notices = HashMap::new();
+    notices.insert("t1".into(), "[notice]".into());
+    let wire = to_wire_with_notices(&normal, ReplayReasoning::Never, &notices);
+    assert_eq!(wire[0].content.as_deref(), Some("go"));
+    assert_eq!(wire[1].content, None);
+    assert_eq!(wire[2].content.as_deref(), Some("ok\n\n[notice]"));
+
+    // Trailing Compaction with kept = Some("a1"): last wire message is still "t1".
+    let mut with_kept = normal.clone();
+    with_kept.push(Entry::Compaction {
+        id: "c1".into(),
+        parent_id: Some("t1".into()),
+        timestamp: now_iso(),
+        summary: "sum".into(),
+        first_kept_id: "a1".into(),
+    });
+    assert_eq!(last_noticeable_entry_id(&with_kept).as_deref(), Some("t1"));
+    let wire = to_wire_with_notices(&with_kept, ReplayReasoning::Never, &notices);
+    assert_eq!(
+        wire.last().unwrap().content.as_deref(),
+        Some("ok\n\n[notice]")
+    );
+
+    // Trailing Compaction with kept = None (first_kept_id points to ToolResult):
+    // notice rides the compaction note itself ("c1").
+    let mut no_kept = normal;
+    no_kept.push(Entry::Compaction {
+        id: "c1".into(),
+        parent_id: Some("t1".into()),
+        timestamp: now_iso(),
+        summary: "sum".into(),
+        first_kept_id: "t1".into(),
+    });
+    assert_eq!(last_noticeable_entry_id(&no_kept).as_deref(), Some("c1"));
+    let mut c_notices = HashMap::new();
+    c_notices.insert("c1".into(), "[notice]".into());
+    let wire = to_wire_with_notices(&no_kept, ReplayReasoning::Never, &c_notices);
+    assert_eq!(wire.len(), 1);
+    assert!(
+        wire[0]
+            .content
+            .as_deref()
+            .unwrap()
+            .ends_with("\n\n[notice]")
+    );
+
+    // History ending in Assistant: None.
+    let ending_asst = vec![
+        entry("u1", Role::User, Some("go")),
+        entry("a1", Role::Assistant, Some("done")),
+    ];
+    assert_eq!(last_noticeable_entry_id(&ending_asst), None);
+}

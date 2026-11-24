@@ -6,6 +6,8 @@
 //! happens in [`to_wire`] / [`from_response`] (M2.3) so provider-shape
 //! knowledge never spreads past this module.
 
+use std::collections::HashMap;
+
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -223,6 +225,47 @@ pub fn to_wire(entries: &[Entry]) -> Vec<ChatMessage> {
 }
 
 pub fn to_wire_with(entries: &[Entry], replay_reasoning: ReplayReasoning) -> Vec<ChatMessage> {
+    to_wire_with_notices(entries, replay_reasoning, &HashMap::new())
+}
+
+/// Replay view with per-entry notices folded in: a notice keyed by an entry
+/// id rides the message that entry projects to, so a wrap-up nudge can be
+/// replayed byte-identically on every later request (the KV prefix cache
+/// stays append-only) while the session file never sees it.
+pub fn to_wire_with_notices(
+    entries: &[Entry],
+    replay_reasoning: ReplayReasoning,
+    notices: &HashMap<String, String>,
+) -> Vec<ChatMessage> {
+    wire_view(entries, replay_reasoning)
+        .into_iter()
+        .map(|(id, mut message)| {
+            if let Some(notice) = notices.get(&id) {
+                let existing = message.content.take().unwrap_or_default();
+                message.content = Some(if existing.is_empty() {
+                    notice.clone()
+                } else {
+                    format!("{existing}\n\n{notice}")
+                });
+            }
+            message
+        })
+        .collect()
+}
+
+/// The id of the entry backing the last wire-projected message, when that
+/// message is one a notice can ride (`"tool"` or `"user"`). `None` when the
+/// last message is an assistant turn — the caller then adds its own.
+pub fn last_noticeable_entry_id(entries: &[Entry]) -> Option<String> {
+    let (id, role) = wire_view(entries, ReplayReasoning::Never)
+        .last()
+        .map(|(id, message)| (id.clone(), message.role.clone()))?;
+    (role == "tool" || role == "user").then_some(id)
+}
+
+/// The replay view with each message tagged by the entry that produced it:
+/// a compaction note is tagged with its compaction entry's id.
+fn wire_view(entries: &[Entry], replay_reasoning: ReplayReasoning) -> Vec<(String, ChatMessage)> {
     let plain = |slice: &[Entry]| {
         let last_user_idx = slice.iter().rposition(
             |e| matches!(e, Entry::Message { message, .. } if message.role == Role::User),
@@ -231,16 +274,15 @@ pub fn to_wire_with(entries: &[Entry], replay_reasoning: ReplayReasoning) -> Vec
             .iter()
             .enumerate()
             .filter_map(|(i, entry)| match entry {
-                Entry::Message { message, .. } => {
+                Entry::Message { id, message, .. } => {
                     let include_reasoning = match replay_reasoning {
                         ReplayReasoning::Never => false,
                         ReplayReasoning::All => true,
                         ReplayReasoning::Turn => last_user_idx.is_none_or(|u| i > u),
                     };
-                    Some(message_to_wire(
-                        message,
-                        replay_reasoning,
-                        include_reasoning,
+                    Some((
+                        id.clone(),
+                        message_to_wire(message, replay_reasoning, include_reasoning),
                     ))
                 }
                 Entry::Compaction { .. } => None,
@@ -254,6 +296,7 @@ pub fn to_wire_with(entries: &[Entry], replay_reasoning: ReplayReasoning) -> Vec
         return plain(entries);
     };
     let Entry::Compaction {
+        id,
         summary,
         first_kept_id,
         ..
@@ -322,13 +365,13 @@ pub fn to_wire_with(entries: &[Entry], replay_reasoning: ReplayReasoning) -> Vec
     match kept {
         Some(offset) => {
             let mut out = Vec::with_capacity(entries.len() - offset + 1);
-            out.push(note);
+            out.push((id.clone(), note));
             out.extend(plain(&entries[offset..]));
             out
         }
         // No user or assistant message at or after the boundary: the note
         // alone carries the context forward.
-        None => vec![note],
+        None => vec![(id.clone(), note)],
     }
 }
 

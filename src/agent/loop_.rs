@@ -7,6 +7,7 @@
 //! more than it did: a truncated answer earns a few "keep going" turns
 //! ([`cut`]), and those count toward it like any other.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -37,6 +38,25 @@ pub(crate) async fn wait_for_abort(abort: &Arc<AtomicBool>) {
 
 pub(super) fn soft_nudge_turn(limit: u32) -> u32 {
     ((limit as u64 * 4) / 5).clamp(2, limit as u64) as u32
+}
+
+/// The wrap-up notice for a turn, earned at most twice per run: on the 80%
+/// line and on the final turn. `None` for every turn between them, so the
+/// request grows by appending instead of rewriting a nudged message.
+pub(super) fn wrap_up_notice(turns: u32, limit: u32) -> Option<String> {
+    if limit < 2 || (turns != limit && turns != soft_nudge_turn(limit)) {
+        return None;
+    }
+    let remaining = limit.saturating_sub(turns);
+    Some(if remaining == 0 {
+        format!(
+            "[system notice: this is your final turn ({turns}/{limit}, 0 turn(s) remaining). Do not call any tools; provide your final response now.]"
+        )
+    } else {
+        format!(
+            "[system notice: you are on turn {turns} of {limit} ({remaining} turn(s) remaining). Wrap up your work and return your final response soon without starting new exploration.]"
+        )
+    })
 }
 
 impl Agent {
@@ -93,7 +113,11 @@ impl Agent {
         }
 
         let mut turns = 0u32;
-        let mut wrap_up_nudged = false;
+        // Wrap-up notices keyed by the entry id they ride: recorded once and
+        // replayed from then on, so the request stays append-only past the
+        // 80% line and the provider's KV prefix cache survives the nudges.
+        // Nothing here is persisted — the session file never sees a notice.
+        let mut notices: HashMap<String, String> = HashMap::new();
         // Continuations this run has spent on a short answer (§ cut).
         let mut continuations = 0u32;
         loop {
@@ -113,54 +137,51 @@ impl Agent {
                 content: Some(system),
                 ..ChatMessage::default()
             }];
-            messages.extend(session::to_wire_with(&self.entries, self.replay_reasoning));
-
             if let Some(limit) = self.max_turns
                 && limit >= 2
-                && turns >= soft_nudge_turn(limit)
+                && turns == soft_nudge_turn(limit)
             {
-                if !wrap_up_nudged {
-                    wrap_up_nudged = true;
-                    events
-                        .send(AgentEvent::Warned {
-                            message: format!(
-                                "approaching max_turns ({turns}/{limit}); nudging model to wrap up"
-                            ),
-                        })
-                        .await?;
+                events
+                    .send(AgentEvent::Warned {
+                        message: format!(
+                            "approaching max_turns ({turns}/{limit}); nudging model to wrap up"
+                        ),
+                    })
+                    .await?;
+            }
+            let mut trailing_notice: Option<String> = None;
+            if let Some(limit) = self.max_turns
+                && let Some(notice) = wrap_up_notice(turns, limit)
+            {
+                // The notice rides the entry backing the last wire message
+                // (the last tool result, or the continuation instruction),
+                // where it stays for the rest of the run. A message of its
+                // own after either would put two of a kind in a row, which
+                // strict providers refuse.
+                match session::last_noticeable_entry_id(&self.entries) {
+                    Some(id) => {
+                        notices
+                            .entry(id)
+                            .and_modify(|held| *held = format!("{held}\n\n{notice}"))
+                            .or_insert(notice);
+                    }
+                    // Last wire message is an assistant turn: a trailing
+                    // user message is the only shape left that fits, and it
+                    // has to go after the history, not before it.
+                    None => trailing_notice = Some(notice),
                 }
-                let remaining = limit.saturating_sub(turns);
-                let notice = if remaining == 0 {
-                    format!(
-                        "[system notice: this is your final turn ({turns}/{limit}, 0 turn(s) remaining). Do not call any tools; provide your final response now.]"
-                    )
-                } else {
-                    format!(
-                        "[system notice: you are on turn {turns} of {limit} ({remaining} turn(s) remaining). Wrap up your work and return your final response soon without starting new exploration.]"
-                    )
-                };
-                // The notice rides the request's last message: the last
-                // tool result, or — on a continuation turn — the
-                // instruction to keep going. A message of its own after
-                // either would put two of a kind in a row, which strict
-                // providers refuse.
-                if let Some(last) = messages
-                    .last_mut()
-                    .filter(|m| m.role == "tool" || m.role == "user")
-                {
-                    let existing = last.content.take().unwrap_or_default();
-                    last.content = Some(if existing.is_empty() {
-                        notice
-                    } else {
-                        format!("{existing}\n\n{notice}")
-                    });
-                } else {
-                    messages.push(ChatMessage {
-                        role: "user".to_string(),
-                        content: Some(notice),
-                        ..ChatMessage::default()
-                    });
-                }
+            }
+            messages.extend(session::to_wire_with_notices(
+                &self.entries,
+                self.replay_reasoning,
+                &notices,
+            ));
+            if let Some(notice) = trailing_notice {
+                messages.push(ChatMessage {
+                    role: "user".to_string(),
+                    content: Some(notice),
+                    ..ChatMessage::default()
+                });
             }
 
             // The request, with the stop request wired in: a stream stops

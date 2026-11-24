@@ -455,3 +455,86 @@ async fn abort_during_dispatch_parallel_emits_clean_aborts() {
         .count();
     assert_eq!(results_count, 2);
 }
+
+#[tokio::test]
+async fn max_turns_nudge_preserves_append_only_wire_prefix() {
+    let server = FakeServer::spawn(vec![
+        tool_call_response(&[("c1", "echo", r#"{"text":"t1"}"#)]),
+        tool_call_response(&[("c2", "echo", r#"{"text":"t2"}"#)]),
+        tool_call_response(&[("c3", "echo", r#"{"text":"t3"}"#)]),
+        tool_call_response(&[("c4", "echo", r#"{"text":"t4"}"#)]),
+        tool_call_response(&[("c5", "echo", r#"{"text":"t5"}"#)]),
+        tool_call_response(&[("c6", "echo", r#"{"text":"t6"}"#)]),
+    ]);
+    let mut registry = Registry::new();
+    registry.register(Box::new(Echo));
+    let client = LlmClient::new(&server.base_url).unwrap();
+    let mut agent = Agent::new(
+        client,
+        registry,
+        "fake-model".into(),
+        512,
+        Arc::new(AtomicBool::new(false)),
+        std::env::temp_dir(),
+        None,
+        false,
+        131_072,
+        Default::default(),
+    )
+    .with_max_turns(Some(6));
+
+    let (mut tx, mut rx) = tokio::sync::mpsc::channel(128);
+    agent.run("go".into(), &mut tx).await.unwrap();
+    drop(tx);
+    while rx.recv().await.is_some() {}
+
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 6);
+
+    // Turn 4 (80% of 6) gets the wrap-up notice.
+    let t4_last = requests[3]["messages"].as_array().unwrap().last().unwrap();
+    assert!(
+        t4_last["content"]
+            .as_str()
+            .unwrap()
+            .contains("turn 4 of 6 (2 turn(s) remaining)")
+    );
+
+    // Turn 5 is quiet (no new notice on its last message).
+    let t5_last = requests[4]["messages"].as_array().unwrap().last().unwrap();
+    assert!(
+        !t5_last["content"]
+            .as_str()
+            .unwrap()
+            .contains("[system notice:")
+    );
+
+    // Turn 6 gets the final-turn notice.
+    let t6_last = requests[5]["messages"].as_array().unwrap().last().unwrap();
+    assert!(
+        t6_last["content"]
+            .as_str()
+            .unwrap()
+            .contains("Do not call any tools")
+    );
+
+    // Every request's message list is a strict append-only extension of the previous turn.
+    for k in 0..5 {
+        let prev = requests[k]["messages"].as_array().unwrap();
+        let next = requests[k + 1]["messages"].as_array().unwrap();
+        assert_eq!(
+            &next[..prev.len()],
+            prev.as_slice(),
+            "turn {k} -> {}",
+            k + 1
+        );
+    }
+
+    // Persisted/in-memory entries never contain any system notice.
+    assert!(
+        !agent
+            .entries()
+            .iter()
+            .any(|e| format!("{e:?}").contains("[system notice:"))
+    );
+}

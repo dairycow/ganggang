@@ -38,12 +38,14 @@ impl EditTool {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EditArgs {
     path: String,
     edits: Vec<EditItem>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EditItem {
     old_text: String,
     new_text: String,

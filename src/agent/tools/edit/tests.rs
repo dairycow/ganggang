@@ -216,3 +216,21 @@ async fn empty_old_text_blank_miss_many_ambiguous_and_long_line_cap() {
     assert!(!ok_long.is_error);
     assert!(ok_long.output.contains('…'), "{}", ok_long.output);
 }
+
+#[tokio::test]
+async fn unknown_field_inside_edit_item_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("f.txt");
+    std::fs::write(&f, "a\n").unwrap();
+
+    let r = edit_file(
+        dir.path(),
+        serde_json::json!({"path": "f.txt", "edits": [
+            {"old_text": "a", "new_text": "b", "oldText": "c"}
+        ]}),
+    )
+    .await;
+    assert!(r.is_error);
+    assert!(r.output.contains("invalid arguments"), "{}", r.output);
+    assert_eq!(written(&f), "a\n");
+}

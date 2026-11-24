@@ -183,3 +183,41 @@ fn declarations_use_the_function_shape() {
     assert_eq!(decls[0]["function"]["name"], "echo");
     assert_eq!(decls[0]["function"]["parameters"]["required"][0], "text");
 }
+
+#[tokio::test]
+async fn dispatch_and_dispatch_parallel_reject_unknown_parameters() {
+    let mut registry = Registry::new();
+    registry.register(Box::new(Echo));
+
+    let c = call("echo", serde_json::json!({"text": "hi", "extra": 1}));
+    let seq = registry.dispatch(&c, &Cancel::none()).await;
+    assert!(seq.is_error);
+    assert_eq!(
+        seq.output,
+        "invalid arguments for echo: unknown parameter(s) \"extra\" (valid: text)"
+    );
+
+    let par = registry.dispatch_parallel(&[c], &Cancel::none()).await;
+    assert_eq!(par.len(), 1);
+    assert!(par[0].is_error);
+    assert_eq!(par[0].output, seq.output);
+}
+
+#[tokio::test]
+async fn grep_rejects_unknown_flags_with_valid_parameter_list() {
+    let registry = default_registry(std::env::temp_dir(), 30);
+    let res = registry
+        .dispatch(
+            &call(
+                "grep",
+                serde_json::json!({"pattern": "x", "-i": true, "-A": 3}),
+            ),
+            &Cancel::none(),
+        )
+        .await;
+    assert!(res.is_error);
+    assert!(res.output.contains("\"-A\""), "{}", res.output);
+    assert!(res.output.contains("\"-i\""), "{}", res.output);
+    assert!(res.output.contains("case_insensitive"), "{}", res.output);
+    assert!(res.output.contains("context"), "{}", res.output);
+}

@@ -165,6 +165,9 @@ impl Registry {
             // more command's startup.
             return ToolResult::err("aborted by user".into());
         }
+        if let Some(rejection) = unknown_args(tool.as_ref(), call) {
+            return rejection;
+        }
         tool.execute(&call.args, cancel).await
     }
 
@@ -190,10 +193,14 @@ impl Registry {
             let args = call.args.clone();
             let sem = sem.clone();
             let cancel = cancel.clone();
+            let rejection = unknown_args(tool.as_ref(), call);
             set.spawn(async move {
                 let _permit = sem.acquire_owned().await;
                 if cancel.is_cancelled() {
                     return (idx, ToolResult::err("aborted before execution".into()));
+                }
+                if let Some(rejection) = rejection {
+                    return (idx, rejection);
                 }
                 let res = tool.execute(&args, &cancel).await;
                 (idx, res)
@@ -213,7 +220,41 @@ impl Registry {
     }
 }
 
-/// Deserialize a tool's arguments permissively into its own args struct,
+/// Reject arguments naming parameters the tool's schema does not declare.
+/// A silently dropped key is the worse failure: `grep` called with `-i`
+/// would simply run case-sensitively. The answer names what was unknown
+/// and what is valid, so the model can retry in one go. Arguments that are
+/// not an object, and schemas without `properties`, fall through to the
+/// tool's own parse error.
+fn unknown_args(tool: &dyn Tool, call: &ToolCall) -> Option<ToolResult> {
+    let Value::Object(args) = &call.args else {
+        return None;
+    };
+    let schema = tool.schema();
+    let props = schema.get("properties")?.as_object()?;
+    let mut unknown: Vec<&String> = args
+        .keys()
+        .filter(|key| !props.contains_key(key.as_str()))
+        .collect();
+    if unknown.is_empty() {
+        return None;
+    }
+    unknown.sort();
+    let mut valid: Vec<&str> = props.keys().map(String::as_str).collect();
+    valid.sort();
+    let unknown = unknown
+        .iter()
+        .map(|key| format!("{key:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(ToolResult::err(format!(
+        "invalid arguments for {}: unknown parameter(s) {unknown} (valid: {})",
+        tool.name(),
+        valid.join(", ")
+    )))
+}
+
+/// Deserialize a tool's arguments into its own args struct,
 /// reporting field problems as an error result string.
 pub(crate) fn parse_args<T: DeserializeOwned>(args: &Value) -> Result<T, String> {
     serde_json::from_value(args.clone()).map_err(|e| format!("invalid arguments: {e}"))
