@@ -36,7 +36,7 @@ Options:
   -m, --model <MODEL>
           Model id or `provider/model` (overrides config and provider default)
       --list-models
-          List configured providers and models, then exit
+          List configured providers and models (probing local servers), then exit
       --no-hooks
           Skip user hooks for this run (§22), including the hooks file and the project-file warning
       --reasoning-effort <EFFORT>
@@ -68,7 +68,7 @@ Options:
 | `--watch` | Development mode: watch the ganggang sources, rebuild on change, and re-exec the new binary on the same session |  |  |
 | `-P, --provider <PROVIDER>` | Provider preset or configured provider name (e.g. "strata", "glm-coding-plan", "opencode-go", "deepseek") |  |  |
 | `-m, --model <MODEL>` | Model id or `provider/model` (overrides config and provider default) |  |  |
-| `--list-models` | List configured providers and models, then exit |  |  |
+| `--list-models` | List configured providers and models (probing local servers), then exit |  |  |
 | `--no-hooks` | Skip user hooks for this run (§22), including the hooks file and the project-file warning |  |  |
 | `--reasoning-effort <EFFORT>` | Reasoning effort sent to supporting endpoints (e.g. "low", "medium", "high", "xhigh", "none"). Pass "" to clear a provider preset's default |  |  |
 | `--thinking-budget <TOKENS>` | Cap thinking/reasoning tokens per turn (Strata/local backends). 0 disables any preset cap |  |  |

@@ -89,7 +89,7 @@ struct Cli {
     #[arg(short = 'm', long)]
     model: Option<String>,
 
-    /// List configured providers and models, then exit.
+    /// List configured providers and models (probing local servers), then exit.
     #[arg(
         long = "list-models",
         conflicts_with_all = ["prompt", "prompt_positional", "export", "watch"]
@@ -159,8 +159,15 @@ async fn main() -> anyhow::Result<()> {
     if cli.list_models {
         let mut cfg = config::load()?;
         cfg.apply_cli(cli.provider.as_deref(), cli.model.as_deref())?;
-        let active = cfg.active_endpoint();
-        for row in config::providers::catalog(&cfg.providers) {
+        let mut active = cfg.active_endpoint();
+        llm::client::maybe_probe_local_health(&mut active).await;
+        if let Some(p) = cfg.providers.get_mut(&active.provider)
+            && !p.context_window_explicit
+        {
+            p.context_window = active.context_window;
+        }
+        let discovered = llm::discovery::discover_local_providers(&cfg.providers).await;
+        for row in config::providers::catalog_with_discovered(&cfg.providers, &discovered) {
             let mark = if row.provider == active.provider && row.model == active.model {
                 "*"
             } else {
@@ -173,8 +180,13 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 "no key"
             };
+            let status_note = row
+                .status
+                .as_deref()
+                .map(|s| format!(" · {s}"))
+                .unwrap_or_default();
             println!(
-                "{mark} {}/{}  ({} · ctx {}k · {key_status})",
+                "{mark} {}/{}  ({} · ctx {}k{status_note} · {key_status})",
                 row.provider,
                 row.model,
                 row.api,
@@ -246,9 +258,14 @@ async fn main() -> anyhow::Result<()> {
         let mut endpoint = cfg.active_endpoint();
         endpoint.require_auth()?;
         crate::llm::client::maybe_probe_local_health(&mut endpoint).await;
+        cfg.model = endpoint.model.clone();
+        cfg.model_explicit = endpoint.model_explicit;
         cfg.context_window = endpoint.context_window;
         cfg.compact_threshold_tokens = endpoint.compact_threshold_tokens;
         if let Some(p) = cfg.providers.get_mut(&cfg.provider) {
+            if !endpoint.model_explicit {
+                p.default_model = endpoint.model.clone();
+            }
             if !p.context_window_explicit {
                 p.context_window = endpoint.context_window;
             }

@@ -41,11 +41,11 @@ Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `a
 - `compact_threshold_tokens` caps when auto-compaction triggers (e.g. `65536` on `strata` to stay within local VRAM KV residency; `0` disables).
 - `max_turns` caps turns per run (`0` disables); `gg` nudges the model to wrap up at 80% of the budget.
 - `tools` is the allowlist of tools offered to the model (also `--tools read,grep`). Unknown names are an error. See [Tools](tools.md).
-- `context_window` should match the server's real window: compaction and the footer's context percentage use it. When unset on `strata` or a local URL, `gg` probes `/health` at startup for `max_context` (and `kv_resident` when `compact_threshold_tokens` is unset). See [Sessions & Compaction](sessions-compaction.md).
+- `context_window` should match the server's real window: compaction and the footer's context percentage use it. When unset on `strata` or a local URL, `gg` probes `/health` at startup for `max_context` (and `kv_resident` when `compact_threshold_tokens` is unset), falling back to `/v1/models` when needed. On `strata`, `gg` also adopts whichever model the server currently has loaded unless overridden via `-m` or `GG_MODEL`. See [Sessions & Compaction](sessions-compaction.md).
 
 ## Providers
 
-Built-in providers: `strata` (local default), `glm-coding-plan` (alias `zai-coding-plan`), `opencode-go` (routes OpenAI Completions and Anthropic Messages per model), and `deepseek`. Their models, endpoints and limits are in [Providers & Models](../reference/providers-and-models.md); `gg --list-models` prints the same with live key status.
+Built-in providers: `strata` (local default), `glm-coding-plan` (alias `zai-coding-plan`), `opencode-go` (routes OpenAI Completions and Anthropic Messages per model), and `deepseek`. Their models, endpoints and limits are in [Providers & Models](../reference/providers-and-models.md); `gg --list-models` and `/model` probe `GET /v1/models` on `strata` and any local OpenAI-compatible provider (such as `llama-server --models-preset`) to show live models, `loaded`/`unloaded` status, and context windows alongside cloud providers and key status.
 
 Patch a built-in or define your own under `[providers.<name>]`. A custom provider must set `base_url` and `model`:
 
