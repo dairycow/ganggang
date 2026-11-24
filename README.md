@@ -1,6 +1,6 @@
 # ganggang
 
-A small, sharp agentic harness in Rust. One agent loop, seven tools, and a terminal UI, modelled on [pi](https://github.com/earendil-works/pi).
+A small, sharp agentic harness in Rust. One agent loop, eight tools, and a terminal UI, modelled on [pi](https://github.com/earendil-works/pi).
 
 **[Read the user guide](https://dairycow.github.io/ganggang/)**
 

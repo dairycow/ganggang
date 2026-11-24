@@ -18,8 +18,9 @@ pub(crate) fn format_tool_args(name: &str, args: &serde_json::Value, cap: usize)
         },
         "read" => match args["path"].as_str() {
             Some(path) => {
+                // A signed offset, so a tail read reads as `path:-30`.
                 let off = args["offset"]
-                    .as_u64()
+                    .as_i64()
                     .map(|o| format!(":{o}"))
                     .unwrap_or_default();
                 let lim = args["limit"]
@@ -73,6 +74,13 @@ pub(crate) fn format_tool_args(name: &str, args: &serde_json::Value, cap: usize)
                 args.to_string()
             }
         }
+        "outline" => match args["path"].as_str() {
+            Some(path) => match args["max_entries"].as_u64() {
+                Some(n) => format!("{path} (max {n})"),
+                None => path.to_string(),
+            },
+            None => args.to_string(),
+        },
         _ => args.to_string(),
     };
     one_line(&raw, cap)
@@ -106,6 +114,22 @@ mod tests {
         assert_eq!(
             format_tool_args("read", &json!({"path": "src/main.rs", "offset": 10}), 100),
             "src/main.rs:10"
+        );
+        assert_eq!(
+            format_tool_args("read", &json!({"path": "src/main.rs", "offset": -30}), 100),
+            "src/main.rs:-30"
+        );
+        assert_eq!(
+            format_tool_args("outline", &json!({"path": "src/main.rs"}), 100),
+            "src/main.rs"
+        );
+        assert_eq!(
+            format_tool_args(
+                "outline",
+                &json!({ "path": "src/main.rs", "max_entries": 40 }),
+                100
+            ),
+            "src/main.rs (max 40)"
         );
         assert_eq!(
             format_tool_args("edit", &json!({"path": "a.rs", "edits": [{}, {}]}), 100),
