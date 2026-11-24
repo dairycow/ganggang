@@ -89,6 +89,46 @@ async fn a_length_finish_continues_from_the_partial_answer() {
     );
 }
 
+/// A blank `length` finish has nothing to continue: one request only, a
+/// warning that says why, and no empty assistant entry or continuation
+/// marker in the session.
+#[tokio::test]
+async fn a_blank_length_finish_does_not_continue_or_persist_empty_entry() {
+    let server = FakeServer::spawn(vec![length_response("")]);
+
+    let (result, entries, events) = drive(&server.base_url, Registry::new(), "hi").await;
+    assert!(result.is_ok(), "{result:?}");
+
+    let values = event_values(&events);
+    assert_eq!(
+        warned(&values),
+        vec![
+            "response truncated by max_tokens=512 before producing visible output; stopping instead of continuing"
+        ],
+        "{values:?}"
+    );
+    assert_eq!(
+        values.iter().find(|e| e["type"] == "turn_ended").unwrap()["stop_reason"],
+        "length",
+        "the cut still names its stop reason"
+    );
+    assert_eq!(
+        values.last().unwrap(),
+        &json!({"type": "run_ended", "turns": 1})
+    );
+    assert_eq!(
+        server.requests.lock().unwrap().len(),
+        1,
+        "nothing to continue, so no second request"
+    );
+    assert_eq!(entries.len(), 1, "no blank assistant entry: {entries:?}");
+    assert_eq!(messages_of(&entries[0]).role, Role::User);
+    assert!(
+        !entries.iter().any(|e| format!("{e:?}").contains(CONTINUE)),
+        "no continuation message was appended"
+    );
+}
+
 /// A `length` finish mid-tool-call never executes the call — its arguments
 /// can be cut mid-JSON and the answer they belong to is unfinished — but
 /// every call still gets a persisted error result, so the replayed session

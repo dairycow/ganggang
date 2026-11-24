@@ -27,14 +27,15 @@ Session files are plain JSON you can read, `grep`, or [export](modes.md#html-exp
 ### Aborted and truncated turns
 
 - Aborted runs append `[aborted by user]` after any partial output. Interrupted tool calls receive synthetic `aborted before execution` results so the session stays valid. Aborting before the first token creates no blank assistant entry.
-- A truncated answer is [continued](modes.md#truncated-responses): the next user entry is `[continue exactly where you stopped; do not repeat text you already wrote]`, and any tool call cut off with the answer is answered `not executed: response was truncated` rather than run.
+- A truncated answer is [continued](modes.md#truncated-responses): the next user entry is `[continue exactly where you stopped; do not repeat text you already wrote]`, and any tool call cut off with the answer is answered `not executed: response was truncated` rather than run. A truncation that produced no visible text or tool call is not continued: `gg` warns and stops, and no blank assistant entry is recorded.
 
 ## Compaction
 
 When the conversation nears the context limit, older history is summarised in one extra model call and recorded as a `Compaction` entry. Raw history is never deleted from the file.
 
-- **Trigger:** after a tool batch, and before a continuation request, when the last response's token usage exceeds `min(compact_threshold_tokens, context_window − 16,384)` (or `context_window − 16,384` when `compact_threshold_tokens` is unset; `strata` defaults `compact_threshold_tokens` to `65536`). Set `context_window` to your server's real window, or let `gg` probe `/health` on local servers (see [Configuration](configuration.md)).
-- **What is kept:** roughly the most recent 20,000 tokens, cut at a user-message boundary (or an assistant-message boundary in single-prompt runs, pinning the original user request) so a tool result is never separated from its call. A second compaction re-summarises only what accumulated since the first.
+- **Reserve:** `min(16,384, context_window / 4)` tokens are held free, so small windows reserve proportionally less.
+- **Trigger:** after a tool batch, and before a continuation request, when the last response's token usage exceeds the compaction line: `min(compact_threshold_tokens, context_window − reserve)` with a positive `compact_threshold_tokens`, or `context_window − reserve` otherwise (strata defaults `compact_threshold_tokens` to `65536`). Set `context_window` to your server's real window, or let `gg` probe `/health` on local servers (see [Configuration](configuration.md)).
+- **What is kept:** `min(20,000, compaction_line / 2)` tokens, cut at a user-message boundary (or an assistant-message boundary in single-prompt runs, pinning the original user request) so a tool result is never separated from its call. A second compaction re-summarises only what accumulated since the first.
 - **Manual:** `/compact` runs it now; `/compact focus on the parser rework` passes focus instructions to the summariser.
 - **Failure is not fatal:** if the summary call fails, `gg` warns and continues without compacting. If no cut point exists yet, it warns once per run.
 

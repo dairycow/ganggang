@@ -110,8 +110,16 @@ pub(super) struct Plan {
 
 /// `used` is how many continuations this run has already spent;
 /// `at_turn_limit` says the run's turn budget is spent, in which case
-/// nothing is continued whatever the continuation budget says.
-fn plan(cut: Cut, used: u32, max_tokens: u32, at_turn_limit: bool) -> Plan {
+/// nothing is continued whatever the continuation budget says. A short
+/// turn that produced no visible output is not continued either: there is
+/// nothing to carry forward, and asking again would repeat the same cut.
+fn plan(
+    cut: Cut,
+    used: u32,
+    max_tokens: u32,
+    at_turn_limit: bool,
+    has_visible_output: bool,
+) -> Plan {
     let head = match cut {
         Cut::StreamEnded => "stream ended early".to_string(),
         Cut::MaxTokens => format!("response truncated by max_tokens={max_tokens}"),
@@ -125,6 +133,14 @@ fn plan(cut: Cut, used: u32, max_tokens: u32, at_turn_limit: bool) -> Plan {
             };
         }
     };
+    if !has_visible_output {
+        return Plan {
+            warning: format!(
+                "{head} before producing visible output; stopping instead of continuing"
+            ),
+            continue_turn: false,
+        };
+    }
     if at_turn_limit {
         Plan {
             warning: format!("{head}; reached max_turns — the partial answer stands"),
@@ -186,17 +202,21 @@ impl Agent {
     /// too).
     ///
     /// `used` counts the continuations this run has already spent, and
-    /// `turn` says which turn this is and what its `TurnEnded` carries. A
+    /// `turn` says which turn this is and what its `TurnEnded` carries.
+    /// `has_visible_output` says whether the short turn left text or a tool
+    /// call behind; a blank truncation stops instead of continuing. A
     /// [`Cut::Aborted`] turn skips the warning and the turn marker and
     /// answers its calls with the loop's usual "aborted before execution";
     /// the caller's abort shape (marker entry, `run aborted`, `RunAborted`)
     /// finishes the run.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn handle_cut(
         &mut self,
         cut: Cut,
         tool_call_ids: &[String],
         used: &mut u32,
         turn: ShortTurn<'_>,
+        has_visible_output: bool,
         events: &mut Sender<AgentEvent>,
         noop_compaction_warned: &mut bool,
     ) -> anyhow::Result<After> {
@@ -214,7 +234,13 @@ impl Agent {
         // A truncation warns about itself, then decides on a continuation;
         // an abort warns about nothing (its own marker covers it) and never
         // continues. Empty warning means nothing to say.
-        let decision = plan(cut, *used, self.max_tokens, at_turn_limit);
+        let decision = plan(
+            cut,
+            *used,
+            self.max_tokens,
+            at_turn_limit,
+            has_visible_output,
+        );
         // A continuation is another request, so it falls under the loop's
         // one guard: the user's stop request — checked before the warning,
         // so a run the user has already disowned is not said to be

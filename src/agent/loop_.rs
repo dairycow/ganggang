@@ -193,13 +193,15 @@ impl Agent {
             let (message, warnings) = session::from_response(outcome.response)?;
             let turn_usage = message.usage;
             let thinking_pct = session::thinking_pct(&message);
+            let has_visible_output = message.content.as_deref().is_some_and(|s| !s.is_empty())
+                || !message.tool_calls.is_empty();
             for warning in warnings {
                 events.send(AgentEvent::Warned { message: warning }).await?;
             }
-            // A stopped stream that produced nothing leaves a blank
-            // assistant message: recording it would put an empty turn in the
-            // session and the transcript for news nobody asked for.
-            if !outcome.aborted || !cut::is_blank(&message) {
+            // A blank turn is no news: skip it on abort, and skip a blank
+            // truncated turn too, so a provider that cuts before the first
+            // token leaves no empty assistant entry behind.
+            if !(cut::is_blank(&message) && (outcome.aborted || short.is_some())) {
                 self.push_entry(message.clone())?;
             }
 
@@ -250,6 +252,7 @@ impl Agent {
                         &tool_call_ids,
                         &mut continuations,
                         turn,
+                        has_visible_output,
                         events,
                         &mut noop_compaction_warned,
                     )

@@ -13,29 +13,44 @@ use crate::llm::client::LlmClient;
 use super::fake::{FakeServer, text_response, tool_call_response};
 use super::{Echo, event_values};
 
+/// The scripted tool round-trip, reporting `total` usage tokens. The loop
+/// reads the last response's usage to decide whether compaction is due, so
+/// these scripts need numbers near the window they are testing.
+fn tool_call_with_usage(id: &str, args: &str, total: u32) -> String {
+    let response = tool_call_response(&[(id, "echo", args)]);
+    let mut value: serde_json::Value = serde_json::from_str(&response).unwrap();
+    value["usage"] = serde_json::json!({
+        "prompt_tokens": total - 8,
+        "completion_tokens": 8,
+        "total_tokens": total,
+    });
+    value.to_string()
+}
+
 /// Four echo-tool runs of ~9k entry-tokens each (12k-char user prompt,
-/// 12k-char tool arguments, 12k-char tool result) under a window so tiny
-/// the trigger is always past its line. The third run crosses
-/// KEEP_RECENT (27k > 20k) and the fourth compacts AGAIN from the first
-/// compaction's boundary — the repeated-compaction rule, exercised
+/// 12k-char tool arguments, 12k-char tool result) under a 131,072-token
+/// window. The usage numbers put the context past the 114,688-token line
+/// after every tool batch. The third run crosses the 20,000-token kept
+/// budget (27k > 20k) and the fourth compacts AGAIN from the first
+/// compaction's boundary: the repeated-compaction rule, exercised
 /// end-to-end.
 #[tokio::test]
-async fn tiny_context_window_compacts_between_batches() {
+async fn window_scaled_compaction_runs_between_batches() {
     let big = "x".repeat(12_000);
     let echo_args = format!(r#"{{"text":"{big}"}}"#);
     let responses = vec![
         // run 0: tool round-trip, nothing to cut yet (9k ≤ 20k)
-        tool_call_response(&[("call_c", "echo", &echo_args)]),
+        tool_call_with_usage("call_c", &echo_args, 120_000),
         text_response("ok"),
         // run 1: 18k, still within budget
-        tool_call_response(&[("call_c", "echo", &echo_args)]),
+        tool_call_with_usage("call_c", &echo_args, 120_000),
         text_response("ok"),
         // run 2: 27k — the cut fires after the batch: summarize, then answer
-        tool_call_response(&[("call_c", "echo", &echo_args)]),
+        tool_call_with_usage("call_c", &echo_args, 120_000),
         text_response("SUMMARY-XYZ"),
         text_response("ok"),
         // run 3: active region regrows past the line — second compaction
-        tool_call_response(&[("call_c", "echo", &echo_args)]),
+        tool_call_with_usage("call_c", &echo_args, 120_000),
         text_response("SUMMARY-2"),
         text_response("ok"),
     ];
@@ -53,7 +68,7 @@ async fn tiny_context_window_compacts_between_batches() {
         std::env::temp_dir(),
         None,
         false,
-        8_000, // < RESERVE: the trigger fires after every tool batch
+        131_072, // scaled reserve: 16,384; line 114,688; keep 20,000
         Default::default(),
     );
 
@@ -155,16 +170,16 @@ async fn summary_failure_warns_and_continues_un_compacted() {
     let big = "x".repeat(12_000);
     let echo_args = format!(r#"{{"text":"{big}"}}"#);
     let responses = vec![
-        tool_call_response(&[("call_c", "echo", &echo_args)]),
+        tool_call_with_usage("call_c", &echo_args, 120_000),
         text_response("ok"),
-        tool_call_response(&[("call_c", "echo", &echo_args)]),
+        tool_call_with_usage("call_c", &echo_args, 120_000),
         text_response("ok"),
         // run 2: the summarize slot serves garbage
-        tool_call_response(&[("call_c", "echo", &echo_args)]),
+        tool_call_with_usage("call_c", &echo_args, 120_000),
         "this is not json".to_string(),
         text_response("ok"),
         // run 3: still un-compacted, the trigger retries and fails again
-        tool_call_response(&[("call_c", "echo", &echo_args)]),
+        tool_call_with_usage("call_c", &echo_args, 120_000),
         "still not json".to_string(),
         text_response("ok"),
     ];
@@ -182,7 +197,7 @@ async fn summary_failure_warns_and_continues_un_compacted() {
         std::env::temp_dir(),
         None,
         false,
-        8_000,
+        131_072,
         Default::default(),
     );
 
@@ -228,12 +243,12 @@ async fn summary_failure_warns_and_continues_un_compacted() {
 async fn trigger_without_a_cut_point_warns_once_per_run() {
     let big = "x".repeat(4_000);
     let echo_args = format!(r#"{{"text":"{big}"}}"#);
-    // Three small tool batches in ONE run: each crosses the (tiny 8k)
+    // Three small tool batches in ONE run: each crosses the 114,688-token
     // trigger line, while total mass stays under KEEP_RECENT (20k).
     let responses = vec![
-        tool_call_response(&[("call_c", "echo", &echo_args)]),
-        tool_call_response(&[("call_c", "echo", &echo_args)]),
-        tool_call_response(&[("call_c", "echo", &echo_args)]),
+        tool_call_with_usage("call_c", &echo_args, 120_000),
+        tool_call_with_usage("call_c", &echo_args, 120_000),
+        tool_call_with_usage("call_c", &echo_args, 120_000),
         text_response("ok"),
     ];
     let server = FakeServer::spawn(responses);
@@ -250,7 +265,7 @@ async fn trigger_without_a_cut_point_warns_once_per_run() {
         std::env::temp_dir(),
         None,
         false,
-        8_000,
+        131_072,
         Default::default(),
     );
 
@@ -294,11 +309,11 @@ async fn loop_compaction_persists_and_replays_from_the_file() {
     let big = "x".repeat(12_000);
     let echo_args = format!(r#"{{"text":"{big}"}}"#);
     let responses = vec![
-        tool_call_response(&[("call_c", "echo", &echo_args)]),
+        tool_call_with_usage("call_c", &echo_args, 120_000),
         text_response("ok"),
-        tool_call_response(&[("call_c", "echo", &echo_args)]),
+        tool_call_with_usage("call_c", &echo_args, 120_000),
         text_response("ok"),
-        tool_call_response(&[("call_c", "echo", &echo_args)]),
+        tool_call_with_usage("call_c", &echo_args, 120_000),
         text_response("SUMMARY-PERSIST"),
         text_response("ok"),
     ];
@@ -320,7 +335,7 @@ async fn loop_compaction_persists_and_replays_from_the_file() {
         std::env::temp_dir(),
         Some(store),
         false,
-        8_000,
+        131_072,
         Default::default(),
     );
 
@@ -365,8 +380,8 @@ async fn single_run_multi_turn_session_compacts_at_assistant_boundary() {
     let big = "x".repeat(24_000); // ~6k tokens per message
     let echo_args = format!(r#"{{"text":"{big}"}}"#);
     let responses = vec![
-        tool_call_response(&[("call_1", "echo", &echo_args)]),
-        tool_call_response(&[("call_2", "echo", &echo_args)]),
+        tool_call_with_usage("call_1", &echo_args, 120_000),
+        tool_call_with_usage("call_2", &echo_args, 120_000),
         text_response("SUMMARY-SINGLE-RUN"),
         text_response("done"),
     ];
@@ -383,7 +398,7 @@ async fn single_run_multi_turn_session_compacts_at_assistant_boundary() {
         std::env::temp_dir(),
         None,
         false,
-        8_000,
+        131_072,
         Default::default(),
     );
 
@@ -407,4 +422,79 @@ async fn single_run_multi_turn_session_compacts_at_assistant_boundary() {
     assert!(final_msgs.contains("SUMMARY-SINGLE-RUN"));
     assert!(final_msgs.contains("[original user request]"));
     assert!(final_msgs.contains("original-prompt-keep-me"));
+}
+
+/// A 32K window scales both knobs: 8,192 reserved, a 24,576 compaction
+/// line, and 12,288 tokens kept. Two ~9k-token batches cross the kept
+/// budget, so compaction drops the first batch and replays the summary
+/// plus the second.
+#[tokio::test]
+async fn tiny_32k_window_scales_reserve_and_keep_recent() {
+    let big = "x".repeat(12_000);
+    let echo_args = format!(r#"{{"text":"{big}"}}"#);
+    let responses = vec![
+        tool_call_with_usage("call_1", &echo_args, 30_000),
+        text_response("ok"),
+        tool_call_with_usage("call_2", &echo_args, 30_000),
+        text_response("SUMMARY-32K"),
+        text_response("done"),
+    ];
+    let server = FakeServer::spawn(responses);
+
+    let mut registry = Registry::new();
+    registry.register(Box::new(Echo));
+    let client = LlmClient::new(&server.base_url).unwrap();
+    let mut agent = Agent::new(
+        client,
+        registry,
+        "fake-model".into(),
+        512,
+        Arc::new(AtomicBool::new(false)),
+        std::env::temp_dir(),
+        None,
+        false,
+        32_768,
+        Default::default(),
+    );
+
+    for run in ["first", "second"] {
+        let (mut tx, mut rx) = tokio::sync::mpsc::channel(128);
+        let result = agent.run(format!("{run} {big}"), &mut tx).await;
+        assert!(result.is_ok(), "{run} run failed: {:?}", result.err());
+        drop(tx);
+        while rx.recv().await.is_some() {}
+    }
+
+    // run 0: tool call + answer; run 1: tool call + summarize + answer.
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 5);
+    assert!(
+        requests[3]["messages"].to_string().contains("first"),
+        "the summarize call covers the dropped first batch"
+    );
+    let replayed = requests[4]["messages"].to_string();
+    assert!(replayed.contains("SUMMARY-32K"));
+    assert!(replayed.contains("second"));
+    assert!(
+        !replayed.contains("first"),
+        "the dropped first batch is summarized away: {replayed}"
+    );
+
+    let compactions: Vec<&Entry> = agent
+        .entries()
+        .iter()
+        .filter(|e| matches!(e, Entry::Compaction { .. }))
+        .collect();
+    assert_eq!(compactions.len(), 1, "one compaction at the scaled budget");
+    let Entry::Compaction { first_kept_id, .. } = compactions[0] else {
+        unreachable!()
+    };
+    assert!(
+        agent.entries().iter().any(|e| matches!(
+            e,
+            Entry::Message { id, message, .. }
+                if id == first_kept_id && message.role == Role::User
+        )),
+        "the boundary names the second user turn"
+    );
 }

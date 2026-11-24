@@ -35,8 +35,9 @@ fn trigger_fires_past_the_reserved_line() {
     );
     assert!(should_compact(line + 1, window, None), "one past triggers");
     assert!(!should_compact(0, window, None));
-    // Degenerate tiny window: reserve exceeds it entirely.
-    assert!(should_compact(1, 8_000, None));
+    // Degenerate window: the reserve scales down with it, and the trigger
+    // still fires past the remaining line.
+    assert!(should_compact(4, 4, None));
 
     // Threshold clamps below window - RESERVE when smaller, and is
     // clamped by window - RESERVE when larger.
@@ -44,6 +45,26 @@ fn trigger_fires_past_the_reserved_line() {
     assert!(should_compact(65_537, 262_144, Some(65_536)));
     assert!(!should_compact(window - RESERVE, window, Some(200_000)));
     assert!(should_compact(window - RESERVE + 1, window, Some(200_000)));
+}
+
+/// The reserve and kept budget scale down with the window, while a large
+/// window keeps the fixed ceilings.
+#[test]
+fn reserve_and_keep_recent_scale_with_the_window() {
+    assert_eq!(effective_reserve(131_072), 16_384);
+    assert_eq!(compact_line(131_072, None), 114_688);
+    assert_eq!(effective_keep_recent(131_072, None), 20_000);
+
+    assert_eq!(effective_reserve(32_768), 8_192);
+    assert_eq!(compact_line(32_768, None), 24_576);
+    assert_eq!(effective_keep_recent(32_768, None), 12_288);
+
+    assert_eq!(effective_reserve(262_144), 16_384);
+    assert_eq!(compact_line(262_144, Some(65_536)), 65_536);
+    assert_eq!(effective_keep_recent(262_144, Some(65_536)), 20_000);
+
+    // A threshold below the ceiling still caps the kept budget at half.
+    assert_eq!(effective_keep_recent(131_072, Some(10_000)), 5_000);
 }
 
 /// Usage comes from the LAST assistant entry that has one — not the

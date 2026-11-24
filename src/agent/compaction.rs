@@ -15,12 +15,20 @@ use crate::events::AgentEvent;
 use crate::llm::client::LlmClient;
 use crate::llm::types::ChatMessage;
 
-/// Tokens held free in the context window: compaction triggers once the
-/// conversation crowds past this line, so the next request still fits.
+/// Upper bound on the tokens held free in the context window: compaction
+/// triggers once the conversation grows past this line, so the next request
+/// still fits. Smaller windows reserve proportionally less.
 pub const RESERVE: u32 = 16_384;
 
-/// How much recent history compaction tries to keep, in tokens.
+/// Upper bound on how much recent history compaction tries to keep, in
+/// tokens. Small windows keep half the compaction line instead.
 pub const KEEP_RECENT: u32 = 20_000;
+
+/// The reserve for `context_window`: never more than a quarter of the
+/// window, so a small window keeps its own room to work.
+pub fn effective_reserve(context_window: u32) -> u32 {
+    RESERVE.min(context_window / 4)
+}
 
 /// Context tokens per the spec: from the last response's `usage` — the
 /// request the run just made is the best measure of the one it is about
@@ -60,14 +68,22 @@ pub fn estimate_wire_tokens(messages: &[ChatMessage]) -> u32 {
     (chars / 4) as u32
 }
 
-/// Effective compaction line: `min(threshold, window - RESERVE)` when a
-/// positive threshold is configured, otherwise `window - RESERVE`.
+/// Effective compaction line: `min(threshold, window - effective_reserve)`
+/// when a positive threshold is configured, otherwise
+/// `window - effective_reserve`.
 pub fn compact_line(context_window: u32, threshold: Option<u32>) -> u32 {
-    let ceiling = context_window.saturating_sub(RESERVE);
+    let ceiling = context_window.saturating_sub(effective_reserve(context_window));
     match threshold.filter(|&t| t > 0) {
         Some(t) => t.min(ceiling),
         None => ceiling,
     }
+}
+
+/// How much recent history compaction keeps: at most `KEEP_RECENT`, and
+/// never more than half the compaction line, so a small window still
+/// leaves room for the summary and the next request.
+pub fn effective_keep_recent(context_window: u32, threshold: Option<u32>) -> u32 {
+    KEEP_RECENT.min(compact_line(context_window, threshold) / 2)
 }
 
 /// The trigger (§14): checked after a tool batch, before the next
@@ -156,6 +172,17 @@ pub(super) fn cut_point_with(
     entries: &[Entry],
     replay_reasoning: ReplayReasoning,
 ) -> Option<String> {
+    cut_point_with_budget(entries, replay_reasoning, KEEP_RECENT)
+}
+
+/// The cut-point walk with an explicit recent-history budget. Callers with
+/// a live context window pass [`effective_keep_recent`]; the fixed-budget
+/// wrapper above serves the unit tests.
+pub(super) fn cut_point_with_budget(
+    entries: &[Entry],
+    replay_reasoning: ReplayReasoning,
+    keep_recent: u32,
+) -> Option<String> {
     let active_start = active_start(entries);
     let is_user = |e: &Entry| {
         matches!(
@@ -188,7 +215,7 @@ pub(super) fn cut_point_with(
             ReplayReasoning::Turn => last_user_idx.is_none_or(|u| index > u),
         };
         accumulated += entry_token_estimate_with(entry, include_reasoning) as u64;
-        if accumulated > KEEP_RECENT as u64 {
+        if accumulated > keep_recent as u64 {
             break;
         }
         kept_from = index;
@@ -392,7 +419,10 @@ impl super::Agent {
         &mut self,
         instructions: Option<&str>,
     ) -> anyhow::Result<CompactOutcome> {
-        let Some(first_kept_id) = cut_point_with(&self.entries, self.replay_reasoning) else {
+        let keep_recent = effective_keep_recent(self.context_window, self.compact_threshold_tokens);
+        let Some(first_kept_id) =
+            cut_point_with_budget(&self.entries, self.replay_reasoning, keep_recent)
+        else {
             return Ok(CompactOutcome::NothingToDo);
         };
         let Some(kept_at) = self
