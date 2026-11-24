@@ -62,6 +62,7 @@ pub struct Config {
     pub api: ApiKind,
     pub auth: AuthStyle,
     pub model: String,
+    pub model_explicit: bool,
     pub max_tokens: u32,
     pub api_key: Option<String>,
     pub context_window: u32,
@@ -98,6 +99,7 @@ impl Default for Config {
             api: ep.api,
             auth: ep.auth,
             model: ep.model,
+            model_explicit: false,
             max_tokens: ep.max_tokens,
             api_key: ep.api_key,
             context_window: ep.context_window,
@@ -130,6 +132,7 @@ impl Config {
         Endpoint {
             provider: self.provider.clone(),
             model: self.model.clone(),
+            model_explicit: self.model_explicit,
             base_url: self.base_url.clone(),
             api: self.api,
             auth: self.auth,
@@ -168,6 +171,7 @@ impl Config {
             .unwrap_or_else(|| self.provider.clone());
         let pcfg = lookup_provider(&self.providers, &target_provider)?;
         let mut ep = pcfg.resolve(model_id);
+        ep.model_explicit = model_id.is_some();
         self.env_overrides.apply(&mut ep);
         self.apply_endpoint(&ep);
         validate(self)
@@ -189,40 +193,61 @@ impl Config {
         }
     }
 
+    #[cfg(test)]
     pub fn resolve_switch(&self, spec: &str) -> anyhow::Result<Endpoint> {
+        self.resolve_switch_with_discovered(spec, &[])
+    }
+
+    pub fn resolve_switch_with_discovered(
+        &self,
+        spec: &str,
+        discovered: &[(String, String)],
+    ) -> anyhow::Result<Endpoint> {
         let spec = spec.trim();
         anyhow::ensure!(!spec.is_empty(), "model specification must not be empty");
         let canon = providers::canonical_provider_name(spec);
         let mut ep = if let Some(pcfg) = self.providers.get(canon) {
-            pcfg.resolve(None)
+            let mut ep = pcfg.resolve(None);
+            ep.model_explicit = false;
+            ep
         } else if let Some((p, m)) = providers::split_provider_model(spec, &self.providers) {
             let pcfg = lookup_provider(&self.providers, p)?;
-            pcfg.resolve(Some(m))
+            let mut ep = pcfg.resolve(Some(m));
+            ep.model_explicit = true;
+            ep
         } else if let Some(cur) = self.providers.get(&self.provider)
             && cur.models.iter().any(|m| m.id == spec)
         {
-            cur.resolve(Some(spec))
+            let mut ep = cur.resolve(Some(spec));
+            ep.model_explicit = true;
+            ep
         } else {
-            let matches: Vec<&ProviderConfig> = self
+            let mut matches: std::collections::BTreeSet<&str> = self
                 .providers
                 .values()
                 .filter(|p| p.models.iter().any(|m| m.id == spec))
+                .map(|p| p.name.as_str())
                 .collect();
-            match matches.as_slice() {
-                [one] => one.resolve(Some(spec)),
-                [] => {
-                    let cur = lookup_provider(&self.providers, &self.provider)?;
-                    cur.resolve(Some(spec))
+            for (p, m) in discovered {
+                if m == spec
+                    && let Some(pcfg) = self.providers.get(p)
+                {
+                    matches.insert(pcfg.name.as_str());
                 }
+            }
+            let mut ep = match matches.iter().copied().collect::<Vec<_>>().as_slice() {
+                [one] => lookup_provider(&self.providers, one)?.resolve(Some(spec)),
+                [] => lookup_provider(&self.providers, &self.provider)?.resolve(Some(spec)),
                 many => {
-                    let choices: Vec<String> =
-                        many.iter().map(|p| format!("{}/{spec}", p.name)).collect();
+                    let choices: Vec<String> = many.iter().map(|p| format!("{p}/{spec}")).collect();
                     anyhow::bail!(
                         "model {spec:?} exists on multiple providers; specify one of: {}",
                         choices.join(", ")
                     );
                 }
-            }
+            };
+            ep.model_explicit = true;
+            ep
         };
         if ep.api_key.is_none()
             && ep.api_key_env.is_some()
@@ -236,6 +261,7 @@ impl Config {
     fn apply_endpoint(&mut self, ep: &Endpoint) {
         self.provider = ep.provider.clone();
         self.model = ep.model.clone();
+        self.model_explicit = ep.model_explicit;
         self.base_url = ep.base_url.clone();
         self.api = ep.api;
         self.auth = ep.auth;
@@ -356,8 +382,9 @@ pub fn merge(
     } else {
         None
     };
-    let chosen_model = env_model_id.or(file_model);
-    let mut ep = pcfg.resolve(chosen_model.as_deref());
+    let chosen_model = env_model_id.as_deref().or(file_model.as_deref());
+    let mut ep = pcfg.resolve(chosen_model);
+    ep.model_explicit = env_model_id.is_some();
 
     if apply_file_flat {
         if let Some(v) = pick(&user.base_url, &project.base_url) {
@@ -448,6 +475,7 @@ pub fn merge(
         api: ep.api,
         auth: ep.auth,
         model: ep.model,
+        model_explicit: ep.model_explicit,
         max_tokens: ep.max_tokens,
         api_key: ep.api_key,
         context_window: ep.context_window,

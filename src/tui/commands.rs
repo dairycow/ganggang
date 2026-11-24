@@ -314,7 +314,10 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
             state.push_info(&listing);
         }
         Command::Model(None) => {
-            let rows = crate::config::providers::catalog(&config.providers);
+            let discovered =
+                crate::llm::discovery::discover_local_providers(&config.providers).await;
+            let rows =
+                crate::config::providers::catalog_with_discovered(&config.providers, &discovered);
             state.pending_models = rows
                 .iter()
                 .map(|r| (r.provider.clone(), r.model.clone()))
@@ -332,17 +335,23 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
                     crate::llm::ApiKind::OpenAiCompletions => "",
                     crate::llm::ApiKind::AnthropicMessages => " · anthropic",
                 };
+                let status_note = row
+                    .status
+                    .as_deref()
+                    .map(|s| format!(" · {s}"))
+                    .unwrap_or_default();
                 let key_note = if row.needs_key && !row.has_key {
                     " [no key]"
                 } else {
                     ""
                 };
                 listing.push_str(&format!(
-                    "\n  {}) {}/{} (ctx {}k{}{}){}",
+                    "\n  {}) {}/{} (ctx {}k{}{}{}){}",
                     i + 1,
                     row.provider,
                     row.model,
                     row.context_window / 1000,
+                    status_note,
                     proto,
                     key_note,
                     active,
@@ -362,7 +371,8 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
                 }
                 _ => choice,
             };
-            let mut endpoint = config.resolve_switch(&target)?;
+            let mut endpoint =
+                config.resolve_switch_with_discovered(&target, &state.pending_models)?;
             endpoint.require_auth()?;
             crate::llm::health::maybe_probe_local_health(&mut endpoint).await;
             let _ = crate::llm::client::LlmClient::from_endpoint(&endpoint)?;
@@ -809,5 +819,106 @@ mod tests {
         .unwrap();
         let lines = state.line_texts_for_test();
         assert!(lines.iter().any(|l| l.contains("disabled by --no-hooks")));
+    }
+
+    #[tokio::test]
+    async fn model_command_discovers_local_router_and_strata_health() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for _ in 0..4 {
+                let Ok((mut s, _)) = listener.accept() else {
+                    break;
+                };
+                let mut buf = [0u8; 2048];
+                let n = s.read(&mut buf).unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let body = if req.starts_with("GET /health ") {
+                    r#"{"status":"ok","max_context":32768,"model":"inkling-2-mini-sq-15","service":"strata"}"#
+                } else {
+                    r#"{"data":[{"id":"inkling-2-mini-sq-15","status":{"value":"loaded"},"max_model_len":32768},{"id":"gemma4-26b-200k","status":{"value":"unloaded","args":["llama-server","--ctx-size","200000"]}}]}"#
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                s.write_all(resp.as_bytes()).unwrap();
+            }
+        });
+
+        let toml = format!(
+            "[providers.strata]\nbase_url = \"http://{addr}/v1\"\n[providers.llama-cpp]\nbase_url = \"http://{addr}/v1\"\nmodel = \"gemma4-26b-200k\"\n"
+        );
+        let config =
+            crate::config::merge(crate::config::Config::default(), Some(&toml), None, &[]).unwrap();
+        let mut active_endpoint = config.active_endpoint();
+        let mut state = super::super::view::State::new(
+            std::path::Path::new("/tmp/x"),
+            &active_endpoint.label(),
+            active_endpoint.context_window,
+            Arc::new(vec![]),
+            Arc::new(vec![]),
+            History::default(),
+        );
+        let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
+        let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
+        let factory: super::super::Factory =
+            Arc::new(|_, _, _| unreachable!("no /new on this path"));
+        let abort = Arc::new(AtomicBool::new(false));
+        let cwd = std::path::PathBuf::from("/tmp/x");
+
+        handle_command(
+            Command::Model(None),
+            CmdCtx {
+                state: &mut state,
+                factory: &factory,
+                input_tx: &mut input_tx,
+                ui_tx: &ui_tx,
+                skills: &[],
+                prompts: &[],
+                hooks: &crate::agent::hooks::Hooks::default(),
+                cwd: &cwd,
+                abort: &abort,
+                config: &config,
+                active_endpoint: &mut active_endpoint,
+            },
+        )
+        .await
+        .unwrap();
+
+        let lines = state.line_texts_for_test();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("llama-cpp/gemma4-26b-200k (ctx 200k · unloaded)")),
+            "{lines:?}"
+        );
+
+        handle_command(
+            Command::Model(Some("strata".into())),
+            CmdCtx {
+                state: &mut state,
+                factory: &factory,
+                input_tx: &mut input_tx,
+                ui_tx: &ui_tx,
+                skills: &[],
+                prompts: &[],
+                hooks: &crate::agent::hooks::Hooks::default(),
+                cwd: &cwd,
+                abort: &abort,
+                config: &config,
+                active_endpoint: &mut active_endpoint,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(active_endpoint.label(), "strata/inkling-2-mini-sq-15");
+        assert_eq!(active_endpoint.context_window, 32_768);
     }
 }

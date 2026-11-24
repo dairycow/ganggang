@@ -85,6 +85,7 @@ impl ProviderConfig {
         Endpoint {
             provider: self.name.clone(),
             model: chosen.to_string(),
+            model_explicit: false,
             base_url: spec
                 .and_then(|s| s.base_url.clone())
                 .unwrap_or_else(|| self.base_url.clone()),
@@ -126,6 +127,7 @@ impl ProviderConfig {
 pub struct Endpoint {
     pub provider: String,
     pub model: String,
+    pub model_explicit: bool,
     pub base_url: String,
     pub api: ApiKind,
     pub auth: AuthStyle,
@@ -169,6 +171,7 @@ pub struct CatalogRow {
     pub context_window: u32,
     pub needs_key: bool,
     pub has_key: bool,
+    pub status: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -486,11 +489,38 @@ pub(super) fn split_provider_model<'a>(
     }
 }
 
-pub fn catalog(providers: &BTreeMap<String, ProviderConfig>) -> Vec<CatalogRow> {
+pub fn catalog_with_discovered(
+    providers: &BTreeMap<String, ProviderConfig>,
+    discovered: &BTreeMap<String, Vec<crate::llm::discovery::DiscoveredModel>>,
+) -> Vec<CatalogRow> {
     let mut rows = Vec::new();
     for provider in providers.values() {
         let needs_key = provider.api_key_env.is_some();
         let has_key = provider.api_key.is_some();
+        if let Some(live) = discovered.get(&provider.name)
+            && !live.is_empty()
+        {
+            for d in live {
+                let ep = provider.resolve(Some(&d.id));
+                let context_window = if ep.context_window_explicit {
+                    ep.context_window
+                } else {
+                    d.context_window
+                        .filter(|&c| c > 0)
+                        .unwrap_or(ep.context_window)
+                };
+                rows.push(CatalogRow {
+                    provider: provider.name.clone(),
+                    model: ep.model,
+                    api: ep.api,
+                    context_window,
+                    needs_key,
+                    has_key,
+                    status: d.status.clone(),
+                });
+            }
+            continue;
+        }
         if provider.models.is_empty() {
             let ep = provider.resolve(None);
             rows.push(CatalogRow {
@@ -500,6 +530,7 @@ pub fn catalog(providers: &BTreeMap<String, ProviderConfig>) -> Vec<CatalogRow> 
                 context_window: ep.context_window,
                 needs_key,
                 has_key,
+                status: None,
             });
             continue;
         }
@@ -516,6 +547,7 @@ pub fn catalog(providers: &BTreeMap<String, ProviderConfig>) -> Vec<CatalogRow> 
                 context_window: ep.context_window,
                 needs_key,
                 has_key,
+                status: None,
             });
         }
         if !saw_default {
@@ -527,6 +559,7 @@ pub fn catalog(providers: &BTreeMap<String, ProviderConfig>) -> Vec<CatalogRow> 
                 context_window: ep.context_window,
                 needs_key,
                 has_key,
+                status: None,
             });
         }
     }

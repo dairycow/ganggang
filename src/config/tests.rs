@@ -556,3 +556,60 @@ fn env_overrides_survive_apply_cli_and_resolve_switch() {
         .unwrap();
     assert_eq!(switched.api_key.as_deref(), Some("env-key"));
 }
+
+#[test]
+fn model_explicit_and_discovered_catalog_and_switch() {
+    let mut cfg = merge(
+        Config::default(),
+        Some("[providers.strata]\nmodel = \"from-file\"\n"),
+        None,
+        &[],
+    )
+    .unwrap();
+    assert!(!cfg.model_explicit);
+
+    let env_cfg = merge(
+        Config::default(),
+        None,
+        None,
+        &env(&[("GG_MODEL", "from-env")]),
+    )
+    .unwrap();
+    assert!(env_cfg.model_explicit);
+
+    cfg.apply_cli(Some("strata"), None).unwrap();
+    assert!(!cfg.model_explicit);
+    cfg.apply_cli(None, Some("forced-m")).unwrap();
+    assert!(cfg.model_explicit);
+
+    let mut discovered = BTreeMap::new();
+    discovered.insert(
+        "strata".to_string(),
+        vec![crate::llm::discovery::DiscoveredModel {
+            id: "inkling-2-mini-sq-15".into(),
+            context_window: Some(32_768),
+            status: Some("loaded".into()),
+        }],
+    );
+    let rows = providers::catalog_with_discovered(&cfg.providers, &discovered);
+    let strata_row = rows.iter().find(|r| r.provider == "strata").unwrap();
+    assert_eq!(strata_row.model, "inkling-2-mini-sq-15");
+    assert_eq!(strata_row.context_window, 32_768);
+    assert_eq!(strata_row.status.as_deref(), Some("loaded"));
+
+    let pending = vec![
+        ("strata".to_string(), "inkling-2-mini-sq-15".to_string()),
+        ("deepseek".to_string(), "shared-id".to_string()),
+        ("opencode-go".to_string(), "shared-id".to_string()),
+    ];
+    let ep = cfg
+        .resolve_switch_with_discovered("inkling-2-mini-sq-15", &pending)
+        .unwrap();
+    assert_eq!(ep.label(), "strata/inkling-2-mini-sq-15");
+    assert!(ep.model_explicit);
+
+    let err = cfg
+        .resolve_switch_with_discovered("shared-id", &pending)
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("multiple providers"));
+}
