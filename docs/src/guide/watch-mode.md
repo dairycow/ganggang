@@ -1,6 +1,6 @@
-# Watch Mode
+# Watch mode
 
-`gg --watch` is for developing ganggang itself: the harness becomes its own dev loop. It watches the sources, rebuilds, and re-executes the fresh binary **on the same session**.
+`gg --watch` is for developing ganggang itself. It watches the sources, rebuilds, and re-executes the fresh binary **on the same session**.
 
 ```sh
 cd ganggang

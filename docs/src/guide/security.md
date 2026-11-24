@@ -1,4 +1,4 @@
-# Security Model
+# Security model
 
 > **No permission gating.** Like pi, `gg` does not ask before tool calls. Safe use means running it where the `bash` tool is allowed to be: a container or VM for untrusted work.
 
@@ -11,7 +11,7 @@
 
 ## Guardrails (not sandboxes)
 
-These reduce accidents; none of them contains a determined model:
+These reduce accidents:
 
 - **`write` stays in the working directory** unless the call passes `force: true`. `bash` can still write anywhere, and symlinks can escape the check.
 - **Hooks are user-level only.** A project `.gg/hooks.toml` is ignored with a warning, so a cloned repository cannot add executable behaviour.

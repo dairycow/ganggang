@@ -61,7 +61,7 @@ A denial is a normal tool error: the model reads the reason (capped at 2 KiB; a 
 
 ## Failure handling
 
-Hooks **fail open**. A non-zero exit, a timeout, output that is not valid decision JSON, or a spawn error becomes a warning and the run continues; a broken guard must not wedge the agent.
+Hooks **fail open**. A non-zero exit, a timeout, output that is not valid decision JSON, or a spawn error becomes a warning and the run continues.
 
 - The deadline is `timeout_secs`; on timeout the whole process group is killed.
 - stdout is capped at 64 KiB, and stderr keeps its last 8 KiB, which is quoted in warnings.

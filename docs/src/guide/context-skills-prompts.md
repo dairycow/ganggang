@@ -1,12 +1,12 @@
-# Context, Skills & Prompts
+# Context, skills and prompts
 
 ## The system prompt
 
-Built fresh for every request from named sections, in this order: preamble → context files (`AGENTS.md`) → tools → skills → working directory (cwd, OS, date). Empty sections are omitted. Inspect exactly what the next request carries with `/context` in the TUI, or set `GG_DEBUG_PROMPT=1` to dump it to stderr.
+`gg` builds the system prompt fresh for every request from named sections, in this order: preamble, context files (`AGENTS.md`), tools, skills, then working directory (cwd, OS, date). Empty sections are omitted. Inspect exactly what the next request carries with `/context` in the TUI, or set `GG_DEBUG_PROMPT=1` to dump it to stderr.
 
 ## AGENTS.md
 
-`gg` loads, broadest first:
+`gg` loads context files, broadest first:
 
 1. `~/.gg/AGENTS.md`
 2. `AGENTS.md` from the repository root (the nearest ancestor containing `.git`) down to the current directory

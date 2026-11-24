@@ -3,27 +3,27 @@
 [Introduction](introduction.md)
 
 - [Installation](installation.md)
-- [Quick Start](quickstart.md)
+- [Quick start](quickstart.md)
 
-# User Guide
+# User guide
 
 - [Interactive TUI](guide/tui.md)
-- [Output Modes & Export](guide/modes.md)
-- [Configuration & Providers](guide/configuration.md)
+- [Output modes and export](guide/modes.md)
+- [Configuration and providers](guide/configuration.md)
 - [Tools](guide/tools.md)
-- [Sessions & Compaction](guide/sessions-compaction.md)
-- [Context, Skills & Prompts](guide/context-skills-prompts.md)
+- [Sessions and compaction](guide/sessions-compaction.md)
+- [Context, skills and prompts](guide/context-skills-prompts.md)
 - [Hooks](guide/hooks.md)
-- [Security Model](guide/security.md)
-- [Watch Mode](guide/watch-mode.md)
+- [Security model](guide/security.md)
+- [Watch mode](guide/watch-mode.md)
 
 # Reference
 
-- [CLI Reference](reference/cli.md)
-- [Providers & Models](reference/providers-and-models.md)
-- [Built-in Tools](reference/tools.md)
-- [TUI Slash Commands](reference/commands.md)
+- [CLI reference](reference/cli.md)
+- [Providers and models](reference/providers-and-models.md)
+- [Built-in tools](reference/tools.md)
+- [TUI slash commands](reference/commands.md)
 
 # Contributing
 
-- [Keeping Docs Up to Date](maintaining-docs.md)
+- [Keeping docs up to date](maintaining-docs.md)
