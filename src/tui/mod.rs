@@ -408,6 +408,8 @@ pub async fn run(
                         KeyAction::KillToStart => state.editor.kill_to_start(),
                         KeyAction::CursorLeft => state.editor.move_left(),
                         KeyAction::CursorRight => state.editor.move_right(),
+                        KeyAction::WordLeft => state.editor.move_word_left(),
+                        KeyAction::WordRight => state.editor.move_word_right(),
                         KeyAction::ToggleExpand => state.toggle_expand(),
                         KeyAction::ToggleThinking => state.toggle_thinking(),
                         KeyAction::ScrollUp => state.scroll_up(SCROLL_STEP),

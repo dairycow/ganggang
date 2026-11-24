@@ -83,6 +83,8 @@ fn readline_keys_edit_the_composer_and_arrows_move_the_cursor() {
         classify(key(KeyCode::Right, KeyModifiers::NONE)),
         KeyAction::CursorRight
     );
+    assert_eq!(classify(key(KeyCode::Left, ctrl)), KeyAction::WordLeft);
+    assert_eq!(classify(key(KeyCode::Right, ctrl)), KeyAction::WordRight);
     // Plain letters stay text.
     assert_eq!(
         classify(key(KeyCode::Char('k'), KeyModifiers::NONE)),

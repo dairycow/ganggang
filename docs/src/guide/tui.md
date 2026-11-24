@@ -12,6 +12,7 @@ If stdin is not a terminal and no prompt is given, `gg` exits with an error; use
 | `Alt+Enter`, `Ctrl+J` | Newline (`Shift+Enter` too, where the terminal reports modified keys) |
 | `Backspace` | Delete before the cursor |
 | `←` / `→` | Move the cursor |
+| `Ctrl+←` / `Ctrl+→` | Move the cursor by word |
 | `↑` / `↓` | Navigate the `/` suggestion list while it is open; otherwise recall prompts while the composer is empty or single-line, or move between its lines |
 | `Ctrl+P` / `Ctrl+N` | Recall the previous / next prompt, whatever the composer holds |
 | `Ctrl+A`, `Home` | Start of line |

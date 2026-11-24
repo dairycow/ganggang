@@ -32,6 +32,11 @@ pub enum KeyAction {
     KillToStart,
     CursorLeft,
     CursorRight,
+    /// Ctrl+←: to the start of the word before the cursor (readline's
+    /// backward-word).
+    WordLeft,
+    /// Ctrl+→: past the word after the cursor (readline's forward-word).
+    WordRight,
     /// ↑: suggestion previous while the popup is open; history recall or
     /// cursor up otherwise (the loop decides — see
     /// [`history_for`](super::history::history_for)).
@@ -116,6 +121,8 @@ pub fn classify(key: KeyEvent) -> KeyAction {
         KeyCode::Backspace => KeyAction::Backspace,
         KeyCode::Home => KeyAction::LineStart,
         KeyCode::End => KeyAction::LineEnd,
+        KeyCode::Left if ctrl => KeyAction::WordLeft,
+        KeyCode::Right if ctrl => KeyAction::WordRight,
         KeyCode::Left => KeyAction::CursorLeft,
         KeyCode::Right => KeyAction::CursorRight,
         KeyCode::PageUp => KeyAction::ScrollUp,

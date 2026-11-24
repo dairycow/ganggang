@@ -54,6 +54,35 @@ impl Editor {
         }
     }
 
+    /// Ctrl+←: the start of the word before the cursor. Whitespace —
+    /// newlines included — is skipped first, then the word's own chars,
+    /// matching readline's backward-word.
+    pub fn move_word_left(&mut self) {
+        let chars: Vec<char> = self.text.chars().collect();
+        let mut cursor = self.cursor;
+        while cursor > 0 && chars[cursor - 1].is_whitespace() {
+            cursor -= 1;
+        }
+        while cursor > 0 && !chars[cursor - 1].is_whitespace() {
+            cursor -= 1;
+        }
+        self.cursor = cursor;
+    }
+
+    /// Ctrl+→: past the word after the cursor, stopping before the
+    /// whitespace that follows it (readline's forward-word).
+    pub fn move_word_right(&mut self) {
+        let chars: Vec<char> = self.text.chars().collect();
+        let mut cursor = self.cursor;
+        while cursor < chars.len() && chars[cursor].is_whitespace() {
+            cursor += 1;
+        }
+        while cursor < chars.len() && !chars[cursor].is_whitespace() {
+            cursor += 1;
+        }
+        self.cursor = cursor;
+    }
+
     /// Ctrl+A / Home: the start of the logical line the cursor is on.
     pub fn move_home(&mut self) {
         self.cursor = self.line_start();
@@ -421,6 +450,35 @@ mod tests {
         assert_eq!(ed.cursor_row_col(), (0, 5), "é counts one char");
         ed.insert_char('!');
         assert_eq!(ed.lines(), vec!["héllo!"]);
+    }
+
+    #[test]
+    fn word_moves_cross_spaces_and_lines() {
+        let mut ed = Editor::default();
+        ed.insert_str("one two\n  three");
+        // From the end: back over "three", then over "two".
+        ed.move_word_left();
+        assert_eq!(ed.cursor_row_col(), (1, 2));
+        ed.move_word_left();
+        assert_eq!(ed.cursor_row_col(), (0, 4));
+        ed.move_word_left();
+        assert_eq!(ed.cursor_row_col(), (0, 0));
+        ed.move_word_left();
+        assert_eq!(ed.cursor_row_col(), (0, 0), "clamped at the start");
+        // Forward stops after each word, before the space.
+        ed.move_word_right();
+        assert_eq!(ed.cursor_row_col(), (0, 3));
+        ed.move_word_right();
+        assert_eq!(ed.cursor_row_col(), (0, 7));
+        ed.move_word_right();
+        assert_eq!(ed.cursor_row_col(), (1, 7));
+        ed.move_word_right();
+        assert_eq!(ed.cursor_row_col(), (1, 7), "clamped at the end");
+        // Multibyte text moves by chars, not bytes.
+        let mut ed = Editor::default();
+        ed.insert_str("héllo wörld");
+        ed.move_word_left();
+        assert_eq!(ed.cursor_row_col(), (0, 6));
     }
 
     #[test]
