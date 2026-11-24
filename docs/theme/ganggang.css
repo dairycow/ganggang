@@ -62,7 +62,16 @@
   padding-bottom: 0.4rem;
 }
 
+.coal a:hover {
+  color: #D94B4B;
+}
+
+.coal mark {
+  color: #16191C;
+}
+
 .coal .sidebar-scrollbox a.active,
 .coal .sidebar-scrollbox a:hover {
   border-left: 3px solid #D94B4B;
+  padding-left: 8px;
 }

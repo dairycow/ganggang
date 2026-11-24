@@ -79,6 +79,7 @@ body { margin: 0 auto; max-width: 52rem; padding: 1.5rem 1rem 4rem;
 header { border-bottom: 1px solid #3A4047; padding-bottom: .75rem;
          margin-bottom: 1.25rem; }
 h1 { font-size: 1rem; margin: 0 0 .25rem; color: #E9E3D7; }
+.mark { color: #D94B4B; }
 .meta { color: #98A0A6; font-size: .8rem; }
 .user, .assistant, .tool, .compaction { margin: 1rem 0; }
 .user { border-left: 3px solid #D94B4B; padding: .25rem 0 .25rem .75rem; }
@@ -91,6 +92,7 @@ pre { background: #2A2F35; border: 1px solid #3A4047; border-radius: 4px;
       font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
       color: #C7D0C0;
       white-space: pre-wrap; word-break: break-word; margin: .4rem 0; }
+.user pre, .assistant > pre { background: #202429; color: #E9E3D7; }
 details { margin: .3rem 0; }
 summary { cursor: pointer; color: #98A0A6; font-size: .85rem; }
 details.thinking summary { color: #6B7379; font-style: italic; }
