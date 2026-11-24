@@ -22,6 +22,7 @@ pub mod shell;
 pub mod suggest;
 pub mod term;
 pub mod theme;
+pub mod tick;
 pub mod transcript;
 pub mod view;
 pub mod watch;
@@ -42,6 +43,7 @@ use history::Arrow;
 use keys::{KeyAction, WHEEL_ROWS, Wheel, classify, classify_wheel};
 use reader::KeyReader;
 use shell::spawn_shell;
+use tick::Tick;
 use view::{Cancel, State, render};
 
 /// Lines per PageUp/PageDown press. Half-a-screen would be ideal but the
@@ -183,6 +185,7 @@ pub async fn run(
     // agent events keep folding into the transcript, so a run in flight
     // neither stalls nor bursts on return.
     let mut editor: Option<external::Running> = None;
+    let mut tick = Tick::new();
 
     loop {
         // A build finished earlier and the loop has been waiting for a safe
@@ -227,14 +230,17 @@ pub async fn run(
                 .map_err(|e| anyhow::anyhow!("drawing: {e}"))?;
         }
 
+        // The spinner's clock, in line with the footer before the loop
+        // waits: armed while a run is live, disarmed the moment it ends.
+        tick.sync(tokio::time::Instant::now(), state.spinning());
         tokio::select! {
             // The footer's spinner. Armed only while a run is live, so an
-            // idle view never wakes — and never redraws — on a timer; each
-            // pass through the loop restarts the 100 ms wait, which is what
-            // keeps the spin even at 8 frames a second whatever else the
-            // loop is doing.
-            _ = tokio::time::sleep(std::time::Duration::from_millis(100)), if state.spinning() => {
+            // idle view never wakes — and never redraws — on a timer; and
+            // a fixed deadline rather than a fresh wait each pass, so a
+            // stream of deltas cannot keep pushing the next frame back.
+            _ = until(tick.deadline()) => {
                 state.tick_spinner();
+                tick.fired(tokio::time::Instant::now());
             }
             key = keys.recv() => {
                 let Some(event) = key else { break };
@@ -547,6 +553,14 @@ pub async fn run(
     match restart {
         Some(plan) => Ok(Exit::Restart(plan)),
         None => Ok(Exit::Done(note)),
+    }
+}
+
+/// Wait for the spinner's next frame; a disarmed clock never comes due.
+async fn until(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
     }
 }
 

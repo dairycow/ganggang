@@ -17,7 +17,7 @@ use ratatui::text::Line as UiLine;
 use ratatui::widgets::{Clear, Fill, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use super::super::composer;
-use super::super::layout::{Areas, scrollbar_area, show_scrollbar, transcript_text};
+use super::super::layout::{Areas, scrollbar_area, show_scrollbar, thumb, transcript_text};
 use super::super::line::{styled_line, wrap_line};
 use super::super::transcript::RenderedLine;
 use super::State;
@@ -95,7 +95,12 @@ fn draw_transcript(
     let text = transcript_text(areas.transcript, bar);
     let width = text.width as usize;
     let total = rows.len() as u16;
+    // The first visible row: the bottom of the content at rest, higher up
+    // as the reader pages back.
     let top = total.saturating_sub(state.offset_from_bottom + text.height);
+    // Published with the row count: the scroll clamp stops where the first
+    // row reaches the top of the view.
+    state.last_view_rows = text.height;
     let shown: Vec<UiLine<'static>> = rows
         .iter()
         .skip(top as usize)
@@ -115,17 +120,17 @@ fn draw_transcript(
     }
 
     if bar {
-        let (thumb, track) = palette.scrollbar();
-        // The thumb's position is the first visible row, which is what a
-        // reader expects a thumb to point at: the bottom of the content at
-        // rest, higher up as they page back.
-        let position = total.saturating_sub(state.offset_from_bottom + 1) as usize;
-        let mut scroll = ScrollbarState::new(total as usize)
-            .position(position)
-            .viewport_content_length(areas.transcript.height as usize);
+        let (thumb_style, track) = palette.scrollbar();
+        // The thumb points at the first row on screen and is the view's
+        // share of the track; why it is told these three figures (and not
+        // the row count) is [`thumb`]'s to explain.
+        let figures = thumb(total, text.height, state.offset_from_bottom);
+        let mut scroll = ScrollbarState::new(figures.content)
+            .position(figures.position)
+            .viewport_content_length(figures.viewport);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .thumb_style(thumb)
+                .thumb_style(thumb_style)
                 .track_style(track)
                 .begin_symbol(None)
                 .end_symbol(None),

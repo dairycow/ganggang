@@ -43,6 +43,9 @@ pub struct State {
     pub(super) offset_from_bottom: u16,
     /// Wrapped-row count from the last render — the clamp for scrolling.
     pub(super) last_row_count: u16,
+    /// Rows the transcript showed on the last render: with the row count,
+    /// the far end of the scroll clamp. 0 = not drawn yet.
+    pub(super) last_view_rows: u16,
     /// What `/session` reports; `None` path = not persisted.
     pub session_path: Option<std::path::PathBuf>,
     pub sessions_disabled: bool,
@@ -118,6 +121,7 @@ impl State {
             transcript: Transcript::default(),
             offset_from_bottom: 0,
             last_row_count: 0,
+            last_view_rows: 0,
             session_path: None,
             sessions_disabled: false,
             entries: 0,

@@ -16,6 +16,9 @@ use super::composer;
 /// of the conversation, even if the composer has to shrink to keep it.
 pub const MIN_TRANSCRIPT_ROWS: u16 = 1;
 
+/// The smallest composer that is one: two rules and a single text row.
+pub const USABLE_COMPOSER: u16 = composer::BORDERS + 1;
+
 /// A scrollbar on a terminal this narrow would leave one column of text:
 /// not worth it, and the wrap would be silly.
 const SCROLLBAR_MIN_WIDTH: u16 = 6;
@@ -49,7 +52,15 @@ impl Areas {
         };
         // The transcript keeps its minimum first: a three-row terminal
         // leaves the composer one text row, not none.
-        let room = stack.height.saturating_sub(MIN_TRANSCRIPT_ROWS);
+        let mut room = stack.height.saturating_sub(MIN_TRANSCRIPT_ROWS);
+        // The one exception: a box needs three rows to show a single typed
+        // line (two rules and a text row). A composer of two rules shows
+        // nothing typed, which is no composer at all — so wherever the
+        // stack can hold a usable box, the transcript gives up its row
+        // first.
+        if stack.height >= USABLE_COMPOSER {
+            room = room.max(USABLE_COMPOSER);
+        }
         let height = composer::height(lines, room);
         let transcript_height = stack.height.saturating_sub(height);
         Self {
@@ -104,6 +115,42 @@ pub fn scrollbar_area(transcript: Rect) -> Rect {
     }
 }
 
+/// What the scrollbar is told about a transcript: how much there is, which
+/// row is first on screen, and how many rows the screen holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Thumb {
+    /// The track stands for this many rows: one per scroll position, plus
+    /// the view.
+    pub content: usize,
+    /// The first visible row — 0 when the top of the transcript is on
+    /// screen, the last scroll position when the newest row is.
+    pub position: usize,
+    /// Rows on screen.
+    pub viewport: usize,
+}
+
+/// The scrollbar's figures for `total` wrapped rows in a view `view` rows
+/// tall, scrolled `offset` rows up from the bottom.
+///
+/// The thumb should be the view's share of the content (`view / total` of
+/// the track) and should run the whole track: at the bottom while the
+/// newest row shows, at the top once the first row does. The scrollbar
+/// widget places and sizes its thumb as fractions of
+/// `content - 1 + viewport`, so the track is said to stand for exactly
+/// `total` rows — one per scroll position (`total - view`) plus the view —
+/// and `position` is the first visible row. Any other pair leaves the
+/// thumb short of one end: told the row count and the view, it never
+/// reaches the bottom of a mostly-full transcript.
+pub fn thumb(total: u16, view: u16, offset: u16) -> Thumb {
+    let scrollable = total.saturating_sub(view);
+    let offset = offset.min(scrollable);
+    Thumb {
+        content: scrollable as usize + 1,
+        position: (scrollable - offset) as usize,
+        viewport: view as usize,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +192,17 @@ mod tests {
         assert_eq!(areas.footer.height, 1);
         assert_eq!(areas.transcript.height, 1);
         assert_eq!(areas.composer.height, 1);
+
+        // One row more, and the composer becomes usable before the
+        // transcript keeps a row: two rules with nothing between them show
+        // nothing typed, whatever the draft.
+        let areas = Areas::new(screen(40, 4), 30);
+        assert_eq!(areas.footer.height, 1);
+        assert_eq!(areas.composer, Rect::new(0, 0, 40, 3), "one text row");
+        assert_eq!(areas.transcript.height, 0);
+        let areas = Areas::new(screen(40, 5), 30);
+        assert_eq!(areas.transcript.height, 1, "the transcript's row is back");
+        assert_eq!(areas.composer.height, 3);
 
         // Even a one-row terminal divides without panicking.
         let areas = Areas::new(screen(20, 1), 0);
@@ -188,5 +246,51 @@ mod tests {
         assert_eq!(scrollbar_area(transcript), Rect::new(79, 0, 1, 20));
         // A one-column transcript keeps the width it has.
         assert_eq!(transcript_text(Rect::new(0, 0, 1, 5), true).width, 0);
+    }
+
+    /// The thumb is the view's share of the track and runs all of it: it
+    /// starts at the bottom (the newest row), reaches the top with the
+    /// first row, and sits in between in between.
+    #[test]
+    fn the_thumb_runs_the_whole_track_from_the_newest_row_to_the_first() {
+        // Twenty-five rows in a twenty-row view: five rows to scroll.
+        let at_rest = thumb(25, 20, 0);
+        assert_eq!(at_rest.position, 5, "the last scroll position: the bottom");
+        assert_eq!(at_rest.content, 6, "five scroll positions and the view");
+        assert_eq!(at_rest.viewport, 20);
+        assert_eq!(
+            thumb(25, 20, 5).position,
+            0,
+            "scrolled to the first row: the top"
+        );
+        assert_eq!(thumb(25, 20, 2).position, 3);
+        assert_eq!(thumb(25, 20, 99).position, 0, "past the top is the top");
+
+        // Where the widget puts it, by its own rule: a thumb of
+        // `view / total` track rows, starting `position / total` of the
+        // way down (`total` being `content - 1 + viewport`).
+        let place = |t: Thumb, track: usize| {
+            let total = t.content - 1 + t.viewport;
+            let length = (t.viewport * track + total / 2) / total;
+            ((t.position * track + total / 2) / total, length)
+        };
+        assert_eq!(place(at_rest, 20), (4, 16), "ends on the track's last row");
+        assert_eq!(place(thumb(25, 20, 5), 20), (0, 16), "starts on the first");
+        assert_eq!(
+            place(thumb(100, 20, 0), 20),
+            (16, 4),
+            "ends on the last row"
+        );
+        assert_eq!(place(thumb(100, 20, 80), 20), (0, 4), "starts on the first");
+
+        // Content that fits has nothing to scroll.
+        assert_eq!(
+            thumb(5, 20, 0),
+            Thumb {
+                content: 1,
+                position: 0,
+                viewport: 20
+            }
+        );
     }
 }

@@ -74,7 +74,11 @@ impl Window {
     /// cut from the left rather than soft-wrapped — which is what keeps
     /// the cursor's cell exact, the thing a composer is judged on.
     pub fn new(box_: Rect, lines: usize, cursor: (usize, usize)) -> Self {
-        let width = box_.width.saturating_sub(2 + 2 * PAD).max(1);
+        // A box too narrow for even one text column has none: the area is
+        // empty, and [`cursor_position`] says there is nowhere to put the
+        // cursor. (Padding it to a column would put text on, or past, the
+        // right rule.)
+        let width = box_.width.saturating_sub(2 + 2 * PAD);
         let height = box_.height.saturating_sub(BORDERS);
         let area = Rect {
             x: box_.x.saturating_add(1).saturating_add(PAD),
@@ -144,11 +148,28 @@ pub fn draw(
     let lines = visible_lines(palette, editor, &window);
     frame.render_widget(block, box_);
     frame.render_widget(Paragraph::new(lines).style(fill), window.area);
-    // A box with no width or height has nowhere to put a cursor; setting
-    // one outside the box would park it on another widget's cells.
-    if box_.width > 2 && box_.height > 1 && window.cursor.0 < box_.right() {
-        frame.set_cursor_position(window.cursor);
+    // A box with no text row or column has nowhere to put a cursor; setting
+    // one anyway would park it on a rule or on another widget's cells.
+    if let Some(cell) = cursor_position(box_, &window) {
+        frame.set_cursor_position(cell);
     }
+}
+
+/// Where the terminal cursor goes for a draft in `box_`: the window's cell,
+/// but only strictly inside the rules. `None` for a box with no text row
+/// (two rows are both border) or no text column — a short or narrow
+/// terminal shrinks the composer to exactly that, and a cursor on the
+/// bottom rule reads as a cursor that has escaped the box.
+pub fn cursor_position(box_: Rect, window: &Window) -> Option<(u16, u16)> {
+    if window.area.width == 0 || window.area.height == 0 {
+        return None;
+    }
+    let (x, y) = window.cursor;
+    let inside = x > box_.left()
+        && x < box_.right().saturating_sub(1)
+        && y > box_.top()
+        && y < box_.bottom().saturating_sub(1);
+    inside.then_some((x, y))
 }
 
 /// The composer's title row: what the box is, and how to drive it at the

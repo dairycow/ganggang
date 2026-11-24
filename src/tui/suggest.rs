@@ -157,12 +157,23 @@ pub(super) fn suggestion_row(
         take_chars("  ", left)
     };
     let left = left.saturating_sub(gap.chars().count());
-    UiLine::from(vec![
+    let mut spans = vec![
         Span::styled(marker, mark),
         Span::styled(label, command),
         Span::styled(gap, description),
         Span::styled(take_chars(&suggestion.description, left), description),
-    ])
+    ];
+    // The selection runs to the popup's right edge: what the text leaves
+    // of the row is the selected row's own ground, so the highlight reads
+    // as a band and not as a strip as long as its description.
+    if selected {
+        let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+        let pad = width.saturating_sub(used);
+        if pad > 0 {
+            spans.push(Span::styled(" ".repeat(pad), row));
+        }
+    }
+    UiLine::from(spans)
 }
 
 /// The popup's last row: how to drive it, dim, on the popup's surface.

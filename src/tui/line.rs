@@ -66,14 +66,15 @@ fn finish_row(text: String, line: &RenderedLine, row_start: usize) -> RenderedLi
 }
 
 /// Style one wrapped row. The line's kind gives the base style; its marks
-/// are what differ. A code row is padded to `width` so the block reads as
-/// a band across the transcript — the padding only happens for a code row
-/// at a known width, so nothing else grows trailing cells (a terminal
-/// repaints a cell it was not given).
+/// are what differ. A band — code, or output under an expanded call or a
+/// shell line — is padded to `width` so its raised ground covers the whole
+/// row. The padding happens only for those kinds at a known width, so
+/// nothing else grows trailing cells (a terminal repaints a cell it was
+/// not given).
 pub fn styled_line(palette: &Palette, row: &RenderedLine, width: Option<usize>) -> UiLine<'static> {
     let base = palette.line(row.kind);
     let text = match (row.kind, width) {
-        (LineKind::Code, Some(width)) => pad_to_width(&row.text, width),
+        (LineKind::Code | LineKind::Output, Some(width)) => pad_to_width(&row.text, width),
         _ => row.text.clone(),
     };
     if row.marks.is_empty() {
@@ -219,8 +220,9 @@ mod tests {
         assert_eq!(line.spans[0].style.fg, Some(TRUECOLOR.accent_soft));
     }
 
-    /// A code row is a band: its span reaches the row's full width, so
-    /// the raised background covers the whole line. Nothing else pads.
+    /// A band row — code, or an expanded call's output — reaches the
+    /// row's full width, so the raised background covers the whole line.
+    /// Nothing else pads.
     #[test]
     fn a_code_row_is_padded_to_the_row_width_and_nothing_else_is() {
         let code = row("let x = 1;", LineKind::Code, vec![]);
@@ -228,6 +230,14 @@ mod tests {
         assert_eq!(joined(&line).chars().count(), 20, "a band, edge to edge");
         assert_eq!(line.spans[0].style.bg, Some(TRUECOLOR.surface_alt));
         assert_eq!(line.spans[0].style.fg, Some(TRUECOLOR.code));
+
+        // The output under an expanded call is a band too, in its colour.
+        let output = row("  total 0", LineKind::Output, vec![]);
+        let line = styled_line(&TRUECOLOR, &output, Some(20));
+        assert_eq!(joined(&line).chars().count(), 20, "output is a band");
+        assert_eq!(line.spans[0].style.bg, Some(TRUECOLOR.surface_alt));
+        assert_eq!(line.spans[0].style.fg, Some(TRUECOLOR.dim));
+        assert_eq!(joined(&styled_line(&TRUECOLOR, &output, None)), "  total 0");
 
         let prose = row("prose", LineKind::Assistant, vec![]);
         assert_eq!(joined(&styled_line(&TRUECOLOR, &prose, Some(20))), "prose");

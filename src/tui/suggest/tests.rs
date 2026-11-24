@@ -189,8 +189,40 @@ fn the_marker_column_is_reserved_on_every_row() {
         unselected,
         "  /resume [n|prefix]  list sessions, or open one"
     );
-    assert_eq!(selected, "▸ /resume [n|prefix]  list sessions, or open one");
-    assert!(selected.len() <= 80);
+    assert_eq!(
+        selected.trim_end(),
+        "▸ /resume [n|prefix]  list sessions, or open one",
+        "the marker is the only thing the text of a highlight adds"
+    );
+}
+
+/// The highlight is the whole row, edge to edge: a description that stops
+/// early must not leave the rest of the selected row unselected.
+#[test]
+fn the_selection_runs_to_the_popup_edge() {
+    let s = suggestion("/new", "start");
+    let on = suggestion_row(&TRUECOLOR, &s, true, 40);
+    let text = row_text(&on);
+    assert_eq!(text.chars().count(), 40, "padded to the popup's width");
+    assert!(text.starts_with("▸ /new  start"));
+    let pad = on.spans.last().unwrap();
+    assert_eq!(
+        pad.style.bg,
+        Some(TRUECOLOR.selection),
+        "the pad is selected ground"
+    );
+    assert_eq!(pad.style.fg, Some(TRUECOLOR.text));
+
+    // A row that fills the width has nothing to pad, and an unselected
+    // row never pads: its ground is the popup's own.
+    assert_eq!(
+        suggestion_row(&TRUECOLOR, &s, true, 13).spans.len(),
+        4,
+        "▸ /new  start is 13 chars"
+    );
+    let off = suggestion_row(&TRUECOLOR, &s, false, 40);
+    assert_eq!(off.spans.len(), 4);
+    assert_eq!(row_text(&off), "  /new  start");
 }
 
 #[test]

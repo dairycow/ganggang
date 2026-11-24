@@ -141,7 +141,7 @@ impl Footer {
             .join("")
     }
 
-    /// e.g. `gg …/projects/ganggang qwen3.8 ↑305 ↓81 ctx 4% ● working`
+    /// e.g. `gg …/projects/ganggang qwen3.8 ↑305 ↓81 ctx 4% ⠋ working`
     ///
     /// One row of spans, each already carrying the style its role means:
     /// the mark in the crest, the location in pale grey, the model in body

@@ -115,7 +115,8 @@ kept). ↑/↓ walk it while the composer is empty or single-line; Ctrl+P /
 Ctrl+N walk it whatever the composer holds. The first ↑ saves what you were
 typing, and ↓ past the newest gives it back, so a recall never costs a
 draft. Recalled text is ordinary composer text: edit it and send it again.
-A run stopped by Ctrl+C shows `● stopping…` in the footer while it winds
+A run stopped by Ctrl+C shows `stopping…` beside the spinner in the
+footer while it winds
 down, and it winds down promptly: a generation still streaming is cut at
 the same moment, not left to finish. A second Ctrl+C ends the session,
 which is safe mid-run because the session file flushes per append. The
@@ -137,8 +138,10 @@ per role.
 
 The frame: transcript on top, a rounded `compose` box in the middle, one
 footer row. The composer grows with the draft, one text row to eight, then
-scrolls inside its own box so the cursor always lands where the draft's
-cursor is; its border goes warm while a run works and scarlet while it is
+scrolls inside its own box so the cursor lands where the draft's cursor is
+— counted in characters, so a wide glyph (CJK, emoji) can leave it a cell
+left of where the terminal draws it; its border goes warm while a run
+works and scarlet while it is
 being stopped. The footer is fields, not one grey string: `gg`, the
 directory, the model, `↑in ↓out`, `ctx N%` (gold past 60%, red past 85%),
 the watch state, and the status — `○ ready`, a turning spinner +

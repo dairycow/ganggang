@@ -83,8 +83,58 @@ fn a_box_too_small_for_a_cursor_still_places_it_inside() {
     let areas = Areas::new(Rect::new(0, 0, 6, 24), 0);
     let window = Window::new(areas.composer, 1, (0, 999));
     assert_eq!(window.area.width, 2, "two rules, two padding columns");
-    assert!(window.cursor.0 >= areas.composer.x + 2);
-    assert!(window.cursor.0 < areas.composer.right());
+    assert_eq!(
+        cursor_position(areas.composer, &window),
+        Some(window.cursor)
+    );
+}
+
+/// A box with no text row (two rows are both rule) or no text column has
+/// nowhere for a cursor: it is hidden rather than parked on a rule or
+/// pushed onto the cells beside the box.
+#[test]
+fn a_box_without_a_text_row_or_column_has_nowhere_for_the_cursor() {
+    // Two rows are both rule.
+    let box_ = Rect::new(0, 1, 20, 2);
+    let window = Window::new(box_, 3, (0, 0));
+    assert_eq!(window.area.height, 0);
+    assert_eq!(
+        cursor_position(box_, &window),
+        None,
+        "never on the bottom rule"
+    );
+
+    // Too narrow for one text column: the area is empty, not padded onto
+    // or past the right rule.
+    for width in 1..=4 {
+        let box_ = Rect::new(0, 20, width, 3);
+        let window = Window::new(box_, 1, (0, 5));
+        assert_eq!(window.area.width, 0, "a box {width} wide");
+        assert_eq!(
+            window.area.right(),
+            box_.x + 2,
+            "the area ends inside the box: {:?}",
+            window.area
+        );
+        assert_eq!(cursor_position(box_, &window), None, "a box {width} wide");
+    }
+
+    // The first width with a text column puts the cursor in that column.
+    let box_ = Rect::new(0, 20, 5, 3);
+    let window = Window::new(box_, 1, (0, 5));
+    assert_eq!(window.area, Rect::new(2, 21, 1, 1));
+    assert_eq!(cursor_position(box_, &window), Some((2, 21)));
+
+    // And nowhere but strictly inside the rules, however the figures fall.
+    let box_ = Rect::new(3, 5, 30, 4);
+    for cursor in [(0, 0), (2, 26), (0, 999)] {
+        let window = Window::new(box_, 3, cursor);
+        let Some((x, y)) = cursor_position(box_, &window) else {
+            panic!("a usable box has a cursor: {window:?}");
+        };
+        assert!(x > box_.left() && x < box_.right() - 1, "{window:?}");
+        assert!(y > box_.top() && y < box_.bottom() - 1, "{window:?}");
+    }
 }
 
 #[test]

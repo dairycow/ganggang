@@ -13,7 +13,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use super::history::History;
-use super::theme::{Palette, TRUECOLOR};
+use super::theme::TRUECOLOR;
 use super::view::{State, render};
 use crate::events::AgentEvent;
 
@@ -121,6 +121,17 @@ fn an_80_by_24_frame_is_the_theme_not_the_terminal() {
         Rect::new(0, 0, 80, 24),
         "the frame fills the terminal"
     );
+
+    // The footer is one row of the composer's own ground, edge to edge —
+    // not just behind the words.
+    let buffer = terminal.backend().buffer();
+    for x in 0..80 {
+        assert_eq!(
+            buffer[(x, 23)].style().bg,
+            Some(TRUECOLOR.surface),
+            "footer cell ({x}, 23)"
+        );
+    }
 }
 
 /// A 24×8 terminal is a real thing (a narrow split, a phone terminal): the
@@ -166,6 +177,28 @@ fn an_empty_session_draws_the_welcome_block() {
     assert!(shows(&terminal, "one line"), "{text}");
     assert!(!shows(&terminal, "ganggang"), "{text}");
     assert!(!shows(&terminal, "a small, sharp"), "{text}");
+
+    // A resumed session has a conversation, whatever its blocks render:
+    // no welcome for it either.
+    let (mut terminal, mut state) = fresh(80, 24);
+    state.seed_from_entries(&[crate::agent::session::Entry::Message {
+        id: "e1".into(),
+        parent_id: None,
+        timestamp: String::new(),
+        message: crate::agent::session::Message {
+            role: crate::agent::session::Role::User,
+            content: Some("earlier question".into()),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+            usage: None,
+            is_error: false,
+            reasoning: None,
+        },
+    }]);
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(shows(&terminal, "earlier question"), "{text}");
+    assert!(!shows(&terminal, "ganggang"), "{text}");
 }
 
 /// A transcript longer than the view earns a scrollbar in the transcript's
@@ -194,15 +227,62 @@ fn a_transcript_that_overflows_shows_a_scrollbar_and_one_that_fits_does_not() {
             delta: format!("line {i}"),
         });
     }
-    draw(&mut terminal, &mut state);
-    let buffer = terminal.backend().buffer();
     // The bar lives in the transcript's last column, which the text does
     // not reach: nothing is drawn under it.
     let column = 79u16;
-    let symbols: Vec<&str> = (0..20).map(|y| buffer[(column, y)].symbol()).collect();
+    draw(&mut terminal, &mut state);
+    let symbols: Vec<&str> = (0..20)
+        .map(|y| terminal.backend().buffer()[(column, y)].symbol())
+        .collect();
     assert!(
         symbols.iter().any(|s| s.contains('║') || s.contains('▮')),
         "a thumb or a track in the scrollbar column: {symbols:?}"
+    );
+
+    // Where the thumb is, read off the buffer by its colour: the view's
+    // share of the track (16 of 20 rows), ending on the track's last row
+    // while the newest line shows, and starting on its first row once the
+    // first line does. In between, in between.
+    let thumb_rows = |terminal: &Terminal<TestBackend>| -> Vec<u16> {
+        let buffer = terminal.backend().buffer();
+        (0..20u16)
+            .filter(|y| buffer[(column, *y)].style().fg == Some(TRUECOLOR.accent))
+            .collect()
+    };
+    assert_eq!(
+        thumb_rows(&terminal),
+        (4..20).collect::<Vec<_>>(),
+        "at rest the thumb ends on the track's last row"
+    );
+    state.scroll_up(2);
+    draw(&mut terminal, &mut state);
+    assert_eq!(
+        thumb_rows(&terminal),
+        (2..18).collect::<Vec<_>>(),
+        "two rows up: two rows up"
+    );
+
+    // Past the first row there is nothing to scroll to: the offset stops
+    // there, the thumb with it, and the text does not detach from the
+    // composer.
+    state.scroll_up(100);
+    draw(&mut terminal, &mut state);
+    assert_eq!(
+        state.offset_for_test(),
+        5,
+        "five rows were hidden, so five rows is all there is to scroll"
+    );
+    assert_eq!(
+        thumb_rows(&terminal),
+        (0..16).collect::<Vec<_>>(),
+        "at the first row the thumb starts on the first"
+    );
+    let text = screen(&terminal);
+    assert!(shows(&terminal, "line 0"), "{text}");
+    assert!(!shows(&terminal, "line 24"), "{text}");
+    assert!(
+        row(&terminal, 19).contains("line 19"),
+        "the last transcript row is still text, not a gap: {text}"
     );
 }
 
@@ -222,11 +302,15 @@ fn the_suggestion_popup_is_a_panel_of_its_own() {
     // colours stay out of it.
     let buffer = terminal.backend().buffer();
     let mut saw_selection = false;
+    let mut selected_rows: Vec<u16> = Vec::new();
     for y in 0..buffer.area().height {
+        let mut whole_row = true;
         for x in 0..buffer.area().width {
             let style = buffer[(x, y)].style();
             if style.bg == Some(TRUECOLOR.selection) {
                 saw_selection = true;
+            } else {
+                whole_row = false;
             }
             assert!(
                 !style
@@ -235,31 +319,36 @@ fn the_suggestion_popup_is_a_panel_of_its_own() {
                 "no inverted cells: the theme draws the selection"
             );
         }
+        if whole_row {
+            selected_rows.push(y);
+        }
     }
     assert!(saw_selection, "the selected row is on `selection`");
+    // The row that carries the marker is the whole of the selection:
+    // edge to edge, and the only row that is.
+    let marker_row = (0..buffer.area().height).find(|y| buffer[(0, *y)].symbol() == "▸");
+    assert_eq!(
+        selected_rows,
+        marker_row.into_iter().collect::<Vec<_>>(),
+        "the selected row is selected edge to edge, the only row that is"
+    );
 }
 
 /// A palette is chosen once, and a 256-colour session draws with indexed
-/// colours throughout: no truecolor escape ever reaches the terminal.
+/// colours throughout — the real fallback, not a stand-in for it: no
+/// truecolor escape ever reaches the terminal.
 #[test]
 fn an_indexed_session_draws_only_indexed_colours() {
-    let indexed = Palette {
-        bg: Color::Indexed(234),
-        surface: Color::Indexed(235),
-        surface_alt: Color::Indexed(236),
-        border: Color::Indexed(238),
-        text: Color::Indexed(254),
-        muted: Color::Indexed(247),
-        dim: Color::Indexed(243),
-        accent: Color::Indexed(167),
-        accent_soft: Color::Indexed(173),
-        accent_deep: Color::Indexed(95),
-        ok: Color::Indexed(144),
-        warn: Color::Indexed(179),
-        error: Color::Indexed(168),
-        code: Color::Indexed(251),
-        selection: Color::Indexed(237),
-    };
+    // What a terminal without `COLORTERM=truecolor` gets.
+    let indexed = super::theme::indexed_palette();
+    for (what, color) in [
+        ("bg", indexed.bg),
+        ("surface", indexed.surface),
+        ("accent", indexed.accent),
+        ("selection", indexed.selection),
+    ] {
+        assert!(matches!(color, Color::Indexed(_)), "{what} is {color:?}");
+    }
     let mut terminal = Terminal::new(TestBackend::new(60, 16)).unwrap();
     let mut state = State::with_palette(
         std::path::Path::new("/tmp/x"),
@@ -322,11 +411,45 @@ fn a_code_block_reads_as_a_band_across_the_transcript() {
     let y = (0..buffer.area().height)
         .find(|y| row(&terminal, *y).contains("short"))
         .unwrap();
-    for x in 0..39 {
+    // Every cell of the row, the last column included.
+    for x in 0..40 {
         assert_eq!(
             buffer[(x, y)].style().bg,
             Some(TRUECOLOR.surface_alt),
             "cell ({x}, {y}) is part of the code band"
+        );
+    }
+}
+
+/// Output under an expanded call is a band too: its raised ground covers
+/// the whole row, whatever the text's length.
+#[test]
+fn an_expanded_call_output_reads_as_a_band() {
+    let (mut terminal, mut state) = fresh(40, 12);
+    state.apply(&AgentEvent::ToolCallStarted {
+        name: "bash".into(),
+        id: "c".into(),
+        args: serde_json::json!({"command": "echo hi"}),
+    });
+    state.apply(&AgentEvent::ToolCallFinished {
+        name: "bash".into(),
+        id: "c".into(),
+        output: "hi".into(),
+        is_error: false,
+    });
+    state.toggle_expand();
+    draw(&mut terminal, &mut state);
+    // The output's own row — not the call's line above it, whose
+    // arguments quote the same word.
+    let buffer = terminal.backend().buffer();
+    let y = (0..buffer.area().height)
+        .find(|y| row(&terminal, *y).trim() == "hi")
+        .unwrap();
+    for x in 0..40 {
+        assert_eq!(
+            buffer[(x, y)].style().bg,
+            Some(TRUECOLOR.surface_alt),
+            "cell ({x}, {y}) is part of the output band"
         );
     }
 }
