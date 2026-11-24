@@ -204,7 +204,7 @@ api_key = "ds-file-key"
     assert_eq!(cfg.provider, "deepseek");
     assert_eq!(cfg.base_url, "https://api.deepseek.com");
     assert_eq!(cfg.model, "deepseek-flash");
-    assert!(cfg.replay_reasoning);
+    assert_eq!(cfg.replay_reasoning, ReplayReasoning::All);
     assert_eq!(
         cfg.api_key.as_deref(),
         Some("ds-file-key"),
@@ -242,7 +242,7 @@ fn opencode_go_routes_openai_and_anthropic_models() {
         .unwrap();
     assert_eq!(cfg.api, ApiKind::OpenAiCompletions);
     assert_eq!(cfg.base_url, "https://opencode.ai/inference/go/openai/v1");
-    assert!(cfg.replay_reasoning);
+    assert_eq!(cfg.replay_reasoning, ReplayReasoning::All);
 
     cfg.apply_cli(None, Some("opencode-go/claude-haiku-5-5"))
         .unwrap();
@@ -250,7 +250,7 @@ fn opencode_go_routes_openai_and_anthropic_models() {
     assert_eq!(cfg.model, "claude-haiku-5-5");
     assert_eq!(cfg.api, ApiKind::AnthropicMessages);
     assert_eq!(cfg.base_url, "https://opencode.ai/inference/go/anthropic");
-    assert!(!cfg.replay_reasoning);
+    assert_eq!(cfg.replay_reasoning, ReplayReasoning::Never);
 }
 
 #[test]
@@ -391,4 +391,100 @@ models = [{ id = "qwen3.8-flash-next-iq3_s", reasoning_effort = "", reasoning_bu
     .unwrap();
     assert_eq!(per_model_clear.reasoning_effort, None);
     assert_eq!(per_model_clear.reasoning_budget_tokens, None);
+}
+
+#[test]
+fn replay_reasoning_compact_threshold_max_turns_and_explicit_ctx() {
+    let def = Config::default();
+    assert_eq!(def.replay_reasoning, ReplayReasoning::Turn);
+    assert_eq!(def.compact_threshold_tokens, Some(65_536));
+    assert!(!def.context_window_explicit);
+    assert_eq!(def.max_turns, None);
+
+    let cfg = merge(
+        Config::default(),
+        Some("replay_reasoning = \"all\"\ncompact_threshold_tokens = 0\nmax_turns = 25\ncontext_window = 262144\n"),
+        None,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(cfg.replay_reasoning, ReplayReasoning::All);
+    assert_eq!(cfg.compact_threshold_tokens, None);
+    assert_eq!(cfg.max_turns, Some(25));
+    assert!(cfg.context_window_explicit);
+
+    let bool_cfg = merge(
+        Config::default(),
+        Some("replay_reasoning = false\n"),
+        None,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(bool_cfg.replay_reasoning, ReplayReasoning::Never);
+
+    assert!(
+        merge(
+            Config::default(),
+            Some("replay_reasoning = \"bogus\"\n"),
+            None,
+            &[],
+        )
+        .is_err()
+    );
+
+    let env_cfg = merge(
+        Config::default(),
+        None,
+        None,
+        &env(&[("GG_COMPACT_THRESHOLD", "98304"), ("GG_MAX_TURNS", "40")]),
+    )
+    .unwrap();
+    assert_eq!(env_cfg.compact_threshold_tokens, Some(98_304));
+    assert_eq!(env_cfg.max_turns, Some(40));
+
+    let err = merge(
+        Config::default(),
+        None,
+        None,
+        &env(&[("GG_MAX_TURNS", "nope")]),
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("GG_MAX_TURNS"));
+}
+
+#[test]
+fn env_overrides_survive_apply_cli_and_resolve_switch() {
+    let mut cfg = merge(
+        Config::default(),
+        None,
+        None,
+        &env(&[
+            ("GG_BASE_URL", "http://127.0.0.1:9999/v1"),
+            ("GG_MAX_TOKENS", "4096"),
+            ("GG_API_KEY", "env-key"),
+            ("GG_CONTEXT_WINDOW", "262144"),
+            ("GG_REASONING_EFFORT", "high"),
+            ("GG_THINKING_BUDGET", "1024"),
+            ("GG_COMPACT_THRESHOLD", "0"),
+        ]),
+    )
+    .unwrap();
+    cfg.apply_cli(Some("deepseek"), Some("deepseek-v4-pro"))
+        .unwrap();
+    assert_eq!(cfg.provider, "deepseek");
+    assert_eq!(cfg.model, "deepseek-v4-pro");
+    assert_eq!(cfg.base_url, "http://127.0.0.1:9999/v1");
+    assert_eq!(cfg.max_tokens, 4096);
+    assert_eq!(cfg.api_key.as_deref(), Some("env-key"));
+    assert_eq!(cfg.context_window, 262_144);
+    assert!(cfg.context_window_explicit);
+    assert_eq!(cfg.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(cfg.reasoning_budget_tokens, Some(1024));
+    assert_eq!(cfg.compact_threshold_tokens, None);
+    assert!(cfg.compact_threshold_explicit);
+
+    let switched = cfg
+        .resolve_switch("opencode-go/deepseek-v4.1-flash")
+        .unwrap();
+    assert_eq!(switched.api_key.as_deref(), Some("env-key"));
 }

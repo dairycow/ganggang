@@ -203,6 +203,7 @@ impl AnthropicAssembler {
                 prompt_tokens,
                 completion_tokens,
                 total_tokens: prompt_tokens.saturating_add(completion_tokens),
+                ..Usage::default()
             })
         } else {
             None
@@ -220,6 +221,7 @@ impl AnthropicAssembler {
                 finish_reason: map_stop_reason(self.stop_reason),
             }],
             usage,
+            timings: None,
         }
     }
 }

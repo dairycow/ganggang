@@ -57,4 +57,4 @@ Built-in provider presets, generated from the provider table. `zai-coding-plan` 
 
 | Model | Wire API | Context window | Max tokens | Replays reasoning | Base URL |
 |---|---|---|---|---|---|
-| `qwen3.8-flash-next-iq3_s` (default) | `openai-completions` | 131072 | 16384 | no | `http://127.0.0.1:8080/v1` |
+| `qwen3.8-flash-next-iq3_s` (default) | `openai-completions` | 131072 | 16384 | turn | `http://127.0.0.1:8080/v1` |

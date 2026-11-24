@@ -4,7 +4,7 @@
 
 Highest wins:
 
-1. CLI flags: `-P`/`--provider`, `-m`/`--model`, `--tools`, `--reasoning-effort`, `--thinking-budget`
+1. CLI flags: `-P`/`--provider`, `-m`/`--model`, `--tools`, `--reasoning-effort`, `--thinking-budget`, `--max-turns`, `--session-file`
 2. Environment variables
 3. `.gg/config.toml` (project, relative to the directory you run `gg` in)
 4. `~/.gg/config.toml` (user)
@@ -18,7 +18,7 @@ Merging is shallow: a layer that sets a key wins whole. An invalid value is an e
 # ~/.gg/config.toml
 provider = "strata"
 max_tokens = 16384
-context_window = 131072   # match `strata launch --context`
+# context_window = 131072   # auto-probed from Strata /health when unset
 # reasoning_effort = "medium"       # strata default
 # reasoning_budget_tokens = 4096    # strata default (0 disables)
 bash_timeout_secs = 30
@@ -33,13 +33,15 @@ model = "deepseek-flash"
 # api_key = "…"  # or export DEEPSEEK_API_KEY
 ```
 
-Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `api_key`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `bash_timeout_secs`, `tools`. The flat provider-level keys only apply when they belong to the active provider.
+Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `api_key`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`, `max_turns`, `bash_timeout_secs`, `tools`. The flat provider-level keys only apply when they belong to the active provider.
 
 - `api` is `"open-ai-completions"` (default) or `"anthropic-messages"` (note the spelling: the `openai-completions` shown by `--list-models` is display text, not the config value).
 - `auth` is `"auto"` (Bearer for OpenAI, `x-api-key` for Anthropic), `"bearer"`, or `"x-api-key"`.
-- `replay_reasoning` controls whether earlier thinking is sent back to the model.
+- `replay_reasoning` controls whether earlier thinking is sent back to the model: `"never"` (`false`), `"turn"` (only assistant turns since the last user message; `strata` default), or `"all"` (`true`).
+- `compact_threshold_tokens` caps when auto-compaction triggers (e.g. `65536` on `strata` to stay within local VRAM KV residency; `0` disables).
+- `max_turns` caps turns per run (`0` disables); `gg` nudges the model to wrap up at 80% of the budget.
 - `tools` is the allowlist of tools offered to the model (also `--tools read,grep`). Unknown names are an error. See [Tools](tools.md).
-- `context_window` should match the server's real window: compaction and the footer's context percentage use it. See [Sessions & Compaction](sessions-compaction.md).
+- `context_window` should match the server's real window: compaction and the footer's context percentage use it. When unset on `strata` or a local URL, `gg` probes `/health` at startup for `max_context` (and `kv_resident` when `compact_threshold_tokens` is unset). See [Sessions & Compaction](sessions-compaction.md).
 
 ## Providers
 
@@ -65,7 +67,7 @@ models = ["my-model", { id = "my-long-model", context_window = 262144 }]
 model = "deepseek-v4-pro"
 ```
 
-Provider keys: `base_url`, `api`, `auth`, `api_key`, `api_key_env`, `model`, `max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, and `models`. Each `models` entry is a bare id or a table with `id` plus optional `api`, `base_url`, `max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`. A provider with `api_key_env` and no key set refuses to start, naming the variable to export.
+Provider keys: `base_url`, `api`, `auth`, `api_key`, `api_key_env`, `model`, `max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`, and `models`. Each `models` entry is a bare id or a table with `id` plus optional `api`, `base_url`, `max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`. A provider with `api_key_env` and no key set refuses to start, naming the variable to export.
 
 Choose at the command line with `-P deepseek`, `-m deepseek-v4-pro`, or `-m opencode-go/claude-haiku-5-5` (`provider/model`). Naming conflicting providers in `-P` and `-m` is an error.
 
@@ -82,6 +84,8 @@ Choose at the command line with `-P deepseek`, `-m deepseek-v4-pro`, or `-m open
 | `GG_BASH_TIMEOUT` | Maximum seconds for one bash call |
 | `GG_REASONING_EFFORT` | Reasoning effort (`low`, `medium`, `high`, `xhigh`, `none`; `""` clears) |
 | `GG_THINKING_BUDGET` | Cap thinking tokens per turn (`0` disables preset cap) |
+| `GG_COMPACT_THRESHOLD` | Auto-compaction token threshold (`0` disables preset threshold) |
+| `GG_MAX_TURNS` | Maximum turns per run (`0` disables) |
 | `GG_DEBUG_PROMPT` | Set to `1` to dump the assembled system prompt to stderr |
 | `ZHIPU_API_KEY` | Key for `glm-coding-plan` |
 | `OPENCODE_API_KEY` | Key for `opencode-go` |

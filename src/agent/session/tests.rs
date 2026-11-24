@@ -90,6 +90,7 @@ fn malformed_arguments_degrade_to_empty_with_warning() {
             finish_reason: None,
         }],
         usage: None,
+        timings: None,
     };
     let (msg, warnings) = from_response(resp).unwrap();
     assert_eq!(warnings.len(), 1);
@@ -118,6 +119,7 @@ fn unparseable_args_replay_as_empty_object_and_never_drop_the_call() {
             finish_reason: None,
         }],
         usage: None,
+        timings: None,
     };
     let (msg, _) = from_response(resp).unwrap();
     let entries = [Entry::Message {
@@ -150,6 +152,7 @@ fn empty_arguments_are_an_empty_object_not_a_warning() {
             finish_reason: None,
         }],
         usage: None,
+        timings: None,
     };
     let (msg, warnings) = from_response(resp).unwrap();
     assert!(warnings.is_empty());
@@ -161,6 +164,7 @@ fn no_choices_is_an_error() {
     let resp = ChatResponse {
         choices: vec![],
         usage: None,
+        timings: None,
     };
     assert!(from_response(resp).is_err());
 }
@@ -334,7 +338,174 @@ fn to_wire_with_replay_reasoning_populates_assistant_reasoning_content() {
     assert_eq!(plain[0].reasoning_content, None);
     assert_eq!(plain[1].reasoning_content, None);
 
-    let replayed = to_wire_with(&entries, true);
+    let replayed = to_wire_with(&entries, ReplayReasoning::All);
     assert_eq!(replayed[0].reasoning_content.as_deref(), Some("thought"));
     assert_eq!(replayed[1].reasoning_content.as_deref(), Some(""));
+}
+
+#[test]
+fn to_wire_with_turn_scoped_replay_keeps_only_current_turn_reasoning() {
+    let msg = |role: Role, content: Option<&str>, reasoning: Option<&str>| Message {
+        role,
+        content: content.map(String::from),
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+        usage: None,
+        is_error: false,
+        reasoning: reasoning.map(String::from),
+    };
+    let entries = vec![
+        Entry::Message {
+            id: "u1".into(),
+            parent_id: None,
+            timestamp: now_iso(),
+            message: msg(Role::User, Some("first"), None),
+        },
+        Entry::Message {
+            id: "a1".into(),
+            parent_id: Some("u1".into()),
+            timestamp: now_iso(),
+            message: msg(Role::Assistant, Some("ans1"), Some("old-thought")),
+        },
+        Entry::Message {
+            id: "u2".into(),
+            parent_id: Some("a1".into()),
+            timestamp: now_iso(),
+            message: msg(Role::User, Some("second"), None),
+        },
+        Entry::Message {
+            id: "a2".into(),
+            parent_id: Some("u2".into()),
+            timestamp: now_iso(),
+            message: msg(Role::Assistant, None, Some("turn2-thought-1")),
+        },
+        Entry::Message {
+            id: "a3".into(),
+            parent_id: Some("a2".into()),
+            timestamp: now_iso(),
+            message: msg(Role::Assistant, Some("ans2"), Some("turn2-thought-2")),
+        },
+    ];
+    let wire = to_wire_with(&entries, ReplayReasoning::Turn);
+    assert_eq!(
+        wire[1].reasoning_content, None,
+        "old turn reasoning dropped"
+    );
+    assert_eq!(
+        wire[3].reasoning_content.as_deref(),
+        Some("turn2-thought-1")
+    );
+    assert_eq!(
+        wire[4].reasoning_content.as_deref(),
+        Some("turn2-thought-2")
+    );
+}
+
+#[test]
+fn compaction_boundary_on_assistant_pins_original_user_request() {
+    let entries = vec![
+        Entry::Message {
+            id: "u1".into(),
+            parent_id: None,
+            timestamp: now_iso(),
+            message: Message {
+                role: Role::User,
+                content: Some("build feature X".into()),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                usage: None,
+                is_error: false,
+                reasoning: None,
+            },
+        },
+        Entry::Message {
+            id: "a1".into(),
+            parent_id: Some("u1".into()),
+            timestamp: now_iso(),
+            message: Message {
+                role: Role::Assistant,
+                content: Some("step 1".into()),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                usage: None,
+                is_error: false,
+                reasoning: None,
+            },
+        },
+        Entry::Message {
+            id: "a2".into(),
+            parent_id: Some("a1".into()),
+            timestamp: now_iso(),
+            message: Message {
+                role: Role::Assistant,
+                content: Some("step 2".into()),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                usage: None,
+                is_error: false,
+                reasoning: Some("keep-me".into()),
+            },
+        },
+        Entry::Compaction {
+            id: "c1".into(),
+            parent_id: Some("a2".into()),
+            timestamp: now_iso(),
+            summary: "did step 1".into(),
+            first_kept_id: "a2".into(),
+        },
+    ];
+    let wire = to_wire_with(&entries, ReplayReasoning::Turn);
+    assert_eq!(wire.len(), 2);
+    assert_eq!(wire[0].role, "user");
+    let note = wire[0].content.as_deref().unwrap();
+    assert!(note.contains("[original user request]\nbuild feature X"));
+    assert!(note.contains("[conversation before this point was compacted]\ndid step 1"));
+    assert_eq!(wire[1].role, "assistant");
+    assert_eq!(wire[1].reasoning_content.as_deref(), Some("keep-me"));
+}
+
+#[test]
+fn thinking_pct_prefers_usage_reasoning_tokens_then_char_ratio() {
+    let m1 = Message {
+        role: Role::Assistant,
+        content: Some("ok".into()),
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+        usage: Some(Usage {
+            prompt_tokens: 10,
+            completion_tokens: 100,
+            total_tokens: 110,
+            reasoning_tokens: Some(75),
+        }),
+        is_error: false,
+        reasoning: Some("x".into()),
+    };
+    assert_eq!(thinking_pct(&m1), Some(75));
+
+    let m2 = Message {
+        role: Role::Assistant,
+        content: Some("1234".into()),
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+        usage: None,
+        is_error: false,
+        reasoning: Some("123456".into()),
+    };
+    assert_eq!(thinking_pct(&m2), Some(60));
+
+    let m3 = Message {
+        role: Role::Assistant,
+        content: Some("1234".into()),
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+        usage: Some(Usage {
+            prompt_tokens: 10,
+            completion_tokens: 100,
+            total_tokens: 110,
+            reasoning_tokens: Some(0),
+        }),
+        is_error: false,
+        reasoning: Some("123456".into()),
+    };
+    assert_eq!(thinking_pct(&m3), Some(60));
 }

@@ -226,10 +226,10 @@ async fn summary_failure_warns_and_continues_un_compacted() {
 /// requesting past the configured window every batch.
 #[tokio::test]
 async fn trigger_without_a_cut_point_warns_once_per_run() {
-    let big = "x".repeat(12_000);
+    let big = "x".repeat(4_000);
     let echo_args = format!(r#"{{"text":"{big}"}}"#);
-    // Three tool batches in ONE run: each crosses the (tiny) trigger
-    // line, and each finds no cuttable span.
+    // Three small tool batches in ONE run: each crosses the (tiny 8k)
+    // trigger line, while total mass stays under KEEP_RECENT (20k).
     let responses = vec![
         tool_call_response(&[("call_c", "echo", &echo_args)]),
         tool_call_response(&[("call_c", "echo", &echo_args)]),
@@ -358,4 +358,53 @@ async fn loop_compaction_persists_and_replays_from_the_file() {
         "dropped span is summarized away"
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn single_run_multi_turn_session_compacts_at_assistant_boundary() {
+    let big = "x".repeat(24_000); // ~6k tokens per message
+    let echo_args = format!(r#"{{"text":"{big}"}}"#);
+    let responses = vec![
+        tool_call_response(&[("call_1", "echo", &echo_args)]),
+        tool_call_response(&[("call_2", "echo", &echo_args)]),
+        text_response("SUMMARY-SINGLE-RUN"),
+        text_response("done"),
+    ];
+    let server = FakeServer::spawn(responses);
+    let mut registry = Registry::new();
+    registry.register(Box::new(Echo));
+    let client = LlmClient::new(&server.base_url).unwrap();
+    let mut agent = Agent::new(
+        client,
+        registry,
+        "fake-model".into(),
+        512,
+        Arc::new(AtomicBool::new(false)),
+        std::env::temp_dir(),
+        None,
+        false,
+        8_000,
+        Default::default(),
+    );
+
+    let (mut tx, mut rx) = tokio::sync::mpsc::channel(128);
+    agent
+        .run("original-prompt-keep-me".into(), &mut tx)
+        .await
+        .unwrap();
+    drop(tx);
+    while rx.recv().await.is_some() {}
+
+    assert!(
+        agent
+            .entries()
+            .iter()
+            .any(|e| matches!(e, Entry::Compaction { .. })),
+        "single-run session should compact at an assistant boundary"
+    );
+    let requests = server.requests.lock().unwrap().clone();
+    let final_msgs = requests.last().unwrap()["messages"].to_string();
+    assert!(final_msgs.contains("SUMMARY-SINGLE-RUN"));
+    assert!(final_msgs.contains("[original user request]"));
+    assert!(final_msgs.contains("original-prompt-keep-me"));
 }

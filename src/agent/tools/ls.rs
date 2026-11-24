@@ -109,13 +109,21 @@ included. Entries that cannot be read are skipped with a noted line."
         })
     }
 
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
     fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult> {
         Box::pin(async move {
             let args: LsArgs = match parse_args(args) {
                 Ok(a) => a,
                 Err(e) => return ToolResult::err(e),
             };
-            ls(&self.resolve(args.path.as_deref()))
+            let path = self.resolve(args.path.as_deref());
+            match tokio::task::spawn_blocking(move || ls(&path)).await {
+                Ok(res) => res,
+                Err(e) => ToolResult::err(format!("ls task failed: {e}")),
+            }
         })
     }
 }

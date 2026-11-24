@@ -39,6 +39,15 @@ pub struct Printer {
     /// terminal, not in a redirected/piped stderr. Off ⇒ deltas render
     /// nothing (well-behaved-CLI rule; other progress lines stay).
     spin: bool,
+    tool_calls: u32,
+    tool_errors: u32,
+    peak_prompt_tokens: u32,
+    total_completion_tokens: u64,
+    total_predicted_n: u64,
+    total_predicted_ms: f64,
+    total_reasoning_tokens: u64,
+    last_decode_tps: Option<f64>,
+    last_thinking_pct: Option<u8>,
 }
 
 impl Default for Printer {
@@ -56,6 +65,15 @@ impl Printer {
             spinner: 0,
             spinner_open: false,
             spin: true,
+            tool_calls: 0,
+            tool_errors: 0,
+            peak_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            total_predicted_n: 0,
+            total_predicted_ms: 0.0,
+            total_reasoning_tokens: 0,
+            last_decode_tps: None,
+            last_thinking_pct: None,
         }
     }
 
@@ -89,15 +107,63 @@ impl Printer {
 
     fn render(&mut self, event: AgentEvent) -> Vec<String> {
         match event {
-            AgentEvent::RunStarted | AgentEvent::RunEnded { .. } | AgentEvent::RunAborted => {
-                Vec::new()
+            AgentEvent::RunStarted => Vec::new(),
+            AgentEvent::RunEnded { turns } => {
+                if turns == 0 {
+                    return Vec::new();
+                }
+                let parts = self.summary_parts(turns);
+                vec![format!("── done: {} ──", parts.join(" · "))]
+            }
+            AgentEvent::RunAborted => {
+                let parts = self.summary_parts(self.turn);
+                vec![format!("── aborted after {} ──", parts.join(" · "))]
             }
             AgentEvent::TurnStarted => {
                 self.close_turn();
                 self.turn += 1;
                 vec![format!("── turn {} ──", self.turn)]
             }
-            AgentEvent::TurnEnded { .. } => Vec::new(),
+            AgentEvent::TurnEnded {
+                usage,
+                timings,
+                thinking_pct,
+                ..
+            } => {
+                let mut parts = Vec::new();
+                if let Some(u) = usage {
+                    self.peak_prompt_tokens = self.peak_prompt_tokens.max(u.prompt_tokens);
+                    self.total_completion_tokens += u.completion_tokens as u64;
+                    if let Some(r) = u.reasoning_tokens {
+                        self.total_reasoning_tokens += r as u64;
+                    }
+                    parts.push(format!("ctx {} tok", u.prompt_tokens));
+                    parts.push(format!("gen {} tok", u.completion_tokens));
+                }
+                if let Some(t) = timings.as_ref() {
+                    if let (Some(n), Some(ms)) = (t.predicted_n, t.predicted_ms)
+                        && n > 0
+                        && ms.is_finite()
+                        && ms > 0.0
+                    {
+                        self.total_predicted_n += n as u64;
+                        self.total_predicted_ms += ms;
+                    }
+                    if let Some(tps) = t.decode_tok_per_sec() {
+                        self.last_decode_tps = Some(tps);
+                        parts.push(format!("{tps:.1} tok/s"));
+                    }
+                }
+                if let Some(pct) = thinking_pct {
+                    self.last_thinking_pct = Some(pct);
+                    parts.push(format!("think {pct}%"));
+                }
+                if parts.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![format!("  {}", parts.join(" · "))]
+                }
+            }
             // §15, M7.3: print mode never shows thinking — not even a
             // marker; stdout stays the answer, stderr stays progress.
             AgentEvent::Thinking { .. } => Vec::new(),
@@ -115,7 +181,8 @@ impl Printer {
                 )]
             }
             AgentEvent::ToolCallStarted { name, args, .. } => {
-                vec![format!("▸ {name} {}", one_line(&args.to_string(), 80))]
+                self.tool_calls += 1;
+                vec![format!("▸ {name} {}", format_tool_args(&name, &args))]
             }
             AgentEvent::ToolCallFinished {
                 name,
@@ -124,7 +191,8 @@ impl Printer {
                 ..
             } => {
                 if is_error {
-                    vec![format!("✗ {name} — {}", one_line(&output, 100))]
+                    self.tool_errors += 1;
+                    vec![format!("✗ {name} — {}", one_line(&output, 140))]
                 } else {
                     vec![format!("✓ {name}")]
                 }
@@ -161,6 +229,115 @@ impl Printer {
             self.answer = std::mem::take(&mut self.current);
         }
     }
+
+    fn summary_parts(&self, turns: u32) -> Vec<String> {
+        let mut parts = vec![
+            format!("{turns} turn(s)"),
+            format!(
+                "{} tool(s){}",
+                self.tool_calls,
+                if self.tool_errors > 0 {
+                    format!(" ({} err)", self.tool_errors)
+                } else {
+                    String::new()
+                }
+            ),
+        ];
+        if self.peak_prompt_tokens > 0 {
+            parts.push(format!("peak ctx {} tok", self.peak_prompt_tokens));
+        }
+        if self.total_completion_tokens > 0 {
+            let agg_tps = (self.total_predicted_n > 0 && self.total_predicted_ms > 0.0)
+                .then(|| self.total_predicted_n as f64 / (self.total_predicted_ms / 1000.0))
+                .or(self.last_decode_tps);
+            let tps = agg_tps
+                .map(|t| format!(" ({t:.1} tok/s)"))
+                .unwrap_or_default();
+            parts.push(format!("gen {} tok{tps}", self.total_completion_tokens));
+        }
+        let think = if self.total_reasoning_tokens > 0 && self.total_completion_tokens > 0 {
+            Some(
+                ((self.total_reasoning_tokens * 100) / self.total_completion_tokens).min(100) as u8,
+            )
+        } else {
+            self.last_thinking_pct
+        };
+        if let Some(pct) = think {
+            parts.push(format!("think {pct}%"));
+        }
+        parts
+    }
+}
+
+fn format_tool_args(name: &str, args: &serde_json::Value) -> String {
+    let raw = match name {
+        "bash" => match args["command"].as_str() {
+            Some(cmd) => match args["timeout_secs"].as_u64() {
+                Some(t) => format!("{cmd} (timeout {t}s)"),
+                None => cmd.to_string(),
+            },
+            None => args.to_string(),
+        },
+        "read" => match args["path"].as_str() {
+            Some(path) => {
+                let off = args["offset"]
+                    .as_u64()
+                    .map(|o| format!(":{o}"))
+                    .unwrap_or_default();
+                let lim = args["limit"]
+                    .as_u64()
+                    .map(|l| format!("+{l}"))
+                    .unwrap_or_default();
+                format!("{path}{off}{lim}")
+            }
+            None => args.to_string(),
+        },
+        "edit" => match args["path"].as_str() {
+            Some(path) => {
+                let n = args["edits"].as_array().map_or(0, |a| a.len());
+                format!("{path} ({n} edit(s))")
+            }
+            None => args.to_string(),
+        },
+        "write" => match args["path"].as_str() {
+            Some(path) => {
+                let chars = args["content"].as_str().map_or(0, |c| c.chars().count());
+                format!("{path} ({chars} chars)")
+            }
+            None => args.to_string(),
+        },
+        "grep" => match args["pattern"].as_str() {
+            Some(pat) => {
+                let mut s = format!("{pat:?}");
+                if let Some(p) = args["path"].as_str() {
+                    s.push_str(&format!(" in {p}"));
+                }
+                if let Some(g) = args["glob"].as_str() {
+                    s.push_str(&format!(" glob={g}"));
+                }
+                s
+            }
+            None => args.to_string(),
+        },
+        "find" => match args["pattern"].as_str() {
+            Some(pat) => match args["path"].as_str() {
+                Some(p) => format!("{pat} in {p}"),
+                None => pat.to_string(),
+            },
+            None => args.to_string(),
+        },
+        "ls" => {
+            if args.get("path").is_none() || args["path"].is_null() {
+                ".".to_string()
+            } else if let Some(p) = args["path"].as_str() {
+                p.to_string()
+            } else {
+                args.to_string()
+            }
+        }
+        _ => args.to_string(),
+    };
+    one_line(&raw, 180)
 }
 
 /// Collapse to one line and cap the length, marking a cut with `…` —
@@ -200,14 +377,17 @@ mod tests {
                 },
                 AgentEvent::TurnEnded {
                     stop_reason: "stop".into(),
+                    usage: None,
+                    timings: None,
+                    thinking_pct: None,
                 },
                 AgentEvent::RunEnded { turns: 1 },
             ],
         );
 
-        // The turn marker, one raw spinner update for the text, and the
-        // close marker that erases it before the stream goes quiet.
-        assert_eq!(lines.len(), 3);
+        // The turn marker, one raw spinner update for the text, the close
+        // marker, and the final run summary.
+        assert_eq!(lines.len(), 4);
         assert_eq!(lines[0], "── turn 1 ──");
         assert!(
             lines[1].starts_with("\r⠋ streaming… 5 chars"),
@@ -215,6 +395,7 @@ mod tests {
             lines[1]
         );
         assert_eq!(lines[2], "\r\u{1b}[2K\n");
+        assert_eq!(lines[3], "── done: 1 turn(s) · 0 tool(s) ──");
         // Nothing renders to stdout mid-run; the answer is pulled once
         // at the end.
         assert_eq!(p.answer(), "0.1.0");
@@ -257,7 +438,7 @@ mod tests {
             lines[2]
         );
         assert_eq!(lines[3], "\r\u{1b}[2K\n");
-        assert_eq!(lines[4], "▸ read {\"path\":\"Cargo.toml\"}");
+        assert_eq!(lines[4], "▸ read Cargo.toml");
         // No later line carries spinner debris, and an unterminated
         // streamed turn still yields its partial text as the answer.
         assert_eq!(p.answer(), "foo bar");
@@ -298,6 +479,9 @@ mod tests {
                 },
                 AgentEvent::TurnEnded {
                     stop_reason: "tool_calls".into(),
+                    usage: None,
+                    timings: None,
+                    thinking_pct: None,
                 },
                 AgentEvent::TurnStarted,
                 AgentEvent::AssistantText {
@@ -305,6 +489,9 @@ mod tests {
                 },
                 AgentEvent::TurnEnded {
                     stop_reason: "stop".into(),
+                    usage: None,
+                    timings: None,
+                    thinking_pct: None,
                 },
                 AgentEvent::RunEnded { turns: 2 },
             ],
@@ -322,10 +509,7 @@ mod tests {
             err[2], "\r\u{1b}[2K\n",
             "the spinner closes before the tool line"
         );
-        assert_eq!(
-            err[3], "▸ read {\"path\":\"Cargo.toml\"}",
-            "tool start shows compact args"
-        );
+        assert_eq!(err[3], "▸ read Cargo.toml", "tool start shows compact args");
         assert_eq!(err[4], "✓ read");
         assert_eq!(
             err[6], "✗ bash — error[E0308]: mismatched types",
@@ -387,6 +571,9 @@ mod tests {
                 },
                 AgentEvent::TurnEnded {
                     stop_reason: "stop".into(),
+                    usage: None,
+                    timings: None,
+                    thinking_pct: None,
                 },
             ],
         );
@@ -429,10 +616,7 @@ mod tests {
         );
         assert_eq!(
             lines,
-            vec![
-                "── turn 1 ──".to_string(),
-                "▸ read {\"path\":\"Cargo.toml\"}".to_string()
-            ]
+            vec!["── turn 1 ──".to_string(), "▸ read Cargo.toml".to_string()]
         );
         // No spinner was ever open, so closing emits nothing either.
         assert!(p.close().is_empty());
@@ -452,5 +636,90 @@ mod tests {
         );
         assert_eq!(p.close(), vec!["\r\u{1b}[2K\n".to_string()]);
         assert!(p.close().is_empty());
+    }
+
+    #[test]
+    fn smart_tool_formatting_and_turn_telemetry_render_cleanly() {
+        let mut p = Printer::new().with_spinner(false);
+        let cmd = format!("cargo test {}", "a".repeat(120));
+        let lines = render(
+            &mut p,
+            vec![
+                AgentEvent::TurnStarted,
+                AgentEvent::ToolCallStarted {
+                    name: "bash".into(),
+                    id: "c1".into(),
+                    args: json!({"command": cmd}),
+                },
+                AgentEvent::TurnEnded {
+                    stop_reason: "stop".into(),
+                    usage: Some(crate::agent::session::Usage {
+                        prompt_tokens: 1200,
+                        completion_tokens: 80,
+                        total_tokens: 1280,
+                        reasoning_tokens: Some(40),
+                    }),
+                    timings: Some(crate::llm::types::Timings {
+                        predicted_per_second: Some(62.4),
+                        ..Default::default()
+                    }),
+                    thinking_pct: Some(50),
+                },
+                AgentEvent::RunEnded { turns: 1 },
+            ],
+        );
+        assert!(lines[1].starts_with("▸ bash cargo test "));
+        assert!(lines[1].contains(&"a".repeat(100)));
+        assert_eq!(
+            lines[2],
+            "  ctx 1200 tok · gen 80 tok · 62.4 tok/s · think 50%"
+        );
+        assert_eq!(
+            lines[3],
+            "── done: 1 turn(s) · 1 tool(s) · peak ctx 1200 tok · gen 80 tok (62.4 tok/s) · think 50% ──"
+        );
+    }
+
+    #[test]
+    fn aborted_summary_and_malformed_tool_args_render_cleanly() {
+        let mut p = Printer::new().with_spinner(false);
+        let lines = render(
+            &mut p,
+            vec![
+                AgentEvent::TurnStarted,
+                AgentEvent::ToolCallStarted {
+                    name: "bash".into(),
+                    id: "c1".into(),
+                    args: json!({"unexpected": 42}),
+                },
+                AgentEvent::ToolCallFinished {
+                    name: "bash".into(),
+                    id: "c1".into(),
+                    output: "bad".into(),
+                    is_error: true,
+                },
+                AgentEvent::TurnEnded {
+                    stop_reason: "tool_calls".into(),
+                    usage: Some(crate::agent::session::Usage {
+                        prompt_tokens: 500,
+                        completion_tokens: 100,
+                        total_tokens: 600,
+                        reasoning_tokens: Some(20),
+                    }),
+                    timings: Some(crate::llm::types::Timings {
+                        predicted_n: Some(100),
+                        predicted_ms: Some(2000.0),
+                        ..Default::default()
+                    }),
+                    thinking_pct: Some(20),
+                },
+                AgentEvent::RunAborted,
+            ],
+        );
+        assert_eq!(lines[1], r#"▸ bash {"unexpected":42}"#);
+        assert_eq!(
+            lines.last().unwrap(),
+            "── aborted after 1 turn(s) · 1 tool(s) (1 err) · peak ctx 500 tok · gen 100 tok (50.0 tok/s) · think 20% ──"
+        );
     }
 }

@@ -25,6 +25,61 @@ pub struct ChatResponse {
     // `Vec`, not a single Choice: n>1 requests and some providers' shapes vary.
     pub choices: Vec<Choice>,
     pub usage: Option<Usage>,
+    #[serde(default)]
+    pub timings: Option<Timings>,
+}
+
+/// Permissive inference timing telemetry (e.g. Strata / llama.cpp `timings`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Timings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_n: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_per_second: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predicted_n: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predicted_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predicted_per_second: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_n: Option<u32>,
+}
+
+impl Timings {
+    /// Decode throughput in tokens/sec, preferring `predicted_per_second`
+    /// and falling back to `predicted_n / (predicted_ms / 1000.0)`.
+    pub fn decode_tok_per_sec(&self) -> Option<f64> {
+        if let Some(tps) = self
+            .predicted_per_second
+            .filter(|t| t.is_finite() && *t > 0.0)
+        {
+            return Some(tps);
+        }
+        match (self.predicted_n, self.predicted_ms) {
+            (Some(n), Some(ms)) if n > 0 && ms.is_finite() && ms > 0.0 => {
+                Some(n as f64 / (ms / 1000.0))
+            }
+            _ => None,
+        }
+    }
+
+    /// Prompt prefill throughput in tokens/sec, preferring `prompt_per_second`
+    /// and falling back to `prompt_n / (prompt_ms / 1000.0)`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn prompt_tok_per_sec(&self) -> Option<f64> {
+        if let Some(tps) = self.prompt_per_second.filter(|t| t.is_finite() && *t > 0.0) {
+            return Some(tps);
+        }
+        match (self.prompt_n, self.prompt_ms) {
+            (Some(n), Some(ms)) if n > 0 && ms.is_finite() && ms > 0.0 => {
+                Some(n as f64 / (ms / 1000.0))
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -62,9 +117,8 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
     // Thinking text (Strata/Qwen emit `reasoning_content` as a sibling of
     // `content`, streamed as fragments before the visible text). Captured
-    // on the way IN for display (M7.3); never populated on the way out —
-    // replaying a model's thinking back at it is not the harness's job,
-    // and `to_wire` leaves this None.
+    // on the way IN for display (M7.3) and populated on replay according to
+    // `ReplayReasoning` (`Never` | `Turn` | `All`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
     // Some OpenAI-compatible providers emit `"reasoning"` instead of
@@ -116,7 +170,13 @@ pub struct FunctionCall {
     pub arguments: String,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct CompletionTokensDetails {
+    #[serde(default)]
+    pub reasoning_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct Usage {
     #[serde(default)]
     pub prompt_tokens: u32,
@@ -124,6 +184,22 @@ pub struct Usage {
     pub completion_tokens: u32,
     #[serde(default)]
     pub total_tokens: u32,
+    #[serde(default)]
+    pub reasoning_tokens: Option<u32>,
+    #[serde(default)]
+    pub completion_tokens_details: Option<CompletionTokensDetails>,
+}
+
+impl Usage {
+    /// Reasoning tokens reported either top-level or nested under
+    /// `completion_tokens_details.reasoning_tokens`.
+    pub fn effective_reasoning_tokens(&self) -> Option<u32> {
+        self.reasoning_tokens.or_else(|| {
+            self.completion_tokens_details
+                .as_ref()
+                .and_then(|d| d.reasoning_tokens)
+        })
+    }
 }
 
 /// The outbound request. Built by LlmClient::send, not by callers.
@@ -403,5 +479,50 @@ mod tests {
                 .unwrap();
         assert_eq!(msg.reasoning.as_deref(), Some("thought"));
         assert_eq!(msg.reasoning_content, None);
+    }
+
+    #[test]
+    fn timings_deserializes_and_computes_fallbacks() {
+        let raw = r#"{"cache_n":0,"prompt_n":42,"prompt_ms":1653.5,"prompt_per_second":25.4,"predicted_n":22,"predicted_ms":520.2,"predicted_per_second":42.3,"draft_n":18}"#;
+        let t: Timings = serde_json::from_str(raw).unwrap();
+        assert_eq!(t.decode_tok_per_sec(), Some(42.3));
+        assert_eq!(t.prompt_tok_per_sec(), Some(25.4));
+
+        let fallback = Timings {
+            predicted_n: Some(100),
+            predicted_ms: Some(2000.0),
+            prompt_n: Some(50),
+            prompt_ms: Some(500.0),
+            ..Default::default()
+        };
+        assert_eq!(fallback.decode_tok_per_sec(), Some(50.0));
+        assert_eq!(fallback.prompt_tok_per_sec(), Some(100.0));
+
+        let bad = Timings {
+            predicted_per_second: Some(0.0),
+            predicted_n: Some(10),
+            predicted_ms: Some(f64::NAN),
+            prompt_per_second: Some(f64::INFINITY),
+            prompt_n: Some(10),
+            prompt_ms: Some(-1.0),
+            ..Default::default()
+        };
+        assert_eq!(bad.decode_tok_per_sec(), None);
+        assert_eq!(bad.prompt_tok_per_sec(), None);
+    }
+
+    #[test]
+    fn usage_effective_reasoning_tokens_handles_top_level_and_nested() {
+        let top: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30,"reasoning_tokens":12}"#,
+        )
+        .unwrap();
+        assert_eq!(top.effective_reasoning_tokens(), Some(12));
+
+        let nested: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30,"completion_tokens_details":{"reasoning_tokens":15}}"#,
+        )
+        .unwrap();
+        assert_eq!(nested.effective_reasoning_tokens(), Some(15));
     }
 }

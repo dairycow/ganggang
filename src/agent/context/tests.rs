@@ -202,3 +202,15 @@ fn skills_advertise_name_description_path_and_hide_disabled() {
         "disabled skills are not advertised"
     );
 }
+
+#[test]
+fn build_system_prompt_with_date_pins_the_supplied_date() {
+    let prompt = build_system_prompt_with_date(
+        Path::new("/tmp/p"),
+        &default_tools(),
+        &[],
+        &[],
+        "2026-01-02",
+    );
+    assert!(prompt.contains("date: 2026-01-02"));
+}

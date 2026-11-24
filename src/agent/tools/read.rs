@@ -311,13 +311,23 @@ larger files (including past 50 KiB)."
         })
     }
 
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
     fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult> {
         Box::pin(async move {
             let args: ReadArgs = match parse_args(args) {
                 Ok(a) => a,
                 Err(e) => return ToolResult::err(e),
             };
-            read(&self.resolve(&args.path), args.offset, args.limit)
+            let path = self.resolve(&args.path);
+            let offset = args.offset;
+            let limit = args.limit;
+            match tokio::task::spawn_blocking(move || read(&path, offset, limit)).await {
+                Ok(res) => res,
+                Err(e) => ToolResult::err(format!("read task failed: {e}")),
+            }
         })
     }
 }

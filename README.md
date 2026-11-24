@@ -32,8 +32,8 @@ curl -s 127.0.0.1:8080/health
 ## The pieces
 
 - **Agent loop** (§09 of the design): request → tool calls → results → repeat
-  until answered. Sequential tool execution, streaming responses, abort with
-  Esc. No turn cap — you are the runaway check.
+  until answered. Contiguous read-only tool calls run concurrently, responses
+  stream, abort with Esc/Ctrl+C/SIGTERM, and optionally cap with `--max-turns`.
 - **Tools** (§10): `read`, `bash`, `edit`, `write` — plus `grep`, `find`,
   `ls` for search. Plain values in and out; every truncation is visible in
   the output; tool failures are values the model reacts to, never crashes.
@@ -54,8 +54,9 @@ curl -s 127.0.0.1:8080/health
   to cwd ride along as context.
 - **Sessions** (§13): append-only JSONL under `~/.gg/sessions/`. `gg -c`
   continues the newest for the directory; `--resume <id|prefix>` picks one;
-  `--no-session` opts out. Crash mid-run? The file still loads — torn tails
-  and interrupted tool calls are repaired on resume.
+  `--session-file <path>` targets an exact file; `--no-session` opts out.
+  Crash mid-run? The file still loads — torn tails and interrupted tool calls
+  are repaired on resume.
 - **Compaction** (§14): when context crowds the window, older history is
   summarized in one extra call and kept as a `Compaction` entry — raw
   history is never destroyed. `/compact [instructions]` runs it on demand.
@@ -103,9 +104,10 @@ context (`!!` doesn't).
 
 ## Configuration & Providers (§16)
 
-Precedence: CLI flags (`-P`/`--provider`, `-m`/`--model`, `--tools`, `--reasoning-effort`, `--thinking-budget`) > environment
+Precedence: CLI flags (`-P`/`--provider`, `-m`/`--model`, `--tools`, `--reasoning-effort`, `--thinking-budget`, `--max-turns`, `--session-file`) > environment
 (`GG_PROVIDER`, `GG_BASE_URL`, `GG_MODEL`, `GG_MAX_TOKENS`, `GG_API_KEY`,
-`GG_CONTEXT_WINDOW`, `GG_BASH_TIMEOUT`, `GG_REASONING_EFFORT`, `GG_THINKING_BUDGET`, `GG_DEBUG_PROMPT=1` to dump the
+`GG_CONTEXT_WINDOW`, `GG_BASH_TIMEOUT`, `GG_REASONING_EFFORT`, `GG_THINKING_BUDGET`,
+`GG_COMPACT_THRESHOLD`, `GG_MAX_TURNS`, `GG_DEBUG_PROMPT=1` to dump the
 assembled system prompt to stderr, plus provider env vars `ZHIPU_API_KEY`,
 `OPENCODE_API_KEY`, `DEEPSEEK_API_KEY`) > `.gg/config.toml` >
 `~/.gg/config.toml` > defaults.
@@ -125,7 +127,7 @@ gg -m opencode-go/claude-haiku-5-5 -p "…"
 ```toml
 provider = "strata"
 max_tokens = 16384
-context_window = 131072   # match `strata launch --context`
+# context_window = 131072   # auto-probed from Strata /health when unset
 # reasoning_effort = "medium"       # strata default
 # reasoning_budget_tokens = 4096    # strata default (0 disables)
 bash_timeout_secs = 30

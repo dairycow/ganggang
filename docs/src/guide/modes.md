@@ -13,7 +13,7 @@ gg -p "what changed in the last commit?"
 echo "explain this" | gg -p -
 ```
 
-The final answer goes to **stdout**; progress (turn markers, one line per tool call, a spinner on a terminal) goes to **stderr**. A consumer that closes the pipe early (`… | head -c 5`) ends the run quietly. `Ctrl+C` aborts between tool calls; a second `Ctrl+C` exits immediately with status 130.
+The final answer goes to **stdout**; progress (turn markers, formatted tool-call lines, per-turn token/throughput stats, a final run summary, and a spinner on a terminal) goes to **stderr**. A consumer that closes the pipe early (`… | head -c 5`) ends the run quietly. `Ctrl+C` aborts between tool calls (or mid-request); a second `Ctrl+C` exits immediately with status 130. `SIGTERM` triggers a graceful abort, flushes output, and exits with status 143.
 
 ## JSON mode
 
@@ -31,7 +31,7 @@ Stdout carries the session header record first (when a session is kept), then on
 | `thinking` | `delta` | A fragment of reasoning (`reasoning_content`) |
 | `tool_call_started` | `name`, `id`, `args` | A tool call begins |
 | `tool_call_finished` | `name`, `id`, `output`, `is_error` | The tool's result |
-| `turn_ended` | `stop_reason` | The model's turn finished |
+| `turn_ended` | `stop_reason`, optional `usage`, `timings`, `thinking_pct` | The model's turn finished |
 | `run_ended` | `turns` | A clean finish |
 | `run_aborted` | | The run was aborted; emitted after a `warned` |
 | `warned` | `message` | A non-fatal problem (hook failure, compaction, truncation…) |
@@ -50,7 +50,7 @@ A run ends with either `run_ended` or `run_aborted`, so a consumer can tell them
 {"type":"run_ended","turns":2}
 ```
 
-The prompt is positional (`gg --mode json "…"`) or `-p`; `-` reads it from stdin.
+The prompt is positional (`gg --mode json "…"`) or `-p`; `-` reads it from stdin. `Ctrl+C` and `SIGTERM` trigger a graceful abort (`run_aborted`) and exit with status 143 on `SIGTERM`.
 
 ## HTML export
 

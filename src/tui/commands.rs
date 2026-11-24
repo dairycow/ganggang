@@ -362,8 +362,9 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
                 }
                 _ => choice,
             };
-            let endpoint = config.resolve_switch(&target)?;
+            let mut endpoint = config.resolve_switch(&target)?;
             endpoint.require_auth()?;
+            crate::llm::client::maybe_probe_local_health(&mut endpoint).await;
             let _ = crate::llm::client::LlmClient::from_endpoint(&endpoint)?;
             input_tx
                 .send(super::AgentInput::SwitchEndpoint(endpoint.clone()))
@@ -411,9 +412,9 @@ fn swap_agent(
 ) {
     let (tx, rx) = tokio::sync::mpsc::channel::<super::AgentInput>(16);
     *input_tx = tx;
+    state.new_session(boot.session_path, boot.sessions_disabled);
     state.seed_from_entries(boot.agent.entries());
     tokio::spawn(super::agent_task::agent_task(boot.agent, rx, ui_tx.clone()));
-    state.new_session(boot.session_path, boot.sessions_disabled);
 }
 
 #[cfg(test)]

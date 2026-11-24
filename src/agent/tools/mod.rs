@@ -4,9 +4,9 @@
 //! fed back to the model — only transport and session IO may abort a run.
 
 use std::future::Future;
-use std::pin::Pin;
-
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -59,12 +59,18 @@ pub trait Tool: Send + Sync {
     /// JSON Schema for the `parameters` object of the function declaration.
     fn schema(&self) -> Value;
 
+    /// Whether this tool is read-only and safe to run concurrently with other
+    /// read-only tools in the same batch.
+    fn is_read_only(&self) -> bool {
+        false
+    }
+
     fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult>;
 }
 
 /// Ordered tool set. Order of registration is the order of advertisement.
 #[derive(Default)]
-pub struct Registry(Vec<Box<dyn Tool>>);
+pub struct Registry(Vec<Arc<dyn Tool>>);
 
 impl Registry {
     pub fn new() -> Self {
@@ -72,18 +78,25 @@ impl Registry {
     }
 
     pub fn register(&mut self, tool: Box<dyn Tool>) {
-        self.0.push(tool);
+        self.0.push(Arc::from(tool));
     }
 
     /// Drop tools the allowlist does not name. The caller (CLI/config,
     /// spec §10) validates names beforehand — unknown names never reach
     /// this quietly shrinking the registry.
-    pub fn retain(&mut self, keep: impl FnMut(&Box<dyn Tool>) -> bool) {
-        self.0.retain(keep);
+    pub fn retain(&mut self, mut keep: impl FnMut(&Arc<dyn Tool>) -> bool) {
+        self.0.retain(|t| keep(t));
     }
 
-    pub fn tools(&self) -> &[Box<dyn Tool>] {
+    pub fn tools(&self) -> &[Arc<dyn Tool>] {
         &self.0
+    }
+
+    pub fn is_read_only(&self, name: &str) -> bool {
+        self.0
+            .iter()
+            .find(|t| t.name() == name)
+            .is_some_and(|t| t.is_read_only())
     }
 
     /// The request `tools` array: OpenAI function declarations.
@@ -114,6 +127,51 @@ impl Registry {
             return ToolResult::err(format!("unknown tool: {}", call.name));
         };
         tool.execute(&call.args).await
+    }
+
+    /// Execute a slice of calls concurrently (bounded at 8 in-flight),
+    /// returning results in the exact original call order.
+    pub async fn dispatch_parallel(
+        &self,
+        calls: &[ToolCall],
+        abort: &Arc<std::sync::atomic::AtomicBool>,
+    ) -> Vec<ToolResult> {
+        let sem = Arc::new(tokio::sync::Semaphore::new(8));
+        let mut set = tokio::task::JoinSet::new();
+        for (idx, call) in calls.iter().enumerate() {
+            if let Some(detail) = &call.args_error {
+                let msg = format!("arguments were not valid JSON: {detail}");
+                set.spawn(async move { (idx, ToolResult::err(msg)) });
+                continue;
+            }
+            let Some(tool) = self.0.iter().find(|t| t.name() == call.name).cloned() else {
+                let msg = format!("unknown tool: {}", call.name);
+                set.spawn(async move { (idx, ToolResult::err(msg)) });
+                continue;
+            };
+            let args = call.args.clone();
+            let sem = sem.clone();
+            let abort = abort.clone();
+            set.spawn(async move {
+                let _permit = sem.acquire_owned().await;
+                if abort.load(std::sync::atomic::Ordering::Acquire) {
+                    return (idx, ToolResult::err("aborted before execution".into()));
+                }
+                let res = tool.execute(&args).await;
+                (idx, res)
+            });
+        }
+        let mut out: Vec<Option<ToolResult>> = vec![None; calls.len()];
+        while let Some(joined) = set.join_next().await {
+            if let Ok((idx, res)) = joined
+                && let Some(slot) = out.get_mut(idx)
+            {
+                *slot = Some(res);
+            }
+        }
+        out.into_iter()
+            .map(|r| r.unwrap_or_else(|| ToolResult::err("tool task panicked".into())))
+            .collect()
     }
 }
 

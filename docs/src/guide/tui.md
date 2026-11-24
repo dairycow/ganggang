@@ -1,6 +1,6 @@
 # Interactive TUI
 
-Running `gg` on a terminal opens a fullscreen UI with three regions: the **transcript** (markdown rendering, tool calls, optional thinking), the **composer** where you type, and a **footer** showing the active model and how full the context window is.
+Running `gg` on a terminal opens a fullscreen UI with three regions: the **transcript** (markdown rendering, tool calls, optional thinking), the **composer** where you type, and a **footer** showing the active model, context %, and live throughput (`t/s`, `think %`) when reported by the backend. `SIGTERM` shuts down cleanly and restores the terminal.
 
 If stdin is not a terminal and you gave no prompt, `gg` exits with an error rather than hanging; use `gg -p "…"` for scripts.
 

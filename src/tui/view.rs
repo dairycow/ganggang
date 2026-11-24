@@ -99,6 +99,8 @@ impl State {
         self.context_window = context_window as u64;
         self.footer
             .set_context(self.last_context_tokens, self.context_window);
+        self.footer.set_decode_tps(None);
+        self.footer.set_thinking_pct(None);
     }
 
     pub fn push_user(&mut self, text: &str) {
@@ -151,6 +153,7 @@ impl State {
         self.transcript.extend_from_entries(entries);
         let (tokens_in, tokens_out) = super::agent_task::usage_totals(entries);
         self.footer.set_usage(tokens_in, tokens_out);
+        self.set_context_tokens(super::agent_task::last_context_tokens(entries));
         self.record_totals(tokens_in, tokens_out, entries.len());
     }
 
@@ -166,6 +169,9 @@ impl State {
         self.entries = 0;
         self.tokens_in = 0;
         self.tokens_out = 0;
+        self.last_context_tokens = 0;
+        self.footer.set_usage(0, 0);
+        self.footer.clear_telemetry();
         let where_ = self
             .session_path
             .as_ref()
@@ -190,6 +196,20 @@ impl State {
     }
 
     pub fn apply(&mut self, event: &AgentEvent) {
+        if let AgentEvent::TurnEnded {
+            usage,
+            timings,
+            thinking_pct,
+            ..
+        } = event
+        {
+            if let Some(u) = usage {
+                self.set_context_tokens(u.prompt_tokens as u64 + u.completion_tokens as u64);
+            }
+            self.footer
+                .set_decode_tps(timings.as_ref().and_then(|t| t.decode_tok_per_sec()));
+            self.footer.set_thinking_pct(*thinking_pct);
+        }
         self.transcript.apply(event);
     }
 

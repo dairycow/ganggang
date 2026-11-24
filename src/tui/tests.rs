@@ -341,6 +341,7 @@ fn usage_totals_sum_assistant_entries_only() {
                 prompt_tokens: total,
                 completion_tokens: 1,
                 total_tokens: total + 1,
+                ..Default::default()
             }),
             is_error: false,
             reasoning: None,
@@ -361,6 +362,7 @@ fn usage_totals_sum_assistant_entries_only() {
                     prompt_tokens: 999,
                     completion_tokens: 999,
                     total_tokens: 999,
+                    ..Default::default()
                 }), // a provider that stamps usage on a user message
                 is_error: false,
                 reasoning: None,
@@ -439,6 +441,9 @@ fn split_deltas_fold_into_the_same_block_as_one_shot_text() {
         }
         state.apply(&AgentEvent::TurnEnded {
             stop_reason: "stop".into(),
+            usage: None,
+            timings: None,
+            thinking_pct: None,
         });
         state_line_texts(&state)
     };
@@ -457,6 +462,9 @@ fn split_deltas_fold_into_the_same_block_as_one_shot_text() {
         });
         state.apply(&AgentEvent::TurnEnded {
             stop_reason: "stop".into(),
+            usage: None,
+            timings: None,
+            thinking_pct: None,
         });
         state_line_texts(&state)
     };
@@ -625,6 +633,7 @@ fn seed_from_entries_rebuilds_the_blocks_the_event_stream_would() {
             prompt_tokens: p,
             completion_tokens: 7,
             total_tokens: p + 7,
+            ..Default::default()
         }),
         is_error: false,
         reasoning: None,

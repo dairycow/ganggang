@@ -2,7 +2,7 @@
 
 `gg` is a small, sharp agentic harness written in Rust: one agent loop, seven tools, and a terminal UI. It is modelled on [pi](https://github.com/earendil-works/pi) and built to be read.
 
-- **One loop.** Request → tool calls → results → repeat until the model answers. Tools run sequentially, responses stream, `Esc` aborts. There is no turn cap; you are the runaway check.
+- **One loop.** Request → tool calls → results → repeat until the model answers. Read-only tool calls in a contiguous run dispatch concurrently, responses stream, `Esc`/`SIGTERM` aborts, and `--max-turns` can cap runaway loops.
 - **Seven tools.** `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. Every truncation is visible in the tool output, and tool failures are values the model reacts to, never crashes. See [Tools](guide/tools.md).
 - **Local first.** By default `gg` talks to a local [Strata](https://github.com/Niko1221/Strata) server: no cloud, no accounts, no telemetry. It also speaks OpenAI Chat Completions and Anthropic Messages endpoints, with built-in presets and custom providers. See [Configuration & Providers](guide/configuration.md).
 - **Three interfaces on one core.** A fullscreen [TUI](guide/tui.md), a pipeable print mode, and a JSON event stream. See [Output Modes & Export](guide/modes.md).

@@ -122,7 +122,7 @@ pub(super) fn providers_reference() -> String {
                 code(ep.api.as_str()),
                 ep.context_window,
                 ep.max_tokens,
-                if ep.replay_reasoning { "yes" } else { "no" },
+                ep.replay_reasoning.as_str(),
                 code(&ep.base_url),
             ));
         }

@@ -1,7 +1,7 @@
-//! System-prompt assembly (spec §12): built fresh for every request from
-//! named sections — preamble, context files, tools, skills (M3.5), working
-//! directory — so there is no prompt cache to invalidate. The preamble is
-//! a constant versioned with the code; everything else is discovered.
+//! System-prompt assembly (spec §12): built from named sections —
+//! preamble, context files, tools, skills (M3.5), working directory —
+//! with the UTC date frozen per [`Agent`](super::Agent) so the prompt
+//! prefix stays KV-cacheable across turns.
 
 use std::path::{Path, PathBuf};
 
@@ -66,11 +66,32 @@ sharp question. Otherwise make the reasonable call and note it in one line.";
 /// Assemble the system prompt: preamble → context files → tools →
 /// skills → working directory (spec §12). Empty inputs omit their section
 /// entirely — no placeholder headers for absent content.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn build_system_prompt(
     cwd: &Path,
     tools: &Registry,
     agents_files: &[AgentsFile],
     skills: &[Skill],
+) -> String {
+    build_system_prompt_with_date(cwd, tools, agents_files, skills, &today_utc_iso())
+}
+
+pub fn today_utc_iso() -> String {
+    let today = time::OffsetDateTime::now_utc();
+    format!(
+        "{:04}-{:02}-{:02}",
+        today.year(),
+        u8::from(today.month()),
+        today.day()
+    )
+}
+
+pub fn build_system_prompt_with_date(
+    cwd: &Path,
+    tools: &Registry,
+    agents_files: &[AgentsFile],
+    skills: &[Skill],
+    date: &str,
 ) -> String {
     let mut sections = vec![PREAMBLE.to_string()];
 
@@ -106,7 +127,7 @@ pub fn build_system_prompt(
         ));
     }
 
-    sections.push(working_dir_section(cwd));
+    sections.push(working_dir_section(cwd, date));
 
     sections.join("\n\n")
 }
@@ -154,15 +175,11 @@ fn tool_lines(tools: &Registry) -> String {
         .join("\n")
 }
 
-fn working_dir_section(cwd: &Path) -> String {
-    let today = time::OffsetDateTime::now_utc();
+fn working_dir_section(cwd: &Path, date: &str) -> String {
     format!(
-        "# Working directory\ncwd: {}\nos: {}\ndate: {:04}-{:02}-{:02}",
+        "# Working directory\ncwd: {}\nos: {}\ndate: {date}",
         cwd.display(),
         std::env::consts::OS,
-        today.year(),
-        u8::from(today.month()),
-        today.day()
     )
 }
 

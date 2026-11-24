@@ -11,8 +11,8 @@
 //! the visible text and delivered live as [`Delta::Thinking`] — captured
 //! for display, never mixed into message content. Strata's stream
 //! (verified live) also emits `: keep-alive` comment lines, a final
-//! `choices: []` chunk carrying `usage`, and non-standard `timings`
-//! objects the permissive wire types ignore.
+//! `choices: []` chunk carrying `usage`, and `timings` objects that are
+//! parsed into [`ChatResponse::timings`].
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -21,7 +21,7 @@ use std::pin::Pin;
 use anyhow::Context;
 use serde::Deserialize;
 
-use super::types::{ChatMessage, ChatResponse, Choice, ToolCall, Usage};
+use super::types::{ChatMessage, ChatResponse, Choice, Timings, ToolCall, Usage};
 
 /// One SSE chunk, permissive like every wire type (§8): `choices` is empty
 /// on the usage-only final chunk, `delta` can be `{}` on the chunk that
@@ -32,6 +32,8 @@ struct StreamChunk {
     choices: Vec<StreamChoice>,
     #[serde(default)]
     usage: Option<Usage>,
+    #[serde(default)]
+    timings: Option<Timings>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,6 +93,7 @@ struct Assembler {
     reasoning: String,
     finish_reason: Option<String>,
     usage: Option<Usage>,
+    timings: Option<Timings>,
     /// BTreeMap: keyed by fragment index, iterated in order at finish.
     calls: BTreeMap<u32, PartialCall>,
 }
@@ -109,6 +112,9 @@ impl Assembler {
     fn feed(&mut self, chunk: StreamChunk) -> Vec<Delta> {
         if chunk.usage.is_some() {
             self.usage = chunk.usage;
+        }
+        if chunk.timings.is_some() {
+            self.timings = chunk.timings;
         }
         let mut deltas = Vec::new();
         for choice in chunk.choices {
@@ -180,6 +186,7 @@ impl Assembler {
                 finish_reason: self.finish_reason,
             }],
             usage: self.usage,
+            timings: self.timings,
         }
     }
 }

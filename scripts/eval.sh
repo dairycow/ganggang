@@ -97,10 +97,10 @@ pub fn add_one(x: i32) -> i32 {
 }
 EOF
 
-python3 - "$ROOT" "$GG_BIN" "$HOME_DIR" "$EVAL_TIMEOUT" "$GG_ARGS" "$EVAL_OUT" "$T1" "$T2" "$T3" "$T4" <<'PY'
-import glob, json, os, shlex, subprocess, sys, time
+python3 - "$ROOT" "$GG_BIN" "$HOME_DIR" "$EVAL_TIMEOUT" "$GG_ARGS" "$EVAL_OUT" "$SCRATCH" "$T1" "$T2" "$T3" "$T4" <<'PY'
+import json, os, re, shlex, subprocess, sys, time
 
-root, gg_bin, home_dir, timeout_s, gg_args, eval_out, t1, t2, t3, t4 = sys.argv[1:]
+root, gg_bin, home_dir, timeout_s, gg_args, eval_out, scratch_dir, t1, t2, t3, t4 = sys.argv[1:]
 timeout_s = int(timeout_s)
 extra_args = shlex.split(gg_args)
 
@@ -136,7 +136,8 @@ tasks = [
 results = []
 for name, cwd, prompt, check_fn in tasks:
     env = dict(os.environ, HOME=home_dir)
-    cmd = [gg_bin, "--no-hooks", "--mode", "json", *extra_args, prompt]
+    session_file = os.path.join(scratch_dir, f"{name}.jsonl")
+    cmd = [gg_bin, "--no-hooks", "--mode", "json", "--session-file", session_file, *extra_args, prompt]
     t0 = time.monotonic()
     try:
         proc = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout_s)
@@ -178,8 +179,18 @@ for name, cwd, prompt, check_fn in tasks:
                 if f"cd {cwd}" in cstr:
                     redundant_cd += 1
                 # Count legitimate bash (cargo/git) as non-workaround; sed/cat/grep/rg/find/ls/python as workaround
-                first = cstr.lstrip().split(" ", 1)[0] if cstr.strip() else ""
-                if first not in ("sed", "cat", "head", "tail", "grep", "rg", "find", "ls", "python", "python3"):
+                workarounds = {"sed", "cat", "head", "tail", "grep", "rg", "find", "ls", "python", "python3"}
+                is_workaround = False
+                for seg in re.split(r"\s*(?:&&|\|\||[;|\n])\s*", cstr):
+                    tokens = seg.strip().split()
+                    while tokens and "=" in tokens[0] and not tokens[0].startswith("="):
+                        tokens.pop(0)
+                    if not tokens or tokens[0] == "cd":
+                        continue
+                    if os.path.basename(tokens[0]) in workarounds:
+                        is_workaround = True
+                        break
+                if not is_workaround:
                     native_calls += 1
             else:
                 native_calls += 1
@@ -189,24 +200,22 @@ for name, cwd, prompt, check_fn in tasks:
     gen_tok = 0
     reason_chars = 0
     out_chars = 0
-    if session_id:
-        for sp in glob.glob(os.path.join(home_dir, ".gg/sessions/*/*.jsonl")):
-            if session_id[:8] in os.path.basename(sp):
-                with open(sp) as sf:
-                    for sl in sf:
-                        try:
-                            se = json.loads(sl)
-                        except json.JSONDecodeError:
-                            continue
-                        if se.get("type") == "message":
-                            m = se.get("message") or {}
-                            u = m.get("usage") or {}
-                            peak_prompt = max(peak_prompt, int(u.get("prompt_tokens") or 0))
-                            gen_tok += int(u.get("completion_tokens") or 0)
-                            reason_chars += len(m.get("reasoning") or "")
-                            out_chars += len(m.get("content") or "")
-                            for tc in m.get("tool_calls") or []:
-                                out_chars += len(json.dumps(tc.get("args") or {}))
+    if os.path.exists(session_file):
+        with open(session_file) as sf:
+            for sl in sf:
+                try:
+                    se = json.loads(sl)
+                except json.JSONDecodeError:
+                    continue
+                if se.get("type") == "message":
+                    m = se.get("message") or {}
+                    u = m.get("usage") or {}
+                    peak_prompt = max(peak_prompt, int(u.get("prompt_tokens") or 0))
+                    gen_tok += int(u.get("completion_tokens") or 0)
+                    reason_chars += len(m.get("reasoning") or "")
+                    out_chars += len(m.get("content") or "")
+                    for tc in m.get("tool_calls") or []:
+                        out_chars += len(json.dumps(tc.get("args") or {}))
 
     ok = (not timed_out) and check_fn(answer, cwd)
     native_pct = (100.0 * native_calls / calls) if calls else 100.0

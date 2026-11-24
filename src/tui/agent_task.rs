@@ -94,13 +94,16 @@ pub(super) async fn agent_task(
                     crate::agent::compaction::CompactOutcome::Failed(detail) => {
                         format!("compaction failed ({detail}); continuing un-compacted")
                     }
+                    crate::agent::compaction::CompactOutcome::Aborted => {
+                        "compaction aborted".to_string()
+                    }
                 };
                 // The footer must not keep showing the pre-compaction
                 // figure: estimate the summarized view now (chars/4, the
                 // trigger's own fallback), replaced by real usage on the
                 // next request.
                 let context_tokens = crate::agent::compaction::estimate_wire_tokens(
-                    &crate::agent::session::to_wire(agent.entries()),
+                    &crate::agent::session::to_wire_with(agent.entries(), agent.replay_reasoning()),
                 ) as u64;
                 let _ = ui
                     .send(UiEvent::Compacted {

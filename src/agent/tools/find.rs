@@ -155,13 +155,22 @@ to include them). Dotfiles included, results sorted, capped at max_results (defa
         })
     }
 
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
     fn execute<'a>(&'a self, args: &'a Value) -> BoxFuture<'a, ToolResult> {
         Box::pin(async move {
             let args: FindArgs = match parse_args(args) {
                 Ok(a) => a,
                 Err(e) => return ToolResult::err(e),
             };
-            find(&self.cwd, &self.resolve(args.path.as_deref()), &args)
+            let cwd = self.cwd.clone();
+            let root = self.resolve(args.path.as_deref());
+            match tokio::task::spawn_blocking(move || find(&cwd, &root, &args)).await {
+                Ok(res) => res,
+                Err(e) => ToolResult::err(format!("find task failed: {e}")),
+            }
         })
     }
 }

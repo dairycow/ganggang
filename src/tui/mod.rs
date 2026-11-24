@@ -57,6 +57,7 @@ pub enum SessionPick {
     New,
     Latest,
     Prefix(String),
+    Path(PathBuf),
 }
 
 /// Rebuilds an Agent for `/new` and `/resume`. The TUI owns the lifetime
@@ -169,6 +170,11 @@ pub async fn run(
     // agent events keep folding into the transcript, so a run in flight
     // neither stalls nor bursts on return.
     let mut editor: Option<external::Running> = None;
+    #[cfg(unix)]
+    let mut sigterm =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+    #[cfg(not(unix))]
+    let mut sigterm = ();
 
     loop {
         // A build finished earlier and the loop has been waiting for a safe
@@ -180,6 +186,7 @@ pub async fn run(
                 match &watch_cfg {
                     Some(cfg) => match watch::restart_plan(
                         cfg,
+                        &cwd,
                         state.session_path.as_deref(),
                         state.editor.text(),
                         &original_args,
@@ -222,11 +229,11 @@ pub async fn run(
                             // Ask the in-flight run (if any) to stop; the
                             // flush-per-append session file makes a hard exit
                             // mid-run safe by construction (§13).
-                            abort.store(true, Ordering::Relaxed);
+                            abort.store(true, Ordering::Release);
                             break;
                         }
                         KeyAction::Abort if state.busy => {
-                            abort.store(true, Ordering::Relaxed);
+                            abort.store(true, Ordering::Release);
                         }
                         KeyAction::CopyAnswer => copy_last_answer(&mut state),
                         // Ctrl+R: a rebuild request from the user. The
@@ -371,6 +378,10 @@ pub async fn run(
                     break;
                 }
             }
+            _ = wait_sigterm(&mut sigterm) => {
+                abort.store(true, Ordering::Release);
+                break;
+            }
             event = next_watch_event(&mut watch_rx) => {
                 let Some(event) = event else {
                     // The build task died (it only ends by itself when the
@@ -399,6 +410,7 @@ pub async fn run(
                             let Some(cfg) = &watch_cfg else { continue };
                             match watch::restart_plan(
                                 cfg,
+                                &cwd,
                                 state.session_path.as_deref(),
                                 state.editor.text(),
                                 &original_args,
@@ -466,6 +478,22 @@ pub async fn run(
         Some(plan) => Ok(Exit::Restart(plan)),
         None => Ok(Exit::Done(note)),
     }
+}
+
+/// Wait for SIGTERM on Unix; pends forever if unavailable.
+#[cfg(unix)]
+async fn wait_sigterm(sig: &mut Option<tokio::signal::unix::Signal>) {
+    match sig {
+        Some(s) => {
+            s.recv().await;
+        }
+        None => std::future::pending::<()>().await,
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_sigterm(_sig: &mut ()) {
+    std::future::pending::<()>().await;
 }
 
 /// The watch channel as a select arm that idles forever once the task is

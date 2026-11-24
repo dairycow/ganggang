@@ -43,6 +43,10 @@ Options:
           Reasoning effort sent to supporting endpoints (e.g. "low", "medium", "high", "xhigh", "none"). Pass "" to clear a provider preset's default
       --thinking-budget <TOKENS>
           Cap thinking/reasoning tokens per turn (Strata/local backends). 0 disables any preset cap
+      --max-turns <N>
+          Maximum turns per run (0 disables). Soft wrap-up nudge at 80% of budget
+      --session-file <PATH>
+          Persist and/or resume this exact session JSONL file path
   -h, --help
           Print help
   -V, --version
@@ -68,3 +72,5 @@ Options:
 | `--no-hooks` | Skip user hooks for this run (§22), including the hooks file and the project-file warning |  |  |
 | `--reasoning-effort <EFFORT>` | Reasoning effort sent to supporting endpoints (e.g. "low", "medium", "high", "xhigh", "none"). Pass "" to clear a provider preset's default |  |  |
 | `--thinking-budget <TOKENS>` | Cap thinking/reasoning tokens per turn (Strata/local backends). 0 disables any preset cap |  |  |
+| `--max-turns <N>` | Maximum turns per run (0 disables). Soft wrap-up nudge at 80% of budget |  |  |
+| `--session-file <PATH>` | Persist and/or resume this exact session JSONL file path |  |  |

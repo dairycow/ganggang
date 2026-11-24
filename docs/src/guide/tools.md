@@ -4,7 +4,7 @@ The model gets seven tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls
 
 ## Principles
 
-- Tools run **one at a time**, in the order the model called them.
+- Mutating tools (`bash`, `edit`, `write`) run **one at a time**, in the order the model called them. Contiguous runs of 2+ read-only tools (`read`, `grep`, `find`, `ls`) execute **in parallel** (up to 8 in flight) while preserving call order in events and session history.
 - A tool failure is a **value**: the error text goes back to the model, which reads it and retries. Only transport and session I/O errors abort a run.
 - Every cap is **visible**: truncated output says so, so the model never mistakes a cut for the whole.
 
@@ -26,7 +26,7 @@ Runs `bash -c` in the session directory with your permissions. stdout and stderr
 
 ## `edit`
 
-Exact-match replacement. Each `old_text` must occur **exactly once**; any miss or ambiguity writes nothing, and the error tells the model which edit failed. All edits are applied in memory first, then written once. Files over 50 KiB are refused, because editing a truncated view would destroy the tail.
+Exact-match replacement. Each `old_text` must occur **exactly once**; any miss or ambiguity writes nothing, and the error tells the model which edit failed (including line-numbered nearest-match context on a miss, or match line numbers on ambiguity). All edits are applied in memory first, then written once with a compact hunk preview. Files over 512 KiB are refused.
 
 ## `write`
 

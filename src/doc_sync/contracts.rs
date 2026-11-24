@@ -239,7 +239,12 @@ fn events_hooks_and_keys_are_exhaustively_documented() {
             output: s(),
             is_error: false,
         },
-        AgentEvent::TurnEnded { stop_reason: s() },
+        AgentEvent::TurnEnded {
+            stop_reason: s(),
+            usage: None,
+            timings: None,
+            thinking_pct: None,
+        },
         AgentEvent::RunEnded { turns: 0 },
         AgentEvent::RunAborted,
         AgentEvent::Warned { message: s() },
