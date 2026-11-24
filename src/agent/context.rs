@@ -1,12 +1,11 @@
 //! System-prompt assembly (spec §12): built from named sections —
-//! preamble, context files, tools, skills (M3.5), working directory —
-//! with the UTC date frozen per [`Agent`](super::Agent) so the prompt
-//! prefix stays KV-cacheable across turns.
+//! preamble, context files, skills (M3.5), working directory — with the
+//! UTC date frozen per [`Agent`](super::Agent) so the prompt prefix stays
+//! KV-cacheable across turns.
 
 use std::path::{Path, PathBuf};
 
 use super::skills::Skill;
-use super::tools::Registry;
 
 /// One `AGENTS.md` file pulled into the prompt: where it came from (shown
 /// as a header so the model can tell instructions apart) and what it said.
@@ -18,62 +17,39 @@ pub struct AgentsFile {
 /// The identity and discipline half of the prompt. Everything here is a
 /// standing instruction; situational facts live in the later sections.
 const PREAMBLE: &str = "\
-You are gg, a terminal-based coding agent. You do software work in the \
-user's files: reading, editing, writing, running commands, answering \
-questions. You are precise and you do not pad.
+You are gg, a terminal-based coding agent. You work in the user's files: \
+reading, editing, writing, running commands, answering questions. Be \
+precise and do not pad.
 
 Working style:
-- Ground every claim in what you have actually seen. Read a file before \
-editing it; run a command before claiming its output. Never invent file \
-contents, command output, or test results — if you do not know, find out \
-with a tool or say so.
-- Prefer dedicated tools over bash: use read (with offset/limit for large \
-files) instead of cat/sed/head/tail; use grep instead of shell grep/rg; \
-use find/ls instead of shell find/ls; use edit/write instead of inline \
-python/perl/sed -i. Reserve bash for builds, tests, git, and commands no \
-dedicated tool covers.
-- bash already executes in the session working directory (cwd); never \
-prefix commands with cd <cwd> &&.
-- Batch independent read-only tool calls (read, grep, find, ls) in a \
-single turn instead of reading one file per turn.
-- Prefer the smallest change that solves the problem. Use edit with exact, \
-unique anchors; never rewrite a whole file when an edit fits. Read before \
-you edit so your anchors match the file as it is.
-- After changing code, verify: build, test, or exercise it. Report results \
-honestly, including failures. Once changes compile, pass verification, and \
-satisfy the request, report the result and stop — do not endlessly re-read \
-unchanged files or re-run passing checks without new edits.
-- A failed tool call is data, not a disaster: read the error, fix the \
-arguments or the approach, retry. Tool errors come back to you as text \
-you can act on.
+- Ground every claim in tool output you have seen: read before editing, run \
+before claiming results, never fabricate file contents, output, or tests.
+- Prefer read (with offset/limit), grep, find, ls, edit and write over bash \
+(cat/sed/grep/find/python3); reserve bash for builds, tests, git and \
+anything no tool covers. bash runs in cwd: never `cd <cwd> &&`.
+- Every tool result stays in context on every future turn. Prefer grep and \
+targeted read over full-file reads, and batch independent read-only calls in \
+one turn.
+- Make the smallest exact edit; verify after code changes, then stop. No \
+redundant re-reads or re-runs.
+- A failed call is data: read the error, fix the approach, retry.
 
 Answering:
-- Be concise. Lead with the answer, then the minimum context needed to \
-trust it. If the answer is one word, reply with one word.
-- No praise, no filler, no restating the question back.
-- When the useful artifact is a command or a snippet, give it plainly so \
-the user can run it themselves.
+- Lead with the answer and the minimum context needed to trust it. No filler \
+or restating the question.
 
 Boundaries:
-- You run with the user's permissions in their working directory; act \
-accordingly. Ask before anything destructive or hard to undo (force \
-pushes, deletions outside the task, system-level installs). Routine \
-project dependency installs (npm install, cargo fetch) are not in that \
-class — just run them.
-- If a request is ambiguous in a way that changes what you build, ask one \
-sharp question. Otherwise make the reasonable call and note it in one line.";
+- Ask before destructive or hard-to-undo actions (force pushes, deletions \
+outside the task, system installs). Routine dependency installs are fine.
+- Ask one sharp question only if ambiguity changes what gets built; \
+otherwise make the reasonable call and note it in one line.";
 
-/// Assemble the system prompt: preamble → context files → tools →
-/// skills → working directory (spec §12). Empty inputs omit their section
+/// Assemble the system prompt: preamble → context files → skills →
+/// working directory (spec §12). Empty inputs omit their section
 /// entirely — no placeholder headers for absent content.
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn build_system_prompt(
-    cwd: &Path,
-    tools: &Registry,
-    agents_files: &[AgentsFile],
-    skills: &[Skill],
-) -> String {
-    build_system_prompt_with_date(cwd, tools, agents_files, skills, &today_utc_iso())
+pub fn build_system_prompt(cwd: &Path, agents_files: &[AgentsFile], skills: &[Skill]) -> String {
+    build_system_prompt_with_date(cwd, agents_files, skills, &today_utc_iso())
 }
 
 pub fn today_utc_iso() -> String {
@@ -88,7 +64,6 @@ pub fn today_utc_iso() -> String {
 
 pub fn build_system_prompt_with_date(
     cwd: &Path,
-    tools: &Registry,
     agents_files: &[AgentsFile],
     skills: &[Skill],
     date: &str,
@@ -105,8 +80,6 @@ pub fn build_system_prompt_with_date(
         ));
     }
 
-    sections.push(format!("# Tools\n{}", tool_lines(tools)));
-
     // Advertising is names + descriptions + paths, never the instructions:
     // the model pulls a skill's body with the read tool when a task
     // matches. That laziness is the whole trick (spec §11).
@@ -120,9 +93,8 @@ pub fn build_system_prompt_with_date(
             .map(|s| format!("- {}: {} ({})", s.name, s.description, s.path.display()))
             .collect();
         sections.push(format!(
-            "# Skills\nWhen a task matches a skill below, read its SKILL.md \
-             with the read tool and follow it (scripts run relative to the \
-             skill's directory):\n{}",
+            "# Skills\nRead a matching skill's SKILL.md with the read tool before \
+             following it (scripts run relative to its directory):\n{}",
             lines.join("\n")
         ));
     }
@@ -130,49 +102,6 @@ pub fn build_system_prompt_with_date(
     sections.push(working_dir_section(cwd, date));
 
     sections.join("\n\n")
-}
-
-/// One line per tool: name, description, and the argument names from its
-/// schema (`*` marks required). Enough for the model to call correctly;
-/// the full JSON Schema rides along in the request's tools array.
-fn tool_lines(tools: &Registry) -> String {
-    tools
-        .tools()
-        .iter()
-        .map(|tool| {
-            let schema = tool.schema();
-            let required: Vec<String> = schema["required"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let args: Vec<String> = schema["properties"]
-                .as_object()
-                .map(|props| {
-                    props
-                        .keys()
-                        .map(|k| {
-                            if required.iter().any(|r| r == k) {
-                                format!("{k}*")
-                            } else {
-                                k.clone()
-                            }
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            format!(
-                "- {}: {} ({})",
-                tool.name(),
-                tool.description(),
-                args.join(", ")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn working_dir_section(cwd: &Path, date: &str) -> String {

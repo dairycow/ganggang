@@ -155,7 +155,6 @@ impl Agent {
     pub fn system_prompt(&self) -> String {
         context::build_system_prompt_with_date(
             &self.cwd,
-            &self.tools,
             &self.agents_files,
             &self.skills,
             &self.prompt_date,

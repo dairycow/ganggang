@@ -1,5 +1,5 @@
 //! The search itself: one tree walked with a compiled pattern, capped and
-//! stop-aware, and the report it gives when the walk is over.
+//! stop-aware, and the grouped report it gives when the walk is over.
 
 use std::io::Read;
 use std::path::Path;
@@ -7,7 +7,9 @@ use std::path::Path;
 use globset::GlobMatcher;
 use regex::Regex;
 
-use super::{Cancel, MAX_FILE_BYTES, MAX_LINE_CHARS, ToolResult, display_relative};
+use super::{
+    Cancel, MAX_FILE_BYTES, MAX_LINE_CHARS, MAX_OUTPUT_BYTES, ToolResult, display_relative,
+};
 
 pub(super) struct Search<'a> {
     cwd: &'a Path,
@@ -15,8 +17,11 @@ pub(super) struct Search<'a> {
     glob: Option<(GlobMatcher, bool)>,
     context: usize,
     cap: usize,
+    files_only: bool,
     match_count: usize,
     lines_out: Vec<String>,
+    output_bytes: usize,
+    byte_capped: bool,
     files_searched: usize,
     files_skipped_binary: usize,
     /// The user's stop request, checked as the walk descends: a broad
@@ -31,13 +36,15 @@ pub(super) struct Search<'a> {
 
 impl<'a> Search<'a> {
     /// A search over one tree: the compiled pattern, the optional glob,
-    /// the context width, the result cap, and the run's stop request.
+    /// the context width, the result cap, the file-only mode, and the
+    /// run's stop request.
     pub(super) fn new(
         cwd: &'a Path,
         regex: regex::Regex,
         glob: Option<(globset::GlobMatcher, bool)>,
         context: usize,
         cap: usize,
+        files_only: bool,
         cancel: &Cancel,
     ) -> Self {
         Self {
@@ -46,8 +53,11 @@ impl<'a> Search<'a> {
             glob,
             context,
             cap,
+            files_only,
             match_count: 0,
             lines_out: Vec::new(),
+            output_bytes: 0,
+            byte_capped: false,
             files_searched: 0,
             files_skipped_binary: 0,
             cancel: cancel.clone(),
@@ -56,7 +66,7 @@ impl<'a> Search<'a> {
     }
 
     pub(super) fn capped(&self) -> bool {
-        self.match_count >= self.cap
+        self.match_count >= self.cap || self.byte_capped
     }
 
     pub(super) fn stopped(&mut self) -> bool {
@@ -68,9 +78,22 @@ impl<'a> Search<'a> {
         }
     }
 
-    /// The walk is over: what it found. A walk the user stopped answers
-    /// with what it had, as an error — its "no matches" would read as a
-    /// searched-and-missed answer.
+    /// Add one output line unless it would push the report past the hard
+    /// byte cap.
+    fn push_line(&mut self, line: String) -> bool {
+        let needed = line.len() + usize::from(!self.lines_out.is_empty());
+        if self.output_bytes + needed > MAX_OUTPUT_BYTES {
+            self.byte_capped = true;
+            return false;
+        }
+        self.output_bytes += needed;
+        self.lines_out.push(line);
+        true
+    }
+
+    /// The walk is over: what it found, grouped by file. A walk the user
+    /// stopped answers with what it had, as an error — its "no matches"
+    /// would read as a searched-and-missed answer.
     pub(super) fn report(self) -> ToolResult {
         let mut out = self.lines_out.join("\n");
         if !out.is_empty() {
@@ -86,6 +109,11 @@ impl<'a> Search<'a> {
             out.push_str(&format!(
                 "(no matches in {} file(s))\n",
                 self.files_searched
+            ));
+        }
+        if self.byte_capped {
+            out.push_str(&format!(
+                "[truncated: output capped at {MAX_OUTPUT_BYTES} bytes — narrow pattern or path]\n"
             ));
         }
         if self.match_count >= self.cap {
@@ -156,17 +184,43 @@ impl<'a> Search<'a> {
         self.match_count += match_indices.len();
 
         let loc = display_relative(self.cwd, display_path);
-        if self.context == 0 {
+        let entries = if self.files_only {
+            vec![format!("{loc} ({})", match_indices.len())]
+        } else if self.context == 0 {
+            let mut entries = vec![format!("{loc}:")];
             for &i in &match_indices {
-                self.lines_out
-                    .push(format!("{loc}:{}: {}", i + 1, cap_line(all_lines[i])));
+                entries.push(format!("  {}: {}", i + 1, cap_line(all_lines[i])));
             }
-            return;
-        }
+            entries
+        } else {
+            self.context_entries(&loc, &all_lines, &match_indices)
+        };
 
+        // A header that fits but whose first line does not would leave a
+        // dangling file name; drop it again.
+        let before_len = self.lines_out.len();
+        let before_bytes = self.output_bytes;
+        let header_only = entries.len() > 1;
+        for entry in entries {
+            if !self.push_line(entry) {
+                break;
+            }
+        }
+        if header_only && self.lines_out.len() == before_len + 1 {
+            self.lines_out.truncate(before_len);
+            self.output_bytes = before_bytes;
+        }
+    }
+
+    fn context_entries(
+        &self,
+        loc: &str,
+        all_lines: &[&str],
+        match_indices: &[usize],
+    ) -> Vec<String> {
         let last_idx = all_lines.len().saturating_sub(1);
         let mut intervals: Vec<(usize, usize)> = Vec::new();
-        for &i in &match_indices {
+        for &i in match_indices {
             let start = i.saturating_sub(self.context);
             let end = (i + self.context).min(last_idx);
             if let Some(prev) = intervals.last_mut()
@@ -177,9 +231,10 @@ impl<'a> Search<'a> {
                 intervals.push((start, end));
             }
         }
+        let mut entries = vec![format!("{loc}:")];
         for (idx, (start, end)) in intervals.into_iter().enumerate() {
             if idx > 0 {
-                self.lines_out.push("--".to_string());
+                entries.push("  --".to_string());
             }
             for (j, ctx_line) in all_lines.iter().enumerate().take(end + 1).skip(start) {
                 let sep = if match_indices.binary_search(&j).is_ok() {
@@ -187,10 +242,10 @@ impl<'a> Search<'a> {
                 } else {
                     '-'
                 };
-                self.lines_out
-                    .push(format!("{loc}{sep}{}{sep} {}", j + 1, cap_line(ctx_line)));
+                entries.push(format!("  {}{sep} {}", j + 1, cap_line(ctx_line)));
             }
         }
+        entries
     }
 }
 

@@ -30,7 +30,7 @@ fn tree(dir: &std::path::Path) {
 }
 
 #[tokio::test]
-async fn matches_across_a_tree_sorted_with_relative_paths() {
+async fn matches_across_a_tree_sorted_and_grouped_by_file() {
     let dir = tempfile::tempdir().unwrap();
     tree(dir.path());
 
@@ -38,10 +38,13 @@ async fn matches_across_a_tree_sorted_with_relative_paths() {
     assert!(!r.is_error, "{}", r.output);
     assert_eq!(
         r.output,
-        "sub/deep/low.txt:1: the needle four\n\
-         sub/mid.txt:1: needle three\n\
-         top.txt:1: alpha needle one\n\
-         top.txt:3: needle two\n"
+        "sub/deep/low.txt:\n\
+         \x20 1: the needle four\n\
+         sub/mid.txt:\n\
+         \x20 1: needle three\n\
+         top.txt:\n\
+         \x20 1: alpha needle one\n\
+         \x20 3: needle two\n"
     );
 }
 
@@ -62,10 +65,7 @@ async fn supports_regex_case_insensitive_fixed_strings_glob_and_context() {
     )
     .await;
     assert!(!r.is_error, "{}", r.output);
-    assert_eq!(
-        r.output,
-        "a.rs-1- one\na.rs:2: AlphaNeedle\na.rs-3- three\n"
-    );
+    assert_eq!(r.output, "a.rs:\n  1- one\n  2: AlphaNeedle\n  3- three\n");
 
     let r_fixed = run(
         dir.path(),
@@ -73,7 +73,7 @@ async fn supports_regex_case_insensitive_fixed_strings_glob_and_context() {
     )
     .await;
     assert!(!r_fixed.is_error);
-    assert_eq!(r_fixed.output, "a.rs:4: foo[0]\n");
+    assert_eq!(r_fixed.output, "a.rs:\n  4: foo[0]\n");
 }
 
 #[tokio::test]
@@ -93,7 +93,7 @@ async fn respects_gitignore() {
 
     let r = run(dir.path(), serde_json::json!({"pattern": "needle"})).await;
     assert!(!r.is_error);
-    assert_eq!(r.output, "kept.txt:1: needle\n");
+    assert_eq!(r.output, "kept.txt:\n  1: needle\n");
 }
 
 #[tokio::test]
@@ -127,6 +127,50 @@ async fn caps_results_with_a_visible_stop_notice() {
 }
 
 #[tokio::test]
+async fn output_is_capped_at_16_kib_with_a_visible_notice() {
+    let dir = tempfile::tempdir().unwrap();
+    let body: String = (0..500)
+        .map(|i| format!("needle {i} {}\n", "x".repeat(100)))
+        .collect();
+    std::fs::write(dir.path().join("wide.txt"), body).unwrap();
+
+    let r = run(
+        dir.path(),
+        serde_json::json!({"pattern": "needle", "max_results": 10000}),
+    )
+    .await;
+    assert!(!r.is_error, "{}", r.output);
+    assert!(
+        r.output
+            .contains("output capped at 16384 bytes — narrow pattern or path"),
+        "{}",
+        r.output.lines().last().unwrap_or("")
+    );
+    assert!(
+        r.output.len() < MAX_OUTPUT_BYTES + 200,
+        "hard byte cap: {}",
+        r.output.len()
+    );
+}
+
+#[tokio::test]
+async fn files_only_reports_each_file_with_its_match_count() {
+    let dir = tempfile::tempdir().unwrap();
+    tree(dir.path());
+
+    let r = run(
+        dir.path(),
+        serde_json::json!({"pattern": "needle", "files_only": true}),
+    )
+    .await;
+    assert!(!r.is_error, "{}", r.output);
+    assert_eq!(
+        r.output,
+        "sub/deep/low.txt (1)\nsub/mid.txt (1)\ntop.txt (2)\n"
+    );
+}
+
+#[tokio::test]
 async fn binary_files_are_skipped_and_counted() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("text.txt"), "needle in text\n").unwrap();
@@ -157,7 +201,8 @@ async fn a_symlinked_directory_root_is_searched() {
     )
     .await;
     assert!(!r.is_error, "{}", r.output);
-    assert!(r.output.contains("mid.txt:1"), "{}", r.output);
+    assert!(r.output.contains("link-sub/mid.txt:"), "{}", r.output);
+    assert!(r.output.contains("  1: needle three"), "{}", r.output);
 }
 
 #[tokio::test]
@@ -171,7 +216,7 @@ async fn a_single_file_path_searches_that_file() {
     )
     .await;
     assert!(!r.is_error);
-    assert_eq!(r.output, "sub/mid.txt:1: needle three\n");
+    assert_eq!(r.output, "sub/mid.txt:\n  1: needle three\n");
 }
 
 #[tokio::test]
@@ -187,7 +232,7 @@ async fn context_preserves_match_markers_for_adjacent_matches() {
     assert!(!r.is_error, "{}", r.output);
     assert_eq!(
         r.output,
-        "f.txt-1- top\nf.txt:2: match1\nf.txt:3: match2\nf.txt-4- bottom\n"
+        "f.txt:\n  1- top\n  2: match1\n  3: match2\n  4- bottom\n"
     );
 
     std::fs::write(dir.path().join("g.txt"), "match1\na\nb\nc\nmatch2\n").unwrap();
@@ -199,7 +244,7 @@ async fn context_preserves_match_markers_for_adjacent_matches() {
     assert!(!r2.is_error, "{}", r2.output);
     assert_eq!(
         r2.output,
-        "g.txt:1: match1\ng.txt-2- a\n--\ng.txt-4- c\ng.txt:5: match2\n"
+        "g.txt:\n  1: match1\n  2- a\n  --\n  4- c\n  5: match2\n"
     );
 }
 
@@ -217,7 +262,7 @@ async fn glob_with_directory_prefix_matches_when_path_is_omitted() {
     )
     .await;
     assert!(!r.is_error, "{}", r.output);
-    assert_eq!(r.output, "src/a.rs:1: needle\n");
+    assert_eq!(r.output, "src/a.rs:\n  1: needle\n");
 }
 
 /// A tree of small files — `from` directories up to `upto`, fifty files

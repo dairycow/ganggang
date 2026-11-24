@@ -807,7 +807,7 @@ async fn shell_output_over_the_cap_with_multibyte_chars_never_panics() {
         "capped with a notice: {}",
         output.len()
     );
-    assert!(output.contains("[truncated"));
+    assert!(output.contains("bytes omitted"));
 }
 
 #[test]

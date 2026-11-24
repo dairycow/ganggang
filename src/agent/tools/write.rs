@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{BoxFuture, Cancel, Tool, ToolResult, parse_args};
+use super::{BoxFuture, Cancel, Tool, ToolResult, display_relative, parse_args};
 
 pub struct WriteTool {
     cwd: PathBuf,
@@ -54,7 +54,7 @@ fn write(cwd: &PathBuf, path: &str, content: &str, force: bool) -> ToolResult {
         return ToolResult::err(format!(
             "refusing to write outside the working directory: {} \
 (pass force: true to override)",
-            target.display()
+            display_relative(cwd, &target)
         ));
     }
 
@@ -62,16 +62,22 @@ fn write(cwd: &PathBuf, path: &str, content: &str, force: bool) -> ToolResult {
         && !parent.exists()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
-        return ToolResult::err(format!("cannot create {}: {e}", parent.display()));
+        return ToolResult::err(format!(
+            "cannot create {}: {e}",
+            display_relative(cwd, parent)
+        ));
     }
 
     match std::fs::write(&target, content) {
         Ok(()) => ToolResult::ok(format!(
             "wrote {} bytes to {}",
             content.len(),
-            target.display()
+            display_relative(cwd, &target)
         )),
-        Err(e) => ToolResult::err(format!("cannot write {}: {e}", target.display())),
+        Err(e) => ToolResult::err(format!(
+            "cannot write {}: {e}",
+            display_relative(cwd, &target)
+        )),
     }
 }
 
@@ -81,8 +87,8 @@ impl Tool for WriteTool {
     }
 
     fn description(&self) -> &'static str {
-        "Create or overwrite a file with the given content. Refuses paths outside the \
-working directory unless force is true. Reports the byte count written."
+        "Create or overwrite a file. Refuses paths outside the working directory unless \
+force is true; reports bytes written."
     }
 
     fn schema(&self) -> Value {

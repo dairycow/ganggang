@@ -48,11 +48,27 @@ pub(super) async fn run_shell(command: &str, cwd: &std::path::Path) -> (String, 
         .await
     {
         BashOutcome::Done { output, status } => (output, status.code()),
-        BashOutcome::Cancelled => ("command aborted by user and killed".to_string(), None),
-        BashOutcome::TimedOut => (
-            format!("command timed out after {SHELL_TIMEOUT_SECS}s and was killed"),
+        BashOutcome::Cancelled { output } => (
+            with_partial("command aborted by user and killed".to_string(), output),
+            None,
+        ),
+        BashOutcome::TimedOut { output } => (
+            with_partial(
+                format!("command timed out after {SHELL_TIMEOUT_SECS}s and was killed"),
+                output,
+            ),
             None,
         ),
         BashOutcome::Failed(message) => (message, None),
+    }
+}
+
+/// Attach whatever arrived before a kill, leaving the bare message exact
+/// when nothing did.
+fn with_partial(message: String, output: String) -> String {
+    if output.is_empty() {
+        message
+    } else {
+        format!("{message}\n[partial output]\n{output}")
     }
 }

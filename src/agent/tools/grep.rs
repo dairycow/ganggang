@@ -22,6 +22,7 @@ const DEFAULT_MAX_RESULTS: usize = 50;
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_LINE_CHARS: usize = 250;
 const MAX_CONTEXT_LINES: usize = 10;
+const MAX_OUTPUT_BYTES: usize = 16 * 1024;
 
 pub struct GrepTool {
     cwd: PathBuf,
@@ -46,6 +47,7 @@ struct GrepArgs {
     fixed_strings: Option<bool>,
     context: Option<usize>,
     max_results: Option<usize>,
+    files_only: Option<bool>,
 }
 
 fn grep(cwd: &Path, root: &Path, args: &GrepArgs, cancel: &Cancel) -> ToolResult {
@@ -79,7 +81,15 @@ fn grep(cwd: &Path, root: &Path, args: &GrepArgs, cancel: &Cancel) -> ToolResult
 
     let cap = args.max_results.unwrap_or(DEFAULT_MAX_RESULTS).max(1);
     let context = args.context.unwrap_or(0).min(MAX_CONTEXT_LINES);
-    let mut search = Search::new(cwd, regex, glob, context, cap, cancel);
+    let mut search = Search::new(
+        cwd,
+        regex,
+        glob,
+        context,
+        cap,
+        args.files_only.unwrap_or(false),
+        cancel,
+    );
 
     if meta.is_file() {
         search.search_file(root, root);
@@ -132,22 +142,24 @@ impl Tool for GrepTool {
     }
 
     fn description(&self) -> &'static str {
-        "Search file contents using a regular expression (or literal text with fixed_strings: true). \
-Respects .gitignore and skips .git, target, node_modules, and binary files. Supports glob \
-filtering, case_insensitive, and context lines. Returns at most max_results matches (default 50)."
+        "Search file contents by regex, or literal text with fixed_strings. Respects \
+.gitignore and skips .git, target, node_modules and binaries. Results are grouped by file; \
+supports glob, case_insensitive, context lines and files_only; caps at max_results \
+(default 50) and 16 KiB of output."
     }
 
     fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "Regular expression to search for (or literal text when fixed_strings is true)"},
-                "path": {"type": "string", "description": "File or directory to search, relative to the working directory (default: \".\")"},
-                "glob": {"type": "string", "description": "Optional glob filter on file names or paths, e.g. \"*.rs\""},
+                "pattern": {"type": "string", "description": "Regex, or literal text when fixed_strings is true"},
+                "path": {"type": "string", "description": "File or directory to search, relative to the cwd (default \".\")"},
+                "glob": {"type": "string", "description": "Glob filter on file names or paths, e.g. \"*.rs\""},
                 "case_insensitive": {"type": "boolean", "description": "Case-insensitive matching (default: false)"},
-                "fixed_strings": {"type": "boolean", "description": "Treat pattern as literal text instead of regex (default: false)"},
-                "context": {"type": "integer", "description": "Number of context lines before and after each match (max 10)"},
-                "max_results": {"type": "integer", "description": "Maximum number of matching lines to return (default 50)"}
+                "fixed_strings": {"type": "boolean", "description": "Treat pattern as literal text, not regex (default: false)"},
+                "context": {"type": "integer", "description": "Context lines before and after each match (max 10)"},
+                "max_results": {"type": "integer", "description": "Maximum matching lines to return (default 50)"},
+                "files_only": {"type": "boolean", "description": "Emit each matching file with its match count instead of lines (default: false)"}
             },
             "required": ["pattern"]
         })

@@ -62,29 +62,102 @@ async fn offset_past_eof_reports_line_count() {
 }
 
 #[tokio::test]
-async fn truncates_at_2000_lines_with_a_notice() {
+async fn default_page_truncates_at_400_lines_with_a_notice() {
     let dir = tempfile::tempdir().unwrap();
-    let body: String = (0..2500).map(|i| format!("line{i}\n")).collect();
+    let body: String = (0..600).map(|i| format!("line{i}\n")).collect();
     std::fs::write(dir.path().join("big.txt"), body).unwrap();
 
     let r = run(dir.path(), serde_json::json!({"path": "big.txt"})).await;
     assert!(!r.is_error);
-    assert!(r.output.contains("2000| line1999"));
-    assert!(!r.output.contains("2001| line2000"));
+    assert!(r.output.contains("400| line399"));
+    assert!(!r.output.contains("401| line400"));
+    assert!(r.output.contains("showing lines 1-400 of 600"));
+    assert!(r.output.contains("offset=401"));
+}
+
+#[tokio::test]
+async fn explicit_limit_pages_to_2000_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let body: String = (0..2500).map(|_| "x\n").collect();
+    std::fs::write(dir.path().join("big.txt"), body).unwrap();
+
+    let r = run(
+        dir.path(),
+        serde_json::json!({"path": "big.txt", "limit": 2000}),
+    )
+    .await;
+    assert!(!r.is_error);
+    assert!(r.output.contains("2000| x"));
+    assert!(!r.output.contains("2001| x"));
     assert!(r.output.contains("showing lines 1-2000 of 2500"));
     assert!(r.output.contains("offset=2001"));
 }
 
 #[tokio::test]
-async fn truncates_at_50_kib_on_a_char_boundary() {
+async fn truncates_at_24_kib_on_a_char_boundary() {
     let dir = tempfile::tempdir().unwrap();
-    let unit = "é".repeat(64);
-    std::fs::write(dir.path().join("wide.txt"), unit.repeat(1000)).unwrap();
+    let line = format!("{}\n", "é".repeat(60));
+    std::fs::write(dir.path().join("wide.txt"), line.repeat(500)).unwrap();
 
     let r = run(dir.path(), serde_json::json!({"path": "wide.txt"})).await;
     assert!(!r.is_error);
     assert!(r.output.contains("truncated"));
-    assert!(r.output.len() < MAX_BYTES + 200);
+    assert!(
+        r.output.len() < MAX_BYTES + 200,
+        "byte capped: {}",
+        r.output.len()
+    );
+}
+
+#[tokio::test]
+async fn long_lines_are_cut_at_500_chars() {
+    let dir = tempfile::tempdir().unwrap();
+    let long = "a".repeat(1500);
+    std::fs::write(dir.path().join("min.txt"), format!("{long}\nshort\n")).unwrap();
+
+    let r = run(dir.path(), serde_json::json!({"path": "min.txt"})).await;
+    assert!(!r.is_error);
+    let first = r.output.lines().next().unwrap();
+    assert!(first.ends_with('…'), "{}", first);
+    assert!(
+        first.chars().count() < 600,
+        "one line cannot consume the page: {}",
+        first.chars().count()
+    );
+    assert!(r.output.contains("2| short"));
+}
+
+#[tokio::test]
+async fn negative_offset_reads_the_last_lines_with_exact_numbers() {
+    let dir = tempfile::tempdir().unwrap();
+    let body: String = (1..=100).map(|i| format!("line{i}\n")).collect();
+    std::fs::write(dir.path().join("f.txt"), body).unwrap();
+
+    let r = run(
+        dir.path(),
+        serde_json::json!({"path": "f.txt", "offset": -5}),
+    )
+    .await;
+    assert!(!r.is_error, "{}", r.output);
+    assert_eq!(
+        r.output.trim(),
+        "96| line96\n97| line97\n98| line98\n99| line99\n100| line100"
+    );
+}
+
+#[tokio::test]
+async fn negative_offset_larger_than_the_file_reads_it_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let body: String = (1..=3).map(|i| format!("line{i}\n")).collect();
+    std::fs::write(dir.path().join("f.txt"), body).unwrap();
+
+    let r = run(
+        dir.path(),
+        serde_json::json!({"path": "f.txt", "offset": -1000}),
+    )
+    .await;
+    assert!(!r.is_error, "{}", r.output);
+    assert_eq!(r.output.trim(), "1| line1\n2| line2\n3| line3");
 }
 
 #[tokio::test]
@@ -113,7 +186,11 @@ async fn eof_line_without_trailing_newline_is_not_double_counted() {
     body.push_str("l2001");
     std::fs::write(dir.path().join("no_nl.txt"), body).unwrap();
 
-    let r = run(dir.path(), serde_json::json!({"path": "no_nl.txt"})).await;
+    let r = run(
+        dir.path(),
+        serde_json::json!({"path": "no_nl.txt", "limit": 2000}),
+    )
+    .await;
     assert!(!r.is_error);
     assert!(
         r.output.contains("showing lines 1-2000 of 2001"),

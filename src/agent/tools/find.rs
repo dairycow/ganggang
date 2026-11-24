@@ -156,19 +156,19 @@ impl Tool for FindTool {
     }
 
     fn description(&self) -> &'static str {
-        "Find files and directories matching a glob (e.g. \"*.rs\", \"**/*.md\"). Respects \
-.gitignore and skips .git, target, and node_modules by default (pass include_ignored: true \
-to include them). Dotfiles included, results sorted, capped at max_results (default 50)."
+        "Find files and directories by glob (e.g. \"*.rs\", \"**/*.md\"). Respects \
+.gitignore and skips .git, target and node_modules by default (include_ignored: true \
+to include them). Sorted and capped at max_results (default 50)."
     }
 
     fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "Glob matched against entry names (or relative paths when pattern contains '/')"},
+                "pattern": {"type": "string", "description": "Glob matched against entry names, or relative paths when it contains '/'"},
                 "path": {"type": "string", "description": "Directory to search from (default: the working directory)"},
-                "max_results": {"type": "integer", "description": "Maximum number of paths to return (default 50)"},
-                "include_ignored": {"type": "boolean", "description": "Include .gitignore'd, target/, and node_modules/ entries (default: false)"}
+                "max_results": {"type": "integer", "description": "Maximum paths to return (default 50)"},
+                "include_ignored": {"type": "boolean", "description": "Include .gitignore'd, target/ and node_modules/ entries (default: false)"}
             },
             "required": ["pattern"]
         })

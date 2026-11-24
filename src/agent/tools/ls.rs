@@ -95,9 +95,9 @@ impl Tool for LsTool {
     }
 
     fn description(&self) -> &'static str {
-        "List one directory level: directories first (name/), then files with their byte \
-size, alphabetical. Not recursive; use find to locate files deeper down. Hidden entries \
-included. Entries that cannot be read are skipped with a noted line."
+        "List one directory level: directories (name/) then files with byte size, \
+alphabetical. Not recursive; use find for deeper paths. Hidden entries included; \
+unreadable entries are noted, not fatal."
     }
 
     fn schema(&self) -> Value {

@@ -5,50 +5,30 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
-fn default_tools() -> crate::agent::tools::Registry {
-    crate::agent::tools::default_registry(std::env::temp_dir(), 30)
-}
-
 #[test]
 fn sections_appear_in_spec_order_with_no_files_or_skills() {
-    let prompt = build_system_prompt(Path::new("/tmp/proj"), &default_tools(), &[], &[]);
+    let prompt = build_system_prompt(Path::new("/tmp/proj"), &[], &[]);
 
     let preamble_at = prompt.find("You are gg").expect("preamble first");
-    let tools_at = prompt.find("# Tools").expect("tools section");
     let workdir_at = prompt
         .find("# Working directory")
         .expect("working dir last");
-    assert!(preamble_at < tools_at);
-    assert!(tools_at < workdir_at);
-    assert!(prompt.contains("Prefer dedicated tools over bash"));
-    assert!(prompt.contains("never prefix commands with cd <cwd> &&"));
+    assert!(preamble_at < workdir_at);
+    assert!(prompt.contains("Ground every claim in tool output"));
+    assert!(prompt.contains("never `cd <cwd> &&`"));
+    assert!(prompt.contains("Every tool result stays in context"));
 
-    // Absent inputs omit their sections entirely — no placeholder headers.
+    // Absent inputs omit their sections entirely — no placeholder headers,
+    // and tools are never duplicated outside the API tools array.
+    assert!(!prompt.contains("# Tools"));
     assert!(!prompt.contains("AGENTS.md"));
     assert!(!prompt.contains("Skills"));
 }
 
 #[test]
-fn tools_section_lists_every_tool_with_arg_hints() {
-    let prompt = build_system_prompt(Path::new("/tmp/proj"), &default_tools(), &[], &[]);
-    for (name, hint) in [
-        ("read", "path*"),
-        ("bash", "command*"),
-        ("edit", "path*"),
-        ("write", "path*"),
-    ] {
-        let line = prompt
-            .lines()
-            .find(|l| l.starts_with(&format!("- {name}: ")))
-            .unwrap_or_else(|| panic!("no tool line for {name}"));
-        assert!(line.contains(hint), "expected {hint} in: {line}");
-    }
-}
-
-#[test]
 fn working_dir_section_names_the_cwd_and_today() {
     let cwd = Path::new("/home/user/Projects/ganggang");
-    let prompt = build_system_prompt(cwd, &default_tools(), &[], &[]);
+    let prompt = build_system_prompt(cwd, &[], &[]);
     let section = prompt
         .split("# Working directory")
         .nth(1)
@@ -74,7 +54,7 @@ fn context_files_render_with_their_origin_and_content_root_first() {
             content: "repo rules".to_string(),
         },
     ];
-    let prompt = build_system_prompt(Path::new("/tmp/p"), &default_tools(), &files, &[]);
+    let prompt = build_system_prompt(Path::new("/tmp/p"), &files, &[]);
     let section = prompt
         .split("# Context files")
         .nth(1)
@@ -83,10 +63,10 @@ fn context_files_render_with_their_origin_and_content_root_first() {
     let repo_at = section.find("repo rules").unwrap();
     assert!(global_at < repo_at, "broadest file first");
     assert!(section.contains("### ~/.gg/AGENTS.md"));
-    // The context section sits between preamble and tools.
+    // The context section sits between preamble and working directory.
     let ctx_at = prompt.find("# Context files").unwrap();
     assert!(prompt.find("You are gg").unwrap() < ctx_at);
-    assert!(ctx_at < prompt.find("# Tools").unwrap());
+    assert!(ctx_at < prompt.find("# Working directory").unwrap());
 }
 
 fn touch(path: &std::path::Path, content: &str) {
@@ -185,18 +165,22 @@ fn skills_advertise_name_description_path_and_hide_disabled() {
 
     let prompt = build_system_prompt(
         Path::new("/tmp/p"),
-        &default_tools(),
         &[],
         &[skill("pdf-tools", false), skill("hidden", true)],
     );
 
     let skills_at = prompt.find("# Skills").expect("skills section present");
-    let tools_at = prompt.find("# Tools").expect("tools section");
     let workdir_at = prompt.find("# Working directory").expect("workdir");
-    assert!(tools_at < skills_at && skills_at < workdir_at, "§12 order");
+    assert!(
+        prompt.find("You are gg").unwrap() < skills_at && skills_at < workdir_at,
+        "§12 order"
+    );
     assert!(prompt.contains("pdf-tools: does pdf-tools things"));
     assert!(prompt.contains("/skills/pdf-tools/SKILL.md"));
-    assert!(prompt.contains("read its SKILL.md"), "load instructions");
+    assert!(
+        prompt.contains("Read a matching skill's SKILL.md"),
+        "load instructions"
+    );
     assert!(
         !prompt.contains("hidden"),
         "disabled skills are not advertised"
@@ -205,12 +189,6 @@ fn skills_advertise_name_description_path_and_hide_disabled() {
 
 #[test]
 fn build_system_prompt_with_date_pins_the_supplied_date() {
-    let prompt = build_system_prompt_with_date(
-        Path::new("/tmp/p"),
-        &default_tools(),
-        &[],
-        &[],
-        "2026-01-02",
-    );
+    let prompt = build_system_prompt_with_date(Path::new("/tmp/p"), &[], &[], "2026-01-02");
     assert!(prompt.contains("date: 2026-01-02"));
 }

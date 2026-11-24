@@ -5,12 +5,12 @@
 //! retries with better anchors — that loop is the whole tool.
 
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{BoxFuture, Cancel, Tool, ToolResult, parse_args};
+use super::{BoxFuture, Cancel, Tool, ToolResult, display_relative, parse_args};
 
 /// Files above this size are refused outright: editing a truncated view and
 /// writing it back would silently destroy the tail.
@@ -174,7 +174,7 @@ fn format_hunk(start_line: usize, old_text: &str, new_text: &str) -> String {
     out
 }
 
-fn edit(path: &PathBuf, edits: &[EditItem]) -> ToolResult {
+fn edit(cwd: &Path, path: &PathBuf, edits: &[EditItem]) -> ToolResult {
     if edits.is_empty() {
         return ToolResult::err("edits must not be empty".to_string());
     }
@@ -185,19 +185,22 @@ fn edit(path: &PathBuf, edits: &[EditItem]) -> ToolResult {
     let loaded = std::fs::File::open(path)
         .and_then(|f| f.take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes));
     if let Err(e) = loaded {
-        return ToolResult::err(format!("cannot read {}: {e}", path.display()));
+        return ToolResult::err(format!("cannot read {}: {e}", display_relative(cwd, path)));
     }
     if bytes.len() > MAX_BYTES {
         return ToolResult::err(format!(
             "refusing to edit {}: file exceeds the {} byte cap",
-            path.display(),
+            display_relative(cwd, path),
             MAX_BYTES
         ));
     }
     let mut content = match String::from_utf8(bytes) {
         Ok(c) => c,
         Err(_) => {
-            return ToolResult::err(format!("cannot read {}: not valid UTF-8", path.display()));
+            return ToolResult::err(format!(
+                "cannot read {}: not valid UTF-8",
+                display_relative(cwd, path)
+            ));
         }
     };
 
@@ -256,10 +259,10 @@ fn edit(path: &PathBuf, edits: &[EditItem]) -> ToolResult {
         Ok(()) => ToolResult::ok(format!(
             "applied {} edit(s) to {}\n{}",
             edits.len(),
-            path.display(),
+            display_relative(cwd, path),
             hunks.join("\n")
         )),
-        Err(e) => ToolResult::err(format!("cannot write {}: {e}", path.display())),
+        Err(e) => ToolResult::err(format!("cannot write {}: {e}", display_relative(cwd, path))),
     }
 }
 
@@ -269,8 +272,8 @@ impl Tool for EditTool {
     }
 
     fn description(&self) -> &'static str {
-        "Apply exact-match text edits to a file. Every old_text must appear exactly once; \
-if any edit misses or is ambiguous, nothing is written."
+        "Apply exact-match edits: each old_text must appear exactly once, and any miss or \
+ambiguity writes nothing."
     }
 
     fn schema(&self) -> Value {
@@ -284,8 +287,8 @@ if any edit misses or is ambiguous, nothing is written."
                     "items": {
                         "type": "object",
                         "properties": {
-                            "old_text": {"type": "string"},
-                            "new_text": {"type": "string"}
+                            "old_text": {"type": "string", "description": "Exact text to replace; must be unique"},
+                            "new_text": {"type": "string", "description": "Replacement text"}
                         },
                         "required": ["old_text", "new_text"]
                     }
@@ -308,8 +311,9 @@ if any edit misses or is ambiguous, nothing is written."
                 Err(e) => return ToolResult::err(e),
             };
             let full_path = self.cwd.join(&args.path);
+            let cwd = self.cwd.clone();
             let edits = args.edits;
-            tokio::task::spawn_blocking(move || edit(&full_path, &edits))
+            tokio::task::spawn_blocking(move || edit(&cwd, &full_path, &edits))
                 .await
                 .unwrap_or_else(|e| ToolResult::err(format!("edit task failed: {e}")))
         })

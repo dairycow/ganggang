@@ -6,8 +6,10 @@
 //! that can hang can also be stopped: the user's abort takes down the
 //! whole process group, the same kill the timeout uses.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -42,19 +44,102 @@ struct BashArgs {
 /// group is an orphaned process group whoever asked for the command).
 #[derive(Debug)]
 pub(crate) enum BashOutcome {
-    /// Ran to completion; `output` is capped at `cap` bytes with a
-    /// visible truncation notice.
+    /// Ran to completion; `output` keeps the head and tail of the stream
+    /// within `cap` bytes, with a visible truncation marker.
     Done {
         output: String,
         status: std::process::ExitStatus,
     },
-    /// Killed at the deadline, whole process group included.
-    TimedOut,
+    /// Killed at the deadline, whole process group included. `output` is
+    /// whatever arrived before the kill.
+    TimedOut { output: String },
     /// Killed because the user stopped the run, whole process group
-    /// included.
-    Cancelled,
+    /// included. `output` is whatever arrived before the kill.
+    Cancelled { output: String },
     /// Never started or unwaitable; the string is a user-facing message.
     Failed(String),
+}
+
+/// Why [`settle`] stopped a command that did not finish on its own.
+enum Stop {
+    TimedOut,
+    Cancelled,
+    Failed(String),
+}
+
+/// The bounded head and tail of a command's merged output. The pipe is
+/// still drained to EOF; only these two windows are retained, so an
+/// endless stream costs O(cap) memory.
+struct Capture {
+    head: Vec<u8>,
+    tail: VecDeque<u8>,
+    total: usize,
+}
+
+impl Capture {
+    fn new() -> Self {
+        Self {
+            head: Vec::new(),
+            tail: VecDeque::new(),
+            total: 0,
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8], head_cap: usize, tail_cap: usize) {
+        self.total += bytes.len();
+        let head_room = head_cap.saturating_sub(self.head.len());
+        let take = head_room.min(bytes.len());
+        self.head.extend_from_slice(&bytes[..take]);
+        for &b in &bytes[take..] {
+            self.tail.push_back(b);
+            if self.tail.len() > tail_cap {
+                self.tail.pop_front();
+            }
+        }
+    }
+}
+
+/// The longest valid UTF-8 prefix of `bytes`.
+fn prefix_string(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(e) => String::from_utf8_lossy(&bytes[..e.valid_up_to()]).into_owned(),
+    }
+}
+
+/// The longest valid UTF-8 suffix of `bytes`, dropping a leading partial
+/// character left by the split.
+fn suffix_string(bytes: &[u8]) -> String {
+    let mut skip = 0;
+    while skip < bytes.len() {
+        match std::str::from_utf8(&bytes[skip..]) {
+            Ok(s) => return s.to_string(),
+            Err(e) if e.valid_up_to() == 0 => skip += 1,
+            Err(e) => {
+                let end = skip + e.valid_up_to();
+                return String::from_utf8_lossy(&bytes[skip..end]).into_owned();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Render the captured bytes: everything when it fits, otherwise the head,
+/// a short marker, and the tail. Both splits are trimmed to char boundaries,
+/// so the result stays below `cap + 100` bytes.
+fn render_capture(capture: &Arc<Mutex<Capture>>, cap: usize) -> String {
+    let Ok(mut capture) = capture.lock() else {
+        return String::new();
+    };
+    if capture.total <= cap {
+        let mut all = capture.head.clone();
+        all.extend(capture.tail.iter().copied());
+        return String::from_utf8_lossy(&all).into_owned();
+    }
+    let omitted = capture.total.saturating_sub(cap);
+    let head = prefix_string(&capture.head);
+    let tail = suffix_string(capture.tail.make_contiguous());
+    format!("{head}\n[... {omitted} bytes omitted ...]\n{tail}")
 }
 
 /// The pause that notices a stop request while a command runs: the same
@@ -88,7 +173,7 @@ async fn settle(
     timeout: Duration,
     cancel: &Cancel,
     pgid: Option<u32>,
-) -> Result<std::process::ExitStatus, BashOutcome> {
+) -> Result<std::process::ExitStatus, Stop> {
     tokio::pin!(wait);
     // Cancellation is polled, not awaited: an `AtomicBool` has no event
     // source, and a parked `sleep 30` must die within one poll.
@@ -108,25 +193,25 @@ async fn settle(
         // request that arrived as it was ending.
         result = &mut wait => match result {
             Ok(((), status)) => Ok(status),
-            Err(e) => Err(BashOutcome::Failed(format!("waited on bash: {e}"))),
+            Err(e) => Err(Stop::Failed(format!("waited on bash: {e}"))),
         },
         // While it is still running, the stop request outranks the
         // deadline: reporting a timeout for what the user asked for would
         // hide what their Esc actually did.
         () = &mut polled => {
             kill_group(pgid).await;
-            Err(BashOutcome::Cancelled)
+            Err(Stop::Cancelled)
         }
         () = tokio::time::sleep(timeout) => {
             kill_group(pgid).await;
-            Err(BashOutcome::TimedOut)
+            Err(Stop::TimedOut)
         }
     }
 }
 
-/// Run `bash -c command` in `cwd`: streams merged inside the shell, output
-/// stored up to `cap` bytes and drained past it (bounded memory, real exit
-/// code), process-group kill on timeout **and** on cancellation.
+/// Run `bash -c command` in `cwd`: streams merged inside the shell, head
+/// and tail kept within `cap` bytes and the rest drained (bounded memory,
+/// real exit code), process-group kill on timeout **and** on cancellation.
 pub(crate) async fn run_bash(
     command: &str,
     cwd: &Path,
@@ -156,32 +241,35 @@ pub(crate) async fn run_bash(
     };
     let pgid = child.id();
 
-    // Store at most cap+1 bytes (the +1 proves truncation) and discard the
-    // rest: buffering everything (wait_with_output) would let `cat
-    // /dev/zero` grow memory without bound. Draining (instead of closing
-    // the pipe) lets the command run to completion for its exit code.
+    // Drain the pipe to EOF, retaining only a bounded head and tail. The
+    // capture is shared so a kill can still report what arrived first.
     let mut stdout: Box<dyn tokio::io::AsyncRead + Unpin + Send> = match child.stdout.take() {
         Some(s) => Box::new(s),
         None => Box::new(tokio::io::empty()),
     };
-    let mut stored: Vec<u8> = Vec::new();
+    let head_cap = cap / 4;
+    let tail_cap = cap - head_cap;
+    let capture = Arc::new(Mutex::new(Capture::new()));
+    let reader_capture = Arc::clone(&capture);
     let mut sink = [0u8; 8192];
-    let read_to_end = async {
+    let read_to_end = async move {
         use tokio::io::AsyncReadExt;
         loop {
             let n = stdout.read(&mut sink).await?;
             if n == 0 {
                 return Ok(());
             }
-            if stored.len() < cap + 1 {
-                let room = cap + 1 - stored.len();
-                stored.extend_from_slice(&sink[..n.min(room)]);
+            if let Ok(mut capture) = reader_capture.lock() {
+                capture.push(&sink[..n], head_cap, tail_cap);
             }
+            // A stream that never EOFs (`cat /dev/zero`) is always
+            // read-ready: without this the loop never returns Pending
+            // and starves the timeout/cancel branches of `settle`.
+            tokio::task::yield_now().await;
         }
     };
     let status = match settle(
-        // Reading to the end and waiting are one unit: an uncapped read
-        // would let the command outrun the store, and waiting without the
+        // Reading to the end and waiting are one unit: waiting without the
         // read deadlocks once the pipe fills.
         async { tokio::try_join!(read_to_end, child.wait()) },
         timeout,
@@ -191,24 +279,18 @@ pub(crate) async fn run_bash(
     .await
     {
         Ok(status) => status,
-        Err(outcome) => return outcome,
+        Err(stop) => {
+            let output = render_capture(&capture, cap);
+            return match stop {
+                Stop::TimedOut => BashOutcome::TimedOut { output },
+                Stop::Cancelled => BashOutcome::Cancelled { output },
+                Stop::Failed(message) => BashOutcome::Failed(message),
+            };
+        }
     };
 
-    let mut text = String::from_utf8_lossy(&stored).to_string();
-    if text.len() > cap {
-        // Cut at the last char boundary within the cap — a byte-index
-        // truncate would panic on multibyte output.
-        let cut = text
-            .char_indices()
-            .map(|(i, _)| i)
-            .take_while(|&i| i <= cap)
-            .last()
-            .unwrap_or(0);
-        text.truncate(cut);
-        text.push_str(&format!("\n[truncated at {cap} bytes]"));
-    }
     BashOutcome::Done {
-        output: text,
+        output: render_capture(&capture, cap),
         status,
     }
 }
@@ -219,15 +301,16 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &'static str {
-        "Run a command in bash and return the merged stdout+stderr and exit code. \
-Nonzero exits are reported as errors with the output included."
+        "Run a shell command in bash; returns merged stdout+stderr and the exit code. \
+ Output keeps the start and end when over 10 KiB. Nonzero exits are errors that still \
+ include the output; a timeout or abort reports any partial output."
     }
 
     fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "The shell command to run"},
+                "command": {"type": "string", "description": "Shell command to run"},
                 "timeout_secs": {"type": "integer", "description": "Kill the command after this many seconds"}
             },
             "required": ["command"]
@@ -261,230 +344,34 @@ Nonzero exits are reported as errors with the output included."
                         ToolResult::err(result)
                     }
                 }
-                BashOutcome::TimedOut => ToolResult::err(format!(
-                    "command timed out after {}s and was killed",
-                    timeout.as_secs()
+                BashOutcome::TimedOut { output } => ToolResult::err(with_partial(
+                    format!(
+                        "command timed out after {}s and was killed",
+                        timeout.as_secs()
+                    ),
+                    output,
                 )),
                 // Distinct from a timeout: the user stopped this one, and
                 // the wording must not read like the command was too slow.
-                BashOutcome::Cancelled => {
-                    ToolResult::err("command aborted by user and killed".into())
-                }
+                BashOutcome::Cancelled { output } => ToolResult::err(with_partial(
+                    "command aborted by user and killed".to_string(),
+                    output,
+                )),
                 BashOutcome::Failed(message) => ToolResult::err(message),
             }
         })
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    use super::*;
-
-    /// A cancel flag nothing sets — the tests here are about running and
-    /// timing out, not about the user stopping a command.
-    fn no_cancel() -> Cancel {
-        Cancel::none()
-    }
-
-    async fn run(cmd: &str, timeout: Option<u64>) -> ToolResult {
-        let tool = BashTool::new(std::env::temp_dir(), 30);
-        let args = match timeout {
-            Some(t) => serde_json::json!({"command": cmd, "timeout_secs": t}),
-            None => serde_json::json!({"command": cmd}),
-        };
-        tool.execute(&args, &no_cancel()).await
-    }
-
-    #[tokio::test]
-    async fn runs_a_command_and_reports_the_exit_code() {
-        let r = run("echo hi", None).await;
-        assert!(!r.is_error);
-        assert!(r.output.contains("[exit code: 0]"));
-        assert!(r.output.contains("hi"));
-    }
-
-    #[tokio::test]
-    async fn nonzero_exit_is_an_error_result_with_output() {
-        let r = run("echo boom >&2; false", None).await;
-        assert!(r.is_error);
-        assert!(r.output.contains("[exit code: 1]"));
-        assert!(
-            r.output.contains("boom"),
-            "stderr must be captured: {}",
-            r.output
-        );
-    }
-
-    #[tokio::test]
-    async fn timeout_kills_the_command_and_clamps_to_the_max() {
-        let tool = BashTool::new(std::env::temp_dir(), 1);
-        let started = std::time::Instant::now();
-        let r = tool
-            .execute(
-                &serde_json::json!({"command": "sleep 30", "timeout_secs": 999}),
-                &no_cancel(),
-            )
-            .await;
-        assert!(r.is_error);
-        assert!(r.output.contains("timed out after 1s"));
-        assert!(started.elapsed().as_secs() < 5, "kill must be prompt");
-    }
-
-    #[tokio::test]
-    async fn timeout_kills_the_whole_process_group_not_just_the_shell() {
-        // A pipeline means bash forks children; killing only bash would
-        // leave them running past the deadline. The marker doubles as the
-        // (unique, valid) sleep duration so pgrep can find group members.
-        let marker = "617.319";
-        let tool = BashTool::new(std::env::temp_dir(), 1);
-        let r = tool
-            .execute(
-                &serde_json::json!({
-                    "command": format!("sleep {marker} | sleep {marker} & sleep {marker}")
-                }),
-                &no_cancel(),
-            )
-            .await;
-        assert!(r.is_error);
-        assert!(r.output.contains("timed out after 1s"));
-
-        // The group kill is asynchronous; give it a moment, then require
-        // that no member of the group survived.
-        for _ in 0..20 {
-            let alive = std::process::Command::new("pgrep")
-                .arg("-f")
-                .arg(marker)
-                .stdout(Stdio::null())
-                .status()
-                .unwrap()
-                .success();
-            if !alive {
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        }
-        panic!("process-group members survived the timeout kill");
-    }
-
-    /// Esc while a command is running: a stop request raised mid-flight
-    /// ends the call inside one poll of the pause, and the whole process
-    /// group goes down with the shell — the timeout's kill discipline, for
-    /// a different reason. The marker doubles as the (unique, valid) sleep
-    /// duration so pgrep can find group members.
-    #[tokio::test]
-    async fn cancellation_kills_the_whole_process_group_and_reports_it() {
-        let marker = "731.207";
-        let tool = BashTool::new(std::env::temp_dir(), 30);
-        let flag = Arc::new(AtomicBool::new(false));
-        let setter = {
-            let flag = flag.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                flag.store(true, Ordering::Relaxed);
-            })
-        };
-
-        let started = std::time::Instant::now();
-        let r = tool
-            .execute(
-                // A pipeline: bash forks children, so a shell-only kill
-                // would leave sleepers running past the stop request.
-                &serde_json::json!({"command": format!("sleep {marker} | sleep {marker}")}),
-                &Cancel::new(flag),
-            )
-            .await;
-        setter.await.unwrap();
-
-        assert!(r.is_error);
-        assert!(
-            r.output.contains("aborted by user and killed"),
-            "{}",
-            r.output
-        );
-        assert!(
-            !r.output.contains("timed out"),
-            "the user stopped this one, so it must not read like a slow command: {}",
-            r.output
-        );
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "cancel must be prompt"
-        );
-
-        // The group kill is asynchronous; give it a moment, then require
-        // that no member of the group survived.
-        for _ in 0..20 {
-            let alive = std::process::Command::new("pgrep")
-                .arg("-f")
-                .arg(marker)
-                .stdout(Stdio::null())
-                .status()
-                .unwrap()
-                .success();
-            if !alive {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-        panic!("process-group members survived the cancellation kill");
-    }
-
-    /// A long timeout must not outlive the stop request: the answer names
-    /// cancellation, never the deadline that never fired.
-    #[tokio::test]
-    async fn cancellation_beats_a_timeout_that_was_never_reached() {
-        let tool = BashTool::new(std::env::temp_dir(), 300);
-        let flag = Arc::new(AtomicBool::new(false));
-        let setter = {
-            let flag = flag.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                flag.store(true, Ordering::Relaxed);
-            })
-        };
-
-        let started = std::time::Instant::now();
-        let r = tool
-            .execute(
-                &serde_json::json!({"command": "sleep 200", "timeout_secs": 200}),
-                &Cancel::new(flag),
-            )
-            .await;
-        setter.await.unwrap();
-
-        assert_eq!(r.output, "command aborted by user and killed");
-        assert!(r.is_error);
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "no waiting on the deadline"
-        );
-    }
-
-    #[tokio::test]
-    async fn output_is_truncated_at_the_cap() {
-        let r = run("printf 'a%.0s' {1..12000}", None).await;
-        assert!(!r.is_error);
-        assert!(r.output.contains("[truncated at 10240 bytes]"));
-        assert!(r.output.len() < OUTPUT_CAP + 200);
-    }
-
-    #[tokio::test]
-    async fn an_endless_stream_cannot_grow_memory_without_bound() {
-        // /dev/zero never EOFs: the capped read loop stores 10 KiB and
-        // discards the rest until the timeout kills the group.
-        let tool = BashTool::new(std::env::temp_dir(), 1);
-        let started = std::time::Instant::now();
-        let r = tool
-            .execute(
-                &serde_json::json!({"command": "cat /dev/zero"}),
-                &no_cancel(),
-            )
-            .await;
-        assert!(r.is_error);
-        assert!(r.output.contains("timed out after 1s"));
-        assert!(started.elapsed().as_secs() < 5);
+/// Attach whatever arrived before a kill, leaving the bare message exact
+/// when nothing did.
+fn with_partial(message: String, output: String) -> String {
+    if output.is_empty() {
+        message
+    } else {
+        format!("{message}\n[partial output]\n{output}")
     }
 }
+
+#[cfg(test)]
+mod tests;
