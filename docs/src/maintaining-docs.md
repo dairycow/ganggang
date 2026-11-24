@@ -4,14 +4,14 @@ ganggang moves fast, so documentation is enforced by the build rather than by me
 
 ## 1. Generated reference pages
 
-Everything under [Reference](reference/cli.md) is rendered from the code: the clap argument tree, the built-in provider table, the tool registry (names, descriptions, JSON schemas) and the slash-command catalog. Nobody edits these by hand.
+Everything under [Reference](reference/cli.md) is rendered from the code: the clap argument tree, the built-in provider table, the tool registry (names, descriptions, JSON schemas) and the slash-command catalogue. Nobody edits these by hand.
 
 ```sh
 ./scripts/sync-docs.sh                 # regenerate, verify, build the book if mdbook is installed
 UPDATE_DOCS=1 cargo test doc_sync      # just regenerate
 ```
 
-A plain `cargo test` **fails** when a generated page is stale, with a message naming the page and the command above. So a change to a flag, tool, provider or command cannot merge without its reference page.
+A plain `cargo test` **fails** when a generated page is stale, with a message naming the page and the command above. A change to a flag, tool, provider or command cannot merge without its reference page.
 
 ## 2. Contract tests for the guide
 
@@ -42,4 +42,4 @@ The guide tracks `main`; crates.io tracks releases. Before `cargo publish`:
 
 `Cargo.toml` already carries `documentation = "https://dairycow.github.io/ganggang/"`, so each published version links to this guide from its crates.io page. `docs/`, `.github/` and `AGENTS.md` are excluded from the published package.
 
-Contributors and coding agents get the same instructions from `AGENTS.md` at the repository root.
+Contributors and coding agents get the same instructions from `AGENTS.md` at the repository root. User-facing prose follows `.agents/skills/style-guide/SKILL.md` (Australian English, no em dashes, no agentic filler), and visual surfaces follow `.agents/skills/gg-branding/SKILL.md`.
