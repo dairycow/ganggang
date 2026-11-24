@@ -174,6 +174,81 @@ fn ctrl_p_and_ctrl_n_recall_history_and_plain_letters_type() {
     );
 }
 
+/// The mouse is the wheel and nothing else: a notch scrolls three rows in
+/// the direction the transcript counts (up = older), and every other mouse
+/// event — a press, a release, a drag, a hold — means nothing at all. Which
+/// is also why a stray click cannot move a cursor or a selection.
+#[test]
+fn the_mouse_wheel_pages_three_rows_and_every_other_mouse_event_is_ignored() {
+    use super::keys::{WHEEL_ROWS, Wheel, classify_wheel};
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let at = |kind: MouseEventKind| MouseEvent {
+        kind,
+        column: 40,
+        row: 7,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert_eq!(
+        classify_wheel(at(MouseEventKind::ScrollUp)),
+        Some(Wheel::Up)
+    );
+    assert_eq!(
+        classify_wheel(at(MouseEventKind::ScrollDown)),
+        Some(Wheel::Down),
+        "down shows the newer rows"
+    );
+    assert_eq!(
+        WHEEL_ROWS, 3,
+        "a notch moves a chunk without losing the row being read"
+    );
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Right),
+        MouseEventKind::Moved,
+        MouseEventKind::ScrollLeft,
+        MouseEventKind::ScrollRight,
+    ] {
+        assert_eq!(classify_wheel(at(kind)), None, "{kind:?} means nothing");
+    }
+    // tmux and friends report a wheel notch with a modifier sometimes; the
+    // kind is what counts.
+    let shifted = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 1,
+        row: 1,
+        modifiers: KeyModifiers::SHIFT,
+    };
+    assert_eq!(classify_wheel(shifted), Some(Wheel::Down));
+}
+
+/// The wheel drives the transcript's scroll, the same clamp PageUp/PageDown
+/// obey: three rows a notch, never past the oldest row, never past newest.
+#[test]
+fn a_wheel_notch_scrolls_the_transcript_three_rows_at_a_time() {
+    let mut state = state_with_history(&[]);
+    for i in 0..100 {
+        state.apply(&AgentEvent::TurnStarted);
+        state.apply(&AgentEvent::AssistantText {
+            delta: format!("line {i}"),
+        });
+    }
+    assert_eq!(state.offset_for_test(), 0, "pinned to the newest");
+    state.scroll_up(super::keys::WHEEL_ROWS);
+    assert_eq!(state.offset_for_test(), 3);
+    state.scroll_up(super::keys::WHEEL_ROWS);
+    assert_eq!(state.offset_for_test(), 6, "two notches, six rows");
+    state.scroll_down(super::keys::WHEEL_ROWS);
+    state.scroll_down(super::keys::WHEEL_ROWS);
+    assert_eq!(state.offset_for_test(), 0, "and back to the newest");
+    for _ in 0..100 {
+        state.scroll_up(super::keys::WHEEL_ROWS);
+    }
+    assert_eq!(state.offset_for_test(), 99, "clamped at the oldest row");
+}
+
 #[test]
 fn plain_chars_insert_and_controlled_or_alt_chars_do_not() {
     assert_eq!(
@@ -441,8 +516,8 @@ fn view_folds_the_event_stream_into_lines() {
             LineKind::Assistant,
             LineKind::Assistant,
             LineKind::Tool,
-            LineKind::Dim,
-            LineKind::Dim,
+            LineKind::Warning,
+            LineKind::Aborted,
         ]
     );
     let texts = state_line_texts(&state);
@@ -668,7 +743,7 @@ fn ctrl_c_cancels_a_run_clears_a_draft_and_only_then_quits() {
     state.begin_run();
     assert_eq!(state.interrupt(), Cancel::Stopping);
     assert!(state.stopping());
-    assert!(state.footer.render().contains("● stopping…"));
+    assert!(state.footer.render().contains("stopping…"));
     assert_eq!(state.interrupt(), Cancel::ForceQuit);
     assert!(state.busy, "the run is still winding down until it reports");
 
@@ -729,14 +804,10 @@ async fn shell_output_over_the_cap_with_multibyte_chars_never_panics() {
 
 #[test]
 fn long_transcript_lines_wrap_into_exact_rows() {
+    use super::line::wrap_line;
     use super::transcript::{LineKind, RenderedLine};
-    use super::view::wrap_line;
 
-    let line = RenderedLine {
-        text: "aéz ".repeat(10), // 40 chars incl. multibyte
-        kind: LineKind::Assistant,
-        bold: Vec::new(),
-    };
+    let line = RenderedLine::new("aéz ".repeat(10), LineKind::Assistant); // 40 chars, multibyte
     let rows = wrap_line(&line, 15);
     assert!(rows.len() >= 3, "40 chars / 15-wide rows: {}", rows.len());
     for row in &rows {
@@ -747,34 +818,35 @@ fn long_transcript_lines_wrap_into_exact_rows() {
     let joined: String = rows.iter().map(|r| r.text.as_str()).collect();
     assert_eq!(joined, line.text);
 
-    let one = wrap_line(
-        &RenderedLine {
-            text: "short".into(),
-            kind: LineKind::User,
-            bold: Vec::new(),
-        },
-        80,
-    );
+    let one = wrap_line(&RenderedLine::new("short", LineKind::User), 80);
     assert_eq!(one.len(), 1);
 }
 
-/// A bold span split across wrapped rows bolds both pieces at the right
+/// A bold span split across wrapped rows styles both pieces at the right
 /// row-local offsets, and no character is lost or duplicated.
 #[test]
 fn bold_ranges_split_across_wrapped_rows() {
-    use super::transcript::{LineKind, RenderedLine};
-    use super::view::wrap_line;
+    use super::line::wrap_line;
+    use super::transcript::{LineKind, Mark, RenderedLine};
 
     // 20 chars, bold covering chars 8..14 — split at width 10.
-    let line = RenderedLine {
-        text: "0123456789abcdefghij".into(),
-        kind: LineKind::Assistant,
-        bold: vec![(8, 14)],
-    };
+    let line = RenderedLine::new("0123456789abcdefghij", LineKind::Assistant).with_marks(vec![(
+        8,
+        14,
+        Mark::Bold,
+    )]);
     let rows = wrap_line(&line, 10);
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].bold, vec![(8, 10)], "clipped to the first row");
-    assert_eq!(rows[1].bold, vec![(0, 4)], "remainder, row-local");
+    assert_eq!(
+        rows[0].marks,
+        vec![(8, 10, Mark::Bold)],
+        "clipped to the first row"
+    );
+    assert_eq!(
+        rows[1].marks,
+        vec![(0, 4, Mark::Bold)],
+        "remainder, row-local"
+    );
     let joined: String = rows.iter().map(|r| r.text.as_str()).collect();
     assert_eq!(joined, line.text);
 }
@@ -791,7 +863,7 @@ fn plain_assistant_text_renders_identically_through_markdown() {
     assert_eq!(rendered.len(), 2);
     assert_eq!(rendered[0].text, "plain one");
     assert_eq!(rendered[0].kind, super::transcript::LineKind::Assistant);
-    assert!(rendered[0].bold.is_empty());
+    assert!(rendered[0].marks.is_empty());
 }
 
 #[test]

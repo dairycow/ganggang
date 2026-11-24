@@ -138,7 +138,12 @@ fn abort_renders_dim_warning_and_marker() {
             "■ run aborted",
         ]
     );
-    assert_eq!(kinds(&t)[3], LineKind::Dim);
+    assert_eq!(kinds(&t)[2], LineKind::Warning, "a warning is a warning");
+    assert_eq!(
+        kinds(&t)[3],
+        LineKind::Aborted,
+        "the marker is its own kind"
+    );
 }
 
 /// Consecutive deltas continue one assistant block; a turn boundary
@@ -293,7 +298,7 @@ fn shell_output_caps_at_twenty_lines_with_a_marker() {
     let rendered = t
         .render()
         .into_iter()
-        .filter(|l| l.kind == LineKind::Dim)
+        .filter(|l| l.kind == LineKind::Output)
         .count();
     assert!(
         rendered <= 21,
@@ -348,7 +353,7 @@ fn info_blocks_render_dim_without_a_warning_glyph() {
     assert!(
         lines
             .iter()
-            .any(|l| l.text == "sessions (newest first):" && l.kind == LineKind::Dim)
+            .any(|l| l.text == "sessions (newest first):" && l.kind == LineKind::Info)
     );
     assert!(lines.iter().any(|l| l.text.starts_with("  1) today")));
     assert!(!lines.iter().any(|l| l.text.starts_with("⚠")));
@@ -379,7 +384,7 @@ fn thinking_is_hidden_until_toggled_then_renders_dim_and_capped() {
         texts(&t),
         vec!["you │ hi", "~ consider the question", "hello",]
     );
-    assert_eq!(kinds(&t)[1], LineKind::Dim);
+    assert_eq!(kinds(&t)[1], LineKind::Thinking);
 
     // And back off again.
     t.toggle_thinking();

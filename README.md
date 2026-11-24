@@ -64,11 +64,12 @@ curl -s 127.0.0.1:8080/health
 - **Compaction** (§14): when context crowds the window, older history is
   summarized in one extra call and kept as a `Compaction` entry — raw
   history is never destroyed. `/compact [instructions]` runs it on demand.
-- **Interfaces** (§15): fullscreen TUI (transcript / editor / footer, with
-  markdown rendering and thinking behind Ctrl+T), print mode (`-p`,
-  pipeable), JSON mode (`--mode json` — the same event stream the TUI
-  consumes, one object per line), and `--export <session> [out.html]` —
-  one self-contained HTML transcript.
+- **Interfaces** (§15): fullscreen TUI — one themed frame (see *Theme &
+  layout*): transcript / composer / footer, with markdown rendering and
+  thinking behind Ctrl+T. Print mode (`-p`, pipeable), JSON mode
+  (`--mode json` — the same event stream the TUI consumes, one object per
+  line), and `--export <session> [out.html]` — one self-contained HTML
+  transcript.
 
 ## Keys & commands (TUI)
 
@@ -82,9 +83,18 @@ history whatever the composer holds · Home/End
 line start/end · Esc abort run · Ctrl+O expand
 tool calls · Ctrl+X copy last answer · Ctrl+T toggle thinking display ·
 Ctrl+G edit the draft in your external editor · Ctrl+R rebuild and restart
-(`--watch`) · PageUp/Down scroll · Ctrl+C cancel — the run while one is in
-flight, the draft when one is typed, and the session only when there is
-nothing left to cancel; a second Ctrl+C in a row forces it out.
+(`--watch`) · PageUp/Down scroll, and the mouse wheel scrolls three rows a
+notch · Ctrl+C cancel — the run while one is in flight, the draft when one
+is typed, and the session only when there is nothing left to cancel; a
+second Ctrl+C in a row forces it out.
+
+Mouse capture is on while gg runs (so the wheel can scroll) and off the
+moment it exits — nothing survives `restore`, a panic, or a Ctrl+G that
+lends the terminal to an editor. gg reads the wheel and nothing else: a
+click, a drag and a hold do nothing at all, so a stray click can never
+move a cursor or select the wrong thing. To copy with the terminal's own
+selection, hold **Shift** while dragging (that is how every terminal
+program under mouse capture does it).
 
 **tmux:** Alt+Enter and Ctrl+J work as they are. Shift+Enter needs tmux's
 extended keys and a terminal that reports modified keys: add
@@ -111,6 +121,30 @@ the same moment, not left to finish. A second Ctrl+C ends the session,
 which is safe mid-run because the session file flushes per append. The
 half-finished answer stays in the transcript and in the session file —
 it is what you asked for, so nothing asks the model to continue it.
+
+**Theme & layout.** The theme owns the screen: every cell of the frame is
+painted before a widget draws, so gg's charcoal is what you see rather
+than the terminal's own background. It is themed on the bird — charcoal
+plumage, a scarlet crest for gg's own marks (the `you │ ` prefix, the
+footer's `gg`, an aborted run, the scrollbar's thumb), orange-red for
+anything live (a tool call, the footer's spinner, the composer's border
+while a run is in flight), warm off-white text, pale-grey and grey-green
+secondaries, wattle gold for warnings, and a raised slate band for code,
+expanded tool output and the suggestion popup. On a terminal that does not
+claim 24-bit colour (`COLORTERM=truecolor`/`24bit`, or a `TERM`
+advertising direct colour) the same palette draws in xterm-256, one colour
+per role.
+
+The frame: transcript on top, a rounded `compose` box in the middle, one
+footer row. The composer grows with the draft, one text row to eight, then
+scrolls inside its own box so the cursor always lands where the draft's
+cursor is; its border goes warm while a run works and scarlet while it is
+being stopped. The footer is fields, not one grey string: `gg`, the
+directory, the model, `↑in ↓out`, `ctx N%` (gold past 60%, red past 85%),
+the watch state, and the status — `○ ready`, a turning spinner +
+`working`, or `stopping…`. The transcript shows a scrollbar only when it
+overflows, reserving its column so no text hides under it, and an empty
+session draws a short welcome block instead of a blank area.
 
 **External editor** (Ctrl+G): your draft opens in `$VISUAL`, else
 `$EDITOR`, else `nano` — arguments are fine (`code --wait`, for editors

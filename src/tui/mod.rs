@@ -8,16 +8,20 @@
 pub mod agent_task;
 pub mod clipboard;
 pub mod commands;
+pub mod composer;
 pub mod external;
 pub mod footer;
 pub mod history;
 pub mod input;
 pub mod keys;
+pub mod layout;
+pub mod line;
 pub mod mentions;
 pub mod reader;
 pub mod shell;
 pub mod suggest;
 pub mod term;
+pub mod theme;
 pub mod transcript;
 pub mod view;
 pub mod watch;
@@ -35,7 +39,7 @@ use clipboard::osc52_sequence;
 use commands::{CmdCtx, Command, Submission, classify_submission, handle_command};
 use external::Outcome;
 use history::Arrow;
-use keys::{KeyAction, classify};
+use keys::{KeyAction, WHEEL_ROWS, Wheel, classify, classify_wheel};
 use reader::KeyReader;
 use shell::spawn_shell;
 use view::{Cancel, State, render};
@@ -224,6 +228,14 @@ pub async fn run(
         }
 
         tokio::select! {
+            // The footer's spinner. Armed only while a run is live, so an
+            // idle view never wakes — and never redraws — on a timer; each
+            // pass through the loop restarts the 100 ms wait, which is what
+            // keeps the spin even at 8 frames a second whatever else the
+            // loop is doing.
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)), if state.spinning() => {
+                state.tick_spinner();
+            }
             key = keys.recv() => {
                 let Some(event) = key else { break };
                 match event {
@@ -423,6 +435,15 @@ pub async fn run(
                     crossterm::event::Event::Paste(text) => {
                         state.editor.insert_paste(&text);
                     }
+                    // The mouse is for the wheel, and for nothing else: a
+                    // press, a drag, or a hold is ignored outright (see
+                    // [`classify_wheel`]), so a stray click can never move a
+                    // cursor or a selection.
+                    crossterm::event::Event::Mouse(mouse) => match classify_wheel(mouse) {
+                        Some(Wheel::Up) => state.scroll_up(WHEEL_ROWS),
+                        Some(Wheel::Down) => state.scroll_down(WHEEL_ROWS),
+                        None => {}
+                    },
                     _ => {}
                 }
             }
@@ -557,5 +578,7 @@ fn copy_last_answer(state: &mut State) {
     }
 }
 
+#[cfg(test)]
+mod render_tests;
 #[cfg(test)]
 mod tests;

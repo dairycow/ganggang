@@ -10,8 +10,10 @@
 
 use crate::agent::skills::Skill;
 use crate::prompts::PromptTemplate;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line as UiLine, Span};
+
+use super::theme::Palette;
 
 /// Rows the popup shows at most. Eleven is the whole built-in set (the
 /// merged set includes `/hooks`, §22, and `/model`); templates and skills
@@ -118,28 +120,37 @@ pub fn suggestions(text: &str, skills: &[Skill], prompts: &[PromptTemplate]) -> 
     out
 }
 
-/// One popup row as the terminal sees it: the command bold, the
-/// description dim to its right, the highlighted row inverted
-/// (terminal-native selection look). Chars beyond `width` drop,
-/// piecewise across the spans — the popup never wraps. Char-wise like
-/// `view::wrap_line`: a multibyte character is never split, a wide
-/// glyph may render a row slightly long and the terminal clips.
+/// One popup row as the terminal sees it: the command first, the
+/// description to its right, and the selected row marked out — a scarlet
+/// `▸` in its left margin, the row on `selection`, the command bold in body
+/// text. Unselected rows are pale grey on the popup's raised surface, the
+/// command kept bold so the eye lands on the word it is matching, not the
+/// description.
+///
+/// Chars beyond `width` drop, piecewise across the spans — the popup never
+/// wraps. Char-wise like [`wrap_line`](super::line::wrap_line): a multibyte
+/// character is never split, a wide glyph may render a row slightly long and
+/// the terminal clips.
 pub(super) fn suggestion_row(
+    palette: &Palette,
     suggestion: &Suggestion,
     selected: bool,
     width: usize,
 ) -> UiLine<'static> {
-    let reversed = if selected {
-        Modifier::REVERSED
-    } else {
-        Modifier::empty()
+    let row = palette.popup_row(selected);
+    let mark = if selected { palette.popup_mark() } else { row };
+    let command = row.add_modifier(Modifier::BOLD);
+    let description = Style {
+        fg: Some(if selected { palette.text } else { palette.dim }),
+        ..row
     };
-    let command = Style::new().add_modifier(Modifier::BOLD | reversed);
-    let description = Style::new()
-        .fg(Color::DarkGray)
-        .add_modifier(Modifier::ITALIC | reversed);
-    let label = take_chars(&suggestion.label, width);
-    let left = width.saturating_sub(label.chars().count());
+    // The marker column exists only on a selected row, and it is part of
+    // the row's width: the text after it can never reach past `width`.
+    let marker = if selected { "▸ " } else { "  " };
+    let marker = take_chars(marker, width);
+    let left = width.saturating_sub(marker.chars().count());
+    let label = take_chars(&suggestion.label, left);
+    let left = left.saturating_sub(label.chars().count());
     let gap = if suggestion.description.is_empty() {
         String::new()
     } else {
@@ -147,17 +158,18 @@ pub(super) fn suggestion_row(
     };
     let left = left.saturating_sub(gap.chars().count());
     UiLine::from(vec![
+        Span::styled(marker, mark),
         Span::styled(label, command),
         Span::styled(gap, description),
         Span::styled(take_chars(&suggestion.description, left), description),
     ])
 }
 
-/// The popup's last row: how to drive it, dim.
-pub(super) fn hint_row(width: usize) -> UiLine<'static> {
+/// The popup's last row: how to drive it, dim, on the popup's surface.
+pub(super) fn hint_row(palette: &Palette, width: usize) -> UiLine<'static> {
     UiLine::from(Span::styled(
         take_chars(" ↑↓ select · Tab complete · Enter sends", width),
-        Style::new().fg(Color::DarkGray),
+        palette.popup_hint(),
     ))
 }
 
@@ -165,226 +177,5 @@ pub(super) fn hint_row(width: usize) -> UiLine<'static> {
 fn take_chars(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    fn skill(name: &str, description: &str) -> Skill {
-        Skill {
-            name: name.into(),
-            description: description.into(),
-            disable_model_invocation: false,
-            path: PathBuf::from(format!("/tmp/{name}/SKILL.md")),
-            instructions: String::new(),
-        }
-    }
-
-    fn template(name: &str, description: &str) -> PromptTemplate {
-        PromptTemplate {
-            name: name.into(),
-            description: description.into(),
-            path: PathBuf::from(format!("/tmp/prompts/{name}.md")),
-            body: String::new(),
-        }
-    }
-
-    fn labels(text: &str, skills: &[Skill], prompts: &[PromptTemplate]) -> Vec<String> {
-        suggestions(text, skills, prompts)
-            .into_iter()
-            .map(|s| s.label)
-            .collect()
-    }
-
-    #[test]
-    fn a_bare_slash_lists_the_whole_builtin_set() {
-        let got = labels("/", &[], &[]);
-        assert_eq!(
-            got,
-            vec![
-                "/new",
-                "/resume [n|prefix]",
-                "/compact [instructions]",
-                "/skills",
-                "/session",
-                "/context",
-                "/prompts",
-                "/hooks",
-                "/skill:<name> [args]",
-                "/model [provider/model]",
-                "/quit",
-            ],
-            "catalog order, /exit stays hidden"
-        );
-    }
-
-    #[test]
-    fn the_typed_prefix_filters_and_keeps_order() {
-        assert_eq!(labels("/re", &[], &[]), vec!["/resume [n|prefix]"]);
-        assert_eq!(
-            labels("/c", &[], &[]),
-            vec!["/compact [instructions]", "/context"]
-        );
-        // `/skill` is a prefix of both the list command and the forcing
-        // form — both are real continuations, both show.
-        assert_eq!(
-            labels("/sk", &[], &[]),
-            vec!["/skills", "/skill:<name> [args]"]
-        );
-        assert_eq!(labels("/skills", &[], &[]), vec!["/skills"]);
-        assert_eq!(labels("/zzz", &[], &[]), Vec::<String>::new());
-    }
-
-    #[test]
-    fn completions_carry_a_trailing_space_for_arguments() {
-        let got = suggestions("/res", &[], &[]);
-        assert_eq!(got[0].completion, "/resume ");
-        // The generic skill row completes to the colon, not a space —
-        // the name is still to come.
-        let got = suggestions("/ski", &[], &[]);
-        assert_eq!(got[1].completion, "/skill:");
-    }
-
-    #[test]
-    fn the_typed_colon_expands_one_row_per_matching_skill() {
-        let skills = [
-            skill("pdf-tools", "pdf extraction"),
-            skill("pdftk", "the other pdf one"),
-            skill("web", "fetch pages"),
-        ];
-        assert_eq!(
-            labels("/skill:", &skills, &[]),
-            vec!["/skill:pdf-tools", "/skill:pdftk", "/skill:web"]
-        );
-        assert_eq!(
-            labels("/skill:pdf", &skills, &[]),
-            vec!["/skill:pdf-tools", "/skill:pdftk"]
-        );
-        assert_eq!(labels("/skill:zzz", &skills, &[]), Vec::<String>::new());
-        let got = suggestions("/skill:web", &skills, &[]);
-        assert_eq!(got[0].description, "fetch pages");
-        assert_eq!(got[0].completion, "/skill:web ");
-    }
-
-    /// Skill names are validated leniently (§11: non-empty only), so a
-    /// name with whitespace CAN be discovered — but `classify_submission`
-    /// splits at the first space, making such a row unrunnable (and the
-    /// popup itself closes on whitespace, so it is untypeable too). The
-    /// catalog skips it rather than advertise a lie.
-    #[test]
-    fn whitespace_named_skills_are_not_advertised() {
-        let skills = [
-            skill("pdf tools", "spaced"),
-            skill("pdf-tools", "hyphenated"),
-        ];
-        assert_eq!(
-            labels("/skill:pdf", &skills, &[]),
-            vec!["/skill:pdf-tools"],
-            "the spaced imposter is skipped (it would match the prefix), the real one shows"
-        );
-    }
-
-    #[test]
-    fn prompt_templates_appear_after_the_builtins() {
-        let prompts = [template("review", "review the diff")];
-        assert_eq!(labels("/rev", &[], &prompts), vec!["/review"]);
-        let got = suggestions("/review", &[], &prompts);
-        assert_eq!(got[0].description, "review the diff");
-        assert_eq!(got[0].completion, "/review ");
-        // A template shadowing a built-in name cannot occur — the
-        // loader skips built-in names (prompts.rs BUILTINS) — so the
-        // popup never has to break that tie.
-    }
-
-    #[test]
-    fn anything_that_is_not_a_bare_command_word_closes_the_list() {
-        let prompts = [template("review", "d")];
-        for text in [
-            "",
-            "hello",
-            "/resume 2",  // arguments: the command word is done
-            "/new\nmore", // multi-line composer text
-            "  /new",     // submission trims, the popup does not
-            "!",
-            "!!",
-            "@file.txt",
-        ] {
-            assert_eq!(suggestions(text, &[], &prompts), Vec::new(), "{text:?}");
-            assert!(!active(text), "{text:?}");
-        }
-    }
-
-    #[test]
-    fn the_cap_keeps_the_list_at_ten_rows() {
-        let prompts: Vec<_> = (0..12)
-            .map(|i| template(&format!("t{i:02}"), "filler"))
-            .collect();
-        assert_eq!(suggestions("/", &[], &prompts).len(), MAX_ROWS);
-        let skills: Vec<_> = (0..12).map(|i| skill(&format!("s{i:02}"), "f")).collect();
-        assert_eq!(suggestions("/skill:", &skills, &[]).len(), MAX_ROWS);
-    }
-
-    /// What one row's spans say, joined — the truncation contract:
-    /// label first, gap only when a description exists, everything
-    /// within `width` chars, never wrapped.
-    fn row_text(line: &UiLine) -> String {
-        line.spans
-            .iter()
-            .map(|s| s.content.to_string())
-            .collect::<Vec<_>>()
-            .join("")
-    }
-
-    #[test]
-    fn rows_truncate_to_the_width_and_never_wrap() {
-        let s = Suggestion {
-            label: "/resume [n|prefix]".into(),
-            completion: "/resume ".into(),
-            description: "list sessions, or open one".into(),
-        };
-        // Wide enough: label, two spaces, description.
-        let full = suggestion_row(&s, false, 80);
-        assert_eq!(
-            row_text(&full),
-            "/resume [n|prefix]  list sessions, or open one"
-        );
-        // Narrow: the label itself is cut, no gap, no description.
-        let cut = suggestion_row(&s, true, 8);
-        assert_eq!(row_text(&cut), "/resume ");
-        assert!(cut.spans[0].style.add_modifier.contains(Modifier::REVERSED));
-        // Width 0 draws nothing and does not panic.
-        assert_eq!(row_text(&suggestion_row(&s, false, 0)), "");
-        assert_eq!(row_text(&hint_row(0)), "");
-        // The hint truncates too.
-        assert!(row_text(&hint_row(10)).starts_with(" ↑↓"));
-    }
-
-    #[test]
-    fn a_row_without_a_description_has_no_gap() {
-        let s = Suggestion {
-            label: "/quit".into(),
-            completion: "/quit ".into(),
-            description: String::new(),
-        };
-        let line = suggestion_row(&s, false, 80);
-        assert_eq!(row_text(&line), "/quit");
-        assert_eq!(
-            line.spans.len(),
-            3,
-            "span shape is uniform, empty tail spans"
-        );
-    }
-
-    /// Multibyte labels truncate at char boundaries — an é or 你 is
-    /// never split mid-byte.
-    #[test]
-    fn multibyte_labels_truncate_on_char_boundaries() {
-        let s = Suggestion {
-            label: "/héllo你好".into(),
-            completion: "/héllo你好 ".into(),
-            description: String::new(),
-        };
-        assert_eq!(row_text(&suggestion_row(&s, false, 3)), "/hé");
-    }
-}
+mod tests;

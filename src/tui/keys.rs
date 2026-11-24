@@ -2,7 +2,7 @@
 //! without a terminal; the event loop decides what each action means
 //! in state.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyAction {
@@ -52,6 +52,32 @@ pub enum KeyAction {
     /// otherwise).
     Rebuild,
     Ignore,
+}
+
+/// What one mouse-wheel notch does: `Up` shows older rows, `Down` newer
+/// ones — the same direction the transcript's scroll offset counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wheel {
+    Up,
+    Down,
+}
+
+/// Rows one mouse-wheel notch scrolls. Three: a notch should move a chunk
+/// of the transcript without losing the row a reader was looking at, and a
+/// PageUp/PageDown (ten) stays the bigger step.
+pub const WHEEL_ROWS: u16 = 3;
+
+/// What a mouse event means. Only the wheel means anything: a press, a
+/// release, a drag or a hold does nothing at all, because gg uses the mouse
+/// to scroll and for no other purpose — which is also why a click cannot
+/// move a cursor or select the wrong thing. Pure, so the mapping is testable
+/// without a terminal.
+pub fn classify_wheel(event: MouseEvent) -> Option<Wheel> {
+    match event.kind {
+        MouseEventKind::ScrollUp => Some(Wheel::Up),
+        MouseEventKind::ScrollDown => Some(Wheel::Down),
+        _ => None,
+    }
 }
 
 /// Shift+Enter arrives as SHIFT|Enter only from terminals that report

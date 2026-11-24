@@ -121,7 +121,14 @@ impl Transcript {
         self.thinking_open = false;
     }
 
-    /// Ctrl+X copies the last assistant answer: the text of the most
+    /// Nothing to show yet — no block of its own, not even a note. This is
+    /// what the view's welcome block answers, and nothing else: a scroll
+    /// position or a draft does not make a session less empty.
+    pub fn is_empty(&self) -> bool {
+        self.blocks.is_empty()
+    }
+
+    /// The last assistant answer, for Ctrl+X: the text of the most
     /// recent assistant block, if the conversation has one.
     pub fn last_answer(&self) -> Option<&str> {
         self.blocks.iter().rev().find_map(|b| match b {
@@ -257,7 +264,7 @@ impl Transcript {
 mod markdown;
 mod render;
 mod seed;
-pub use render::{LineKind, RenderedLine};
+pub use render::{LineKind, Mark, RenderedLine};
 
 #[cfg(test)]
 mod tests;

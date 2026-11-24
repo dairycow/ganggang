@@ -72,7 +72,10 @@ wait_nvim() { # nvim's empty-buffer tildes: the editor has the screen
   done
   return 1
 }
-composer() { pane | tail -5 | head -4 | sed 's/ *$//'; }   # the editor box's text rows
+# The composer's own text rows: whatever sits between its rounded rules. The
+# box's height follows the draft (one row to eight), so counting rows from the
+# bottom would grab a border; the ` compose ` title names the block instead.
+composer() { pane | awk '/╭ compose/{f=1;next} /^╰/{f=0} f' | sed 's/^│ //; s/[[:space:]]*│[[:space:]]*$//; s/[[:space:]]*$//'; }
 line() { composer | head -1; }
 draft_dirs() { find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'gg-draft-*' -type d 2>/dev/null | sort; }
 draft_files() { find "${TMPDIR:-/tmp}" -maxdepth 2 -path '*/gg-draft-*/*' 2>/dev/null | sort; }
@@ -291,7 +294,7 @@ no_leak F3; finish F4
 
 echo "== G: Ctrl+G while a run is in flight — the run continues behind the editor"
 start "$FAKE" slow 10
-keys -l 'Count from 1 up to 25, one number per line, no other text.'; keys Enter; wait_for '● working' 10
+keys -l 'Count from 1 up to 25, one number per line, no other text.'; keys Enter; wait_for ' working' 10
 keys -l 'draft text'; wait_for 'draft text' 3; keys C-g
 wait_log 'draft='
 grep -qF 'draft=[draft text]' "$WORK/fake.log" && ok G1 "the editor got the composer's text while busy" || bad G1 "editor log" "$(grep -E '^(draft=|start)' "$WORK/fake.log")"
@@ -380,10 +383,13 @@ fi
 echo "== N: composer keys — Ctrl+J/Alt+Enter/Shift+Enter break lines; Ctrl+A/E/K/U edit"
 EXT_KEYS=on                                       # Shift+Enter needs the pane in extended-key mode
 start "$FAKE" instant
+# The composer's rows, not the pane: the box pads each row to its inner
+# width, so an exact whole-line match would never land.
+rows() { composer; }
 keys -l 'one'; keys C-j; keys -l 'two'; wait_for 'two' 5
-pane | grep -qx 'one' && pane | grep -qx 'two' && ok N1 "Ctrl+J broke the line" || bad N1 "Ctrl+J" "$(show)"
+rows | grep -qx 'one' && rows | grep -qx 'two' && ok N1 "Ctrl+J broke the line" || bad N1 "Ctrl+J" "$(show)"
 keys M-Enter; keys -l 'three'; wait_for 'three' 5
-pane | grep -qx 'three' && ok N2 "Alt+Enter broke the line" || bad N2 "Alt+Enter" "$(show)"
+rows | grep -qx 'three' && ok N2 "Alt+Enter broke the line" || bad N2 "Alt+Enter" "$(show)"
 keys C-a; keys -l 'X'; wait_for 'Xthree' 5 && ok N3 "Ctrl+A put the cursor at the line start" || bad N3 "Ctrl+A" "$(show)"
 keys C-e; keys -l '!'; wait_for 'Xthree!' 5 && ok N4 "Ctrl+E put the cursor at the line end" || bad N4 "Ctrl+E" "$(show)"
 keys C-k; sleep 0.4
@@ -391,7 +397,7 @@ pane | grep -q 'Xthree!' && ok N5 "Ctrl+K at the end of the last line is a no-op
 keys C-u; sleep 0.4
 pane | grep -q 'Xthree!' && bad N6 "Ctrl+U did not clear the line" "$(show)" || ok N6 "Ctrl+U killed back to the line start"
 keys S-Enter; keys -l 'four'; wait_for 'four' 5
-pane | grep -qx 'four' && ok N7 "Shift+Enter broke the line (extended keys on)" || bad N7 "Shift+Enter" "$(show)"
+rows | grep -qx 'four' && ok N7 "Shift+Enter broke the line (extended keys on)" || bad N7 "Shift+Enter" "$(show)"
 pane | grep -q 'you │' && bad N8 "an unsubmitted draft was sent" "$(show)" || ok N8 "nothing was submitted"
 EXT_KEYS=off
 finish N9
