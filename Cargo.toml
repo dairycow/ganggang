@@ -1,6 +1,6 @@
 [package]
 name = "ganggang"
-version = "0.3.6"
+version = "0.3.7"
 edition = "2024"
 description = "A small, sharp agentic harness in Rust: one agent loop, tools, and a TUI."
 license = "MIT"
