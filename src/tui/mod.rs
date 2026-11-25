@@ -133,7 +133,7 @@ pub async fn run(
         &cwd,
         &active_endpoint.label(),
         active_endpoint.context_window,
-        skills.clone(),
+        skills,
         history,
     );
     state.set_thinking(
@@ -376,12 +376,13 @@ pub async fn run(
                                     if !matches!(command, Command::Quit) {
                                         state.history.record(&text);
                                     }
+                                    let skills_snapshot = state.skills_arc();
                                     let ctx = CmdCtx {
                                         state: &mut state,
                                         factory: &factory,
                                         input_tx: &mut input_tx,
                                         ui_tx: &ui_tx,
-                                        skills: &skills,
+                                        skills: &skills_snapshot,
                                         hooks: &hooks,
                                         cwd: &cwd,
                                         abort: &abort,

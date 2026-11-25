@@ -13,10 +13,10 @@ use ratatui::text::{Line as UiLine, Span};
 
 use super::theme::Palette;
 
-/// Rows the popup shows at most. Eleven is the whole built-in set (the
-/// merged set includes `/hooks`, §22, `/model`, and `/think`); skills flow
-/// in as the prefix narrows.
-const MAX_ROWS: usize = 11;
+/// Rows the popup shows at most. Twelve is the whole built-in set (the
+/// merged set includes `/hooks`, §22, `/model`, `/think`, and `/reload`);
+/// skills flow in as the prefix narrows.
+const MAX_ROWS: usize = 12;
 
 /// One popup row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +55,7 @@ pub(crate) const BUILTINS: &[(&str, &str, &str)] = &[
         " [effort|off|default] [budget]",
         "show or set thinking effort and budget",
     ),
+    ("/reload", "", "reload AGENTS.md and skills from disk"),
     ("/quit", "", "exit"),
 ];
 

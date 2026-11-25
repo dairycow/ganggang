@@ -294,7 +294,7 @@ async fn cancellation_reports_output_that_arrived_before_the_kill() {
 
 /// The nudge is decided from the command text alone: a pipe stays inside
 /// one segment, quotes and `KEY=value` prefixes do not hide the command
-/// word, and a tool workaround outranks a redundant `cd`.
+/// word, and a redundant `cd` is appended after any tool workaround.
 #[test]
 fn workaround_hint_names_the_native_tool() {
     let cwd = Path::new("/work/dir");
@@ -314,7 +314,10 @@ fn workaround_hint_names_the_native_tool() {
             "cd /work/dir && echo ok",
             "bash already runs in the working directory; omit cd",
         ),
-        ("cd '/work/dir/' && cat a.txt", READ),
+        (
+            "cd '/work/dir/' && cat a.txt",
+            &format!("{READ}; bash already runs in the working directory; omit cd"),
+        ),
         ("FOO=1 BAR=2 grep x y", "use native grep instead of bash"),
     ];
     for (command, expected) in hinted {

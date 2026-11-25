@@ -38,6 +38,7 @@ fn a_bare_slash_lists_the_whole_builtin_set() {
             "/skill:<name> [args]",
             "/model [provider/model]",
             "/think [effort|off|default] [budget]",
+            "/reload",
             "/quit",
         ],
         "catalog order, /exit stays hidden"
@@ -46,7 +47,8 @@ fn a_bare_slash_lists_the_whole_builtin_set() {
 
 #[test]
 fn the_typed_prefix_filters_and_keeps_order() {
-    assert_eq!(labels("/re", &[]), vec!["/resume [n|prefix]"]);
+    assert_eq!(labels("/re", &[]), vec!["/resume [n|prefix]", "/reload"]);
+    assert_eq!(labels("/res", &[]), vec!["/resume [n|prefix]"]);
     assert_eq!(
         labels("/c", &[]),
         vec!["/compact [instructions]", "/context"]
@@ -125,13 +127,13 @@ fn anything_that_is_not_a_bare_command_word_closes_the_list() {
 }
 
 #[test]
-fn the_cap_keeps_the_list_at_ten_rows() {
+fn the_cap_keeps_the_list_at_max_rows() {
     assert_eq!(
         suggestions("/", &[]).len(),
         MAX_ROWS,
         "the whole built-in set"
     );
-    let skills: Vec<_> = (0..12).map(|i| skill(&format!("s{i:02}"), "f")).collect();
+    let skills: Vec<_> = (0..14).map(|i| skill(&format!("s{i:02}"), "f")).collect();
     assert_eq!(suggestions("/skill:", &skills).len(), MAX_ROWS);
 }
 

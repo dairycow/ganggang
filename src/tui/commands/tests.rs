@@ -39,6 +39,60 @@ fn slash_lines_classify_to_commands() {
 }
 
 #[test]
+fn reload_classifies_and_is_known() {
+    assert_eq!(
+        classify_submission("/reload"),
+        Submission::Command(Command::Reload)
+    );
+    assert!(known_commands().contains("/reload"));
+}
+
+/// `/reload` forwards to the agent task, which re-discovers and answers
+/// with `UiEvent::Reloaded` — no run begins.
+#[tokio::test]
+async fn reload_forwards_to_the_agent_task() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    let mut state = super::super::view::State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        Arc::new(vec![]),
+        History::default(),
+    );
+    let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
+    let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
+    let factory: super::super::Factory = Arc::new(|_, _, _| unreachable!("no /new on this path"));
+    let config = crate::config::Config::default();
+    let mut active_endpoint = config.active_endpoint();
+    let abort = Arc::new(AtomicBool::new(false));
+    let cwd = std::path::PathBuf::from("/tmp/x");
+
+    handle_command(
+        Command::Reload,
+        CmdCtx {
+            state: &mut state,
+            factory: &factory,
+            input_tx: &mut input_tx,
+            ui_tx: &ui_tx,
+            skills: &[],
+            hooks: &crate::agent::hooks::Hooks::default(),
+            cwd: &cwd,
+            abort: &abort,
+            config: &config,
+            active_endpoint: &mut active_endpoint,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        input_rx.try_recv().unwrap(),
+        super::super::AgentInput::Reload
+    ));
+}
+
+#[test]
 fn resume_argument_shapes() {
     assert_eq!(
         classify_submission("/resume"),

@@ -143,6 +143,21 @@ impl State {
         self.palette
     }
 
+    /// The shared skill set, as an `Arc`: what a `/reload` replaces and
+    /// what the command handler snapshots for its lists.
+    pub fn skills_arc(&self) -> Arc<Vec<crate::agent::skills::Skill>> {
+        self.skills.clone()
+    }
+
+    /// Replace the skill set (a `/reload` or a swapped agent) and reset
+    /// the popup's selection: the highlighted row and filter are stale
+    /// against a new list.
+    pub fn set_skills(&mut self, skills: Arc<Vec<crate::agent::skills::Skill>>) {
+        self.skills = skills;
+        self.suggest_selected = 0;
+        self.suggest_filter.clear();
+    }
+
     // Test seams: the transcript and scroll offset are view-internal; the
     // tests sit inside the module tree and reach in through these.
     #[cfg(test)]
@@ -161,5 +176,10 @@ impl State {
             .into_iter()
             .map(|l| l.text)
             .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn suggest_selected_for_test(&self) -> usize {
+        self.suggest_selected
     }
 }

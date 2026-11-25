@@ -27,3 +27,4 @@
 # Contributing
 
 - [Keeping docs up to date](maintaining-docs.md)
+- [Improving the harness](improving-the-harness.md)

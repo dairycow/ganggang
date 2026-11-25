@@ -172,6 +172,30 @@ impl Agent {
         )
     }
 
+    /// The discovered skills, in discovery order: what the TUI's `/skills`
+    /// list and `/skill:` rows render after a `/reload`.
+    pub fn skills(&self) -> &[skills::Skill] {
+        &self.skills
+    }
+
+    /// Re-run discovery of context files and skills from disk and swap the
+    /// results in: the session's entries, session id, and frozen prompt
+    /// date survive, so a reload never invalidates the conversation.
+    /// Returns the new counts and the discovery warnings (skill warnings
+    /// first, then context-file warnings); the stored warning lists are
+    /// cleared, so a reload does not re-surface the first run's.
+    pub fn reload_context(&mut self) -> (usize, usize, Vec<String>) {
+        let (agents_files, agents_warnings) = context::discover_agents_md(&self.cwd);
+        let (skills, skill_warnings) = skills::discover(&self.cwd);
+        self.agents_files = agents_files;
+        self.skills = skills;
+        self.skill_warnings.clear();
+        self.agents_warnings.clear();
+        let mut warnings = skill_warnings;
+        warnings.extend(agents_warnings);
+        (self.agents_files.len(), self.skills.len(), warnings)
+    }
+
     /// The recorded history: usage totals, compaction walks, and the
     /// resume path all read through this.
     pub fn entries(&self) -> &[session::Entry] {
@@ -203,3 +227,6 @@ impl Agent {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

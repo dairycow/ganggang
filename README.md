@@ -70,12 +70,16 @@ Like pi, `gg` does not prompt for tool permissions. The `bash` tool and hooks ru
 
 ```sh
 cargo fmt --all && cargo test && cargo clippy --all-targets -- -D warnings
-scripts/smoke.sh      # live acceptance against a running Strata (print mode)
-scripts/eval.sh       # local-compute eval suite (tool discipline, tokens, latency)
-scripts/hooks-live.sh # hooks: deny path, observe paths, --no-hooks, project hooks
-scripts/tui-live.sh   # the TUI's terminal hand-off through tmux
-scripts/watch-live.sh # --watch: rebuild, re-exec, session continuity, draft carry
-scripts/sync-docs.sh  # regenerate and verify the user guide's reference pages
+scripts/smoke.sh            # live acceptance against a running Strata (print mode)
+scripts/eval.sh             # local-compute eval suite (tool discipline, tokens, latency)
+scripts/hooks-live.sh       # hooks: deny path, observe paths, --no-hooks, project hooks
+scripts/tui-live.sh         # the TUI's terminal hand-off through tmux
+scripts/watch-live.sh       # --watch: rebuild, re-exec, session continuity, draft carry
+scripts/sync-docs.sh        # regenerate and verify the user guide's reference pages
+scripts/session-digest.py   # digest sessions for friction: aborts, tool errors, corrections
+scripts/improve-loop.sh     # gated improvement iterations against the eval baseline
 ```
+
+`scripts/improve-loop.sh` and `scripts/session-digest.py` run on demand. `gg` never invokes either after a session. See [Improving the harness](https://dairycow.github.io/ganggang/improving-the-harness.html) for the loop and the two self-improvement skills.
 
 The user guide lives in `docs/` (mdBook). `AGENTS.md` explains how docs stay in sync.

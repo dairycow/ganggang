@@ -15,7 +15,7 @@ use crate::llm::types::ChatMessage;
 /// The instruction §14 words for the summarize call. It names what a
 /// continuation needs, and the one thing a summary cannot stand in for:
 /// the source lines the compacted region no longer carries.
-pub(super) const SUMMARIZE_INSTRUCTION: &str = "summarize the conversation so far for continuation; preserve goals, decisions, exact file paths (already edited vs remaining), open tasks; note that compacted source lines are no longer in context so targeted reads are needed before editing";
+pub(super) const SUMMARIZE_INSTRUCTION: &str = "summarize the conversation so far for continuation; preserve goals, decisions, exact file paths with key line ranges and symbols already located (already edited vs remaining), open tasks, and latest errors; note that compacted source lines are no longer in context so targeted read(offset, limit) is required before editing";
 
 pub(super) fn format_transcript_for_summary(dropped_wire: &[ChatMessage]) -> String {
     let mut sections = Vec::with_capacity(dropped_wire.len());

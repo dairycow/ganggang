@@ -320,7 +320,8 @@ fn hint_for(cmd: &str, args: &[String], segment: &str, heredoc_body: &str) -> Op
 
 /// The nudge for a command that duplicates a native tool, or `None` for a
 /// normal shell command. Collects every distinct tool hint across segments
-/// in order; a tool hint outranks a redundant `cd`.
+/// in order; a redundant `cd` is appended after the tool hints rather than
+/// suppressed by them.
 pub(super) fn workaround_hint(command: &str, cwd: &Path) -> Option<String> {
     let cwd_str = cwd.to_string_lossy();
     let cwd_dir = cwd_str.trim_end_matches('/');
@@ -359,11 +360,12 @@ pub(super) fn workaround_hint(command: &str, cwd: &Path) -> Option<String> {
             }
         }
     }
-    if !hints.is_empty() {
-        return Some(hints.join("; "));
-    }
     if redundant_cd {
-        return Some(CD_HINT.to_string());
+        hints.push(CD_HINT);
     }
-    None
+    if hints.is_empty() {
+        None
+    } else {
+        Some(hints.join("; "))
+    }
 }

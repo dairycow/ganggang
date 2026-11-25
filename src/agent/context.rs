@@ -72,7 +72,7 @@ fn preamble(tools: &[&str]) -> String {
 
     if has("edit") {
         working.push(
-            "- Make the smallest exact edit; after compaction or formatting, re-read target lines before calling edit. Verify after changes, then stop without redundant re-reads or re-runs.".to_string(),
+            "- For multi-file tasks, edit each file right after reading it instead of reading every file first (compaction drops earlier reads). Make the smallest exact edit; after compaction or formatting, re-read target lines before calling edit. Verify after changes, then stop without redundant re-reads or re-runs.".to_string(),
         );
     } else if has("write") {
         working.push(

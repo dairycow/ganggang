@@ -4,6 +4,8 @@
 
 use tokio::sync::mpsc;
 
+use std::sync::Arc;
+
 use crate::agent::Agent;
 use crate::agent::session::{Entry, Message, Role};
 use crate::events::AgentEvent;
@@ -49,6 +51,13 @@ pub enum UiEvent {
         reasoning_effort: Option<String>,
         reasoning_budget_tokens: Option<u32>,
     },
+    /// Reply to `/reload`: the re-discovered skill set (shared with the
+    /// suggestion popup) and the counts the feedback line reports.
+    Reloaded {
+        agents_count: usize,
+        skills: Arc<Vec<crate::agent::skills::Skill>>,
+        warnings: Vec<String>,
+    },
 }
 
 /// What the UI asks the agent task to do. A plain prompt runs; anything
@@ -59,6 +68,7 @@ pub enum AgentInput {
     DumpContext,
     Compact(Option<String>),
     SwitchEndpoint(crate::config::Endpoint),
+    Reload,
 }
 
 /// Consume submitted inputs, forward the event stream to the UI, report
@@ -135,6 +145,17 @@ pub(super) async fn agent_task(
                             .await;
                     }
                 }
+                continue;
+            }
+            AgentInput::Reload => {
+                let (agents_count, _, warnings) = agent.reload_context();
+                let _ = ui
+                    .send(UiEvent::Reloaded {
+                        agents_count,
+                        skills: Arc::new(agent.skills().to_vec()),
+                        warnings,
+                    })
+                    .await;
                 continue;
             }
             AgentInput::Prompt(input) => input,
@@ -235,6 +256,20 @@ pub(super) async fn apply(
         } => {
             state.set_model(&label, context_window);
             state.set_thinking(reasoning_effort.as_deref(), reasoning_budget_tokens);
+        }
+        UiEvent::Reloaded {
+            agents_count,
+            skills,
+            warnings,
+        } => {
+            let skill_count = skills.len();
+            state.set_skills(skills);
+            state.push_info(&format!(
+                "reloaded: {agents_count} context file(s), {skill_count} skill(s)"
+            ));
+            for warning in warnings {
+                state.push_warning(&warning);
+            }
         }
         UiEvent::ShellDone {
             command,

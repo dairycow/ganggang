@@ -207,6 +207,10 @@ fn preamble_batches_reads_and_re_reads_after_compaction_or_formatting() {
         prompt.contains("re-read target lines before calling edit"),
         "{prompt}"
     );
+    assert!(
+        prompt.contains("edit each file right after reading it"),
+        "{prompt}"
+    );
     assert!(prompt.contains("pipefail"), "{prompt}");
     assert!(prompt.contains("~/.gg/config.toml"), "{prompt}");
     assert!(

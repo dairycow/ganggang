@@ -31,6 +31,8 @@ When you add a behaviour that has no machine check, write the prose in `docs/src
 
 Because the reference pages are only committed after the tests agree with the code, the published site always matches `main`.
 
+For the eval-gated self-improvement loop and the session digest, see [Improving the harness](improving-the-harness.md).
+
 ## 4. Releasing to crates.io
 
 The guide tracks `main`; crates.io tracks releases. Before `cargo publish`:

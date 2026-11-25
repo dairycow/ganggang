@@ -4,7 +4,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
-use super::agent_task::usage_totals;
+use super::agent_task::{UiEvent, apply, usage_totals};
 use super::footer::Footer;
 use super::history::{Arrow, History};
 use super::keys::{KeyAction, classify};
@@ -339,7 +339,7 @@ fn suggestion_popup_tracks_the_composer() {
     assert!(!state.suggest_open(), "plain composer: no popup");
     state.editor.insert_char('/');
     assert!(state.suggest_open(), "a bare slash opens the catalog");
-    assert_eq!(state.suggestions().len(), 11, "the built-in set");
+    assert_eq!(state.suggestions().len(), 12, "the built-in set");
 
     // Filtering: two down and one up leaves the highlight on /compact.
     state.suggest_next();
@@ -389,6 +389,93 @@ fn suggestion_popup_tracks_the_composer() {
     }
     state.complete_suggestion();
     assert_eq!(state.editor.text(), "/quit ", "last row");
+}
+
+/// A `/reload` (or a swapped agent) replaces the skill set the popup
+/// lists from: the `/skill:` rows rebuild from the new set and the
+/// selection resets to the top row.
+#[test]
+fn set_skills_rebuilds_the_skill_rows() {
+    use crate::agent::skills::Skill;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    let mut state = State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        Arc::new(Vec::new()),
+        History::default(),
+    );
+    state.editor.set_text("/skill:");
+    assert_eq!(state.suggestions().len(), 0, "no skills, no rows");
+    state.set_skills(Arc::new(vec![Skill {
+        name: "late-skill".into(),
+        description: "added by a reload".into(),
+        disable_model_invocation: false,
+        path: PathBuf::from("/tmp/late-skill/SKILL.md"),
+        instructions: String::new(),
+    }]));
+    assert_eq!(
+        state
+            .suggestions()
+            .iter()
+            .map(|s| s.label.clone())
+            .collect::<Vec<_>>(),
+        vec!["/skill:late-skill"],
+        "the new skill is listed"
+    );
+    assert_eq!(state.suggest_selected_for_test(), 0, "the selection resets");
+}
+
+/// The `/reload` reply swaps the popup set, reports the counts and surfaces
+/// the discovery warnings in the transcript.
+#[tokio::test]
+async fn reloaded_event_swaps_skills_and_reports_counts() {
+    use crate::agent::skills::Skill;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    let mut state = State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        Arc::new(Vec::new()),
+        History::default(),
+    );
+    let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
+    let keep = apply(
+        UiEvent::Reloaded {
+            agents_count: 2,
+            skills: Arc::new(vec![Skill {
+                name: "reloaded-skill".into(),
+                description: "arrived by reload".into(),
+                disable_model_invocation: false,
+                path: PathBuf::from("/tmp/reloaded/SKILL.md"),
+                instructions: String::new(),
+            }]),
+            warnings: vec!["a discovery warning".into()],
+        },
+        &mut state,
+        &mut input_tx,
+    )
+    .await;
+    assert!(keep, "a reload reply does not end the loop");
+    state.editor.set_text("/skill:");
+    assert_eq!(
+        state
+            .suggestions()
+            .iter()
+            .map(|s| s.label.clone())
+            .collect::<Vec<_>>(),
+        vec!["/skill:reloaded-skill"]
+    );
+    let transcript = state.line_texts_for_test().join("\n");
+    assert!(
+        transcript.contains("reloaded: 2 context file(s), 1 skill(s)"),
+        "{transcript}"
+    );
+    assert!(transcript.contains("a discovery warning"), "{transcript}");
 }
 
 /// A short terminal draws fewer rows than the list holds; render

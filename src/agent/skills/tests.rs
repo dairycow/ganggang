@@ -339,3 +339,20 @@ fn disabled_skills_remain_in_the_discovered_set() {
     assert_eq!(skills.len(), 1);
     assert!(skills[0].disable_model_invocation);
 }
+
+#[test]
+fn repo_self_improve_skills_are_discovered_and_model_disabled() {
+    let (skills, warnings) =
+        super::discover_with_roots(None, Path::new(env!("CARGO_MANIFEST_DIR")));
+    assert!(warnings.is_empty());
+    for name in ["self-improve", "harness-improve"] {
+        let skill = skills
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("{name} skill not discovered"));
+        assert!(
+            skill.disable_model_invocation,
+            "{name} must be model-invocation disabled"
+        );
+    }
+}

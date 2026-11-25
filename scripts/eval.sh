@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
-# Local-compute eval suite: runs 9 deterministic tasks against a live Strata
+# Local-compute eval suite: runs deterministic tasks against a live Strata
 # server in isolated temp workspaces and reports functional pass/fail plus
 # tool-discipline & token-efficiency metrics.
 #
+# Suites: core (T1 to T9), heldout (H1 to H3), all (both).
+# Sessions land in $SCRATCH by default; set EVAL_SESSIONS_DIR to persist
+# them (and record "session_file" per task) across the scratch cleanup.
+#
 # Usage:
 #   scripts/eval.sh
-#   GG_BIN=./target/release/gg EVAL_OUT=/tmp/eval.jsonl scripts/eval.sh
+#   EVAL_SUITE=heldout GG_BIN=./target/release/gg EVAL_OUT=/tmp/eval.jsonl scripts/eval.sh
+#
+# EVAL_ROOT is internal: improve-loop.sh sets it when running a pristine copy
+# of this script, so ROOT still names the candidate repository.
 set -euo pipefail
 
-ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && pwd)
+# EVAL_ROOT overrides the repository root: improve-loop.sh runs a pristine
+# copy of this script from a work directory and points it back at the tree.
+ROOT="${EVAL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && pwd)}"
 GG_BIN="${GG_BIN:-$ROOT/target/debug/gg}"
 EVAL_TIMEOUT="${EVAL_TIMEOUT:-180}"
 EVAL_MAX_TURNS="${EVAL_MAX_TURNS:-25}"
@@ -17,10 +26,28 @@ EVAL_MODEL="${EVAL_MODEL:-}"
 EVAL_LABEL="${EVAL_LABEL:-}"
 GG_ARGS="${GG_ARGS:-}"
 EVAL_OUT="${EVAL_OUT:-}"
+EVAL_SUITE="${EVAL_SUITE:-core}"
+EVAL_SESSIONS_DIR="${EVAL_SESSIONS_DIR:-}"
+
+if [[ "$EVAL_SUITE" != "core" && "$EVAL_SUITE" != "heldout" && "$EVAL_SUITE" != "all" ]]; then
+  echo "FAIL: EVAL_SUITE must be one of: core, heldout, all (got: $EVAL_SUITE)" >&2
+  exit 1
+fi
 
 if [[ ! -x "$GG_BIN" ]]; then
   echo "FAIL: $GG_BIN not built (cargo build)" >&2
   exit 1
+fi
+GG_BIN=$(cd -- "$(dirname -- "$GG_BIN")" && pwd)/$(basename -- "$GG_BIN")
+
+if [[ -n "$EVAL_SESSIONS_DIR" ]]; then
+  mkdir -p "$EVAL_SESSIONS_DIR"
+  EVAL_SESSIONS_DIR=$(cd -- "$EVAL_SESSIONS_DIR" && pwd)
+fi
+
+if [[ -n "$EVAL_OUT" ]]; then
+  mkdir -p "$(dirname -- "$EVAL_OUT")"
+  EVAL_OUT=$(cd -- "$(dirname -- "$EVAL_OUT")" && pwd)/$(basename -- "$EVAL_OUT")
 fi
 
 BASE_TRIMMED="${EVAL_BASE_URL%/}"
@@ -409,9 +436,138 @@ with open(sys.argv[1], "w") as f:
     f.write("\n".join(lines) + "\n")
 PY
 
+# --- Task H1: multi-file fix (heldout) ---
+H1="$SCRATCH/h1"
+mkdir -p "$H1/src"
+cat > "$H1/Cargo.toml" <<'EOF'
+[package]
+name = "eval_invoice"
+version = "0.1.0"
+edition = "2024"
+EOF
+cat > "$H1/src/lib.rs" <<'EOF'
+pub mod calc;
+pub mod format;
+
+#[cfg(test)]
+mod tests {
+    use super::{calc, format};
+
+    #[test]
+    fn subtotal_is_qty_times_price() {
+        assert_eq!(calc::subtotal(3, 20), 60);
+    }
+
+    #[test]
+    fn format_total_uses_the_aud_prefix() {
+        assert_eq!(format::format_total(60), "AUD 60");
+    }
+}
+EOF
+cat > "$H1/src/calc.rs" <<'EOF'
+/// Compute the line subtotal for `qty` units at `price` each.
+pub fn subtotal(qty: i32, price: i32) -> i32 {
+    qty + price
+}
+EOF
+cat > "$H1/src/format.rs" <<'EOF'
+/// Format a total as an AUD string.
+pub fn format_total(total: i32) -> String {
+    format!("USD {total}")
+}
+EOF
+
+# --- Task H2: log needle grep (heldout) ---
+H2="$SCRATCH/h2"
+mkdir -p "$H2/logs" "$H2/archive"
+printf 'archive/\n' > "$H2/.gitignore"
+cat > "$H2/logs/app.log" <<'EOF'
+2026-11-25T10:00:00Z app boot ok
+2026-11-25T10:00:01Z app request path=/health status=200
+2026-11-25T10:00:02Z app request path=/items status=200
+2026-11-25T10:00:03Z ERR-1001 upstream timeout
+DETAIL=TIMEOUT_UPSTREAM
+2026-11-25T10:00:04Z app request path=/orders status=200
+2026-11-25T10:00:05Z app request path=/items status=200
+EOF
+cat > "$H2/logs/worker.log" <<'EOF'
+2026-11-25T10:01:00Z worker job=42 start
+2026-11-25T10:01:01Z worker job=42 attempt=1
+2026-11-25T10:01:02Z worker job=42 attempt=2
+2026-11-25T10:01:03Z ERR-7319 retry budget exhausted
+DETAIL=RETRY_EXHAUSTED
+2026-11-25T10:01:04Z worker job=42 stop
+EOF
+cat > "$H2/archive/old.log" <<'EOF'
+2026-11-01T09:00:00Z ERR-7319 retry budget exhausted
+DETAIL=STALE_ARCHIVE
+EOF
+
+# --- Task H3: skill header tag (heldout) ---
+H3="$SCRATCH/h3"
+mkdir -p "$H3/src" "$H3/.agents/skills/header-tag"
+cat > "$H3/Cargo.toml" <<'EOF'
+[package]
+name = "eval_tagged"
+version = "0.1.0"
+edition = "2024"
+EOF
+cat > "$H3/src/lib.rs" <<'EOF'
+//! Utility helpers for the eval_tagged crate.
+#![allow(dead_code)]
+
+pub mod util;
+
+#[cfg(test)]
+mod tests {
+    use super::util::clamp;
+
+    #[test]
+    fn clamps_within_bounds() {
+        assert_eq!(clamp(5, 0, 10), 5);
+        assert_eq!(clamp(-1, 0, 10), 0);
+        assert_eq!(clamp(11, 0, 10), 10);
+    }
+}
+EOF
+cat > "$H3/src/util.rs" <<'EOF'
+//! Clamping helper used by the tests in `lib.rs`.
+#![allow(dead_code)]
+
+/// Clamp `value` to the inclusive range `[lo, hi]`.
+pub fn clamp(value: i32, lo: i32, hi: i32) -> i32 {
+    if value < lo {
+        lo
+    } else if value > hi {
+        hi
+    } else {
+        value
+    }
+}
+EOF
+cat > "$H3/.agents/skills/header-tag/SKILL.md" <<'EOF'
+---
+name: header-tag
+description: "Tag Rust source files with the required first-line header comment."
+---
+
+# Header tag
+
+The first line of every `.rs` file under `src/` must be exactly:
+
+```
+//! Tag: GG-HELDOUT-42
+```
+
+- Replace any existing first line with this exact line.
+- Keep the rest of the file unchanged.
+EOF
+
 python3 - "$ROOT" "$GG_BIN" "$HOME_DIR" "$EVAL_TIMEOUT" "$GG_ARGS" "$EVAL_OUT" "$SCRATCH" \
     "$T1" "$T2" "$T3" "$T4" "$T5" "$T6" "$T7" "$T8" "$T9" \
-    "$STRATA_MODEL" "$STRATA_MAX_CONTEXT" "$EVAL_MAX_TURNS" "$BASE_TRIMMED" "$EVAL_LABEL" <<'PY'
+    "$H1" "$H2" "$H3" \
+    "$STRATA_MODEL" "$STRATA_MAX_CONTEXT" "$EVAL_MAX_TURNS" "$BASE_TRIMMED" "$EVAL_LABEL" \
+    "$EVAL_SESSIONS_DIR" "$EVAL_SUITE" <<'PY'
 import json, os, re, shlex, subprocess, sys, time
 
 (
@@ -431,11 +587,16 @@ import json, os, re, shlex, subprocess, sys, time
     t7,
     t8,
     t9,
+    h1,
+    h2,
+    h3,
     model,
     max_context,
     eval_max_turns,
     base_url,
     eval_label,
+    sessions_dir,
+    eval_suite,
 ) = sys.argv[1:]
 timeout_s = int(timeout_s)
 max_context = int(max_context)
@@ -459,7 +620,24 @@ def rename_refactor_ok(cwd):
     return True
 
 
-tasks = [
+def header_tag_ok(cwd):
+    """Cargo tests pass and both source files open with the exact tag line."""
+    if subprocess.run(
+        ["cargo", "test", "--quiet"], cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    ).returncode != 0:
+        return False
+    for fname in ("lib.rs", "util.rs"):
+        try:
+            with open(os.path.join(cwd, "src", fname)) as fh:
+                first = fh.read().splitlines()[0]
+        except (OSError, IndexError):
+            return False
+        if first != "//! Tag: GG-HELDOUT-42":
+            return False
+    return True
+
+
+core_tasks = [
     (
         "T1_regex_grep",
         t1,
@@ -520,10 +698,50 @@ tasks = [
     ),
 ]
 
+heldout_tasks = [
+    (
+        "H1_multi_file_fix",
+        h1,
+        "This Rust crate has two bugs: `calc::subtotal` uses the wrong formula and "
+        "`format::format_total` returns the wrong currency prefix. "
+        "Fix both so `cargo test` passes.",
+        lambda ans, cwd: subprocess.run(["cargo", "test", "--quiet"], cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0,
+    ),
+    (
+        "H2_log_needle_grep",
+        h2,
+        "The `logs/` directory contains log files. Find the `ERR-7319` entry in the "
+        "non-ignored logs and return the `DETAIL=...` value on the line immediately "
+        "following it. Reply with only that `DETAIL=...` value.",
+        lambda ans, cwd: (
+            "DETAIL=RETRY_EXHAUSTED" in ans
+            and "STALE_ARCHIVE" not in ans
+            and "archive/old.log" not in ans
+        ),
+    ),
+    (
+        "H3_skill_header_tag",
+        h3,
+        "Apply the repo skill `header-tag` to both files under `src/`, "
+        "then run `cargo test` to verify the crate still passes.",
+        lambda ans, cwd: header_tag_ok(cwd),
+    ),
+]
+
+if eval_suite == "core":
+    tasks = core_tasks
+elif eval_suite == "heldout":
+    tasks = heldout_tasks
+else:
+    tasks = core_tasks + heldout_tasks
+
 results = []
 for name, cwd, prompt, check_fn in tasks:
     env = dict(os.environ, HOME=home_dir)
-    session_file = os.path.join(scratch_dir, f"{name}.jsonl")
+    session_dir = sessions_dir if sessions_dir else scratch_dir
+    session_file = os.path.join(session_dir, f"{name}.jsonl")
+    if os.path.exists(session_file):
+        os.remove(session_file)
     cmd = [
         gg_bin,
         "--no-hooks",
@@ -694,7 +912,7 @@ for name, cwd, prompt, check_fn in tasks:
         think_pct = 100.0 * reason_chars / (reason_chars + out_chars)
     else:
         think_pct = 0.0
-    results.append({
+    result = {
         "task": name,
         "pass": ok,
         "timed_out": timed_out,
@@ -724,10 +942,13 @@ for name, cwd, prompt, check_fn in tasks:
         "draft_acc": draft_acc,
         "draft_acc_pct": draft_acc_pct,
         "tools": tools,
-    })
+    }
+    if sessions_dir:
+        result["session_file"] = session_file
+    results.append(result)
 
 label_part = f" | Label: {eval_label}" if eval_label else ""
-print(f"Model: {model} (max_context={max_context}){label_part} | Binary: {gg_bin}")
+print(f"Suite: {eval_suite} | Model: {model} (max_context={max_context}){label_part} | Binary: {gg_bin}")
 print(
     f"{'Task':<24} {'Status':<6} {'Wall':>7} {'Turns':>5} {'Calls':>5} {'Batch':>5} "
     f"{'Native%':>7} {'Py':>4} {'Cd':>3} {'ToolKB':>7} {'PeakCtx':>8} {'SumCtx':>8} "
@@ -811,6 +1032,7 @@ if eval_out:
         "total_draft_acc": tot_draft_acc,
         "overall_draft_acc_pct": overall_draft_acc_pct,
         "results": results,
+        "suite": eval_suite,
     }
     with open(eval_out, "a") as f:
         f.write(json.dumps(rec) + "\n")

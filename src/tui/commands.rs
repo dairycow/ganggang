@@ -51,6 +51,8 @@ pub enum Command {
     /// No argument shows the current thinking configuration; an argument
     /// sets the effort and/or budget on the active endpoint.
     Think(Option<String>),
+    /// Re-run discovery of context files and skills from disk.
+    Reload,
     Quit,
     /// Not a built-in.
     Unknown(String),
@@ -92,6 +94,7 @@ pub fn classify_submission(text: &str) -> Submission {
             "context" => Command::Context,
             "model" => Command::Model(Some(arg)).filter_arg(),
             "think" => Command::Think(Some(arg)).filter_arg(),
+            "reload" => Command::Reload,
             "hooks" => Command::Hooks,
             "quit" | "exit" => Command::Quit,
             _ if head.starts_with("skill:") => Command::Skill {
@@ -120,7 +123,7 @@ impl Command {
 
 /// The valid commands, for unknown-command feedback.
 pub fn known_commands() -> &'static str {
-    "/new /resume [n|prefix] /compact [instructions] /skills /session /context /hooks /skill:<name> [args] /model [provider/model] /think [effort|off|default] [budget] /quit"
+    "/new /resume [n|prefix] /compact [instructions] /skills /session /context /hooks /skill:<name> [args] /model [provider/model] /think [effort|off|default] [budget] /reload /quit"
 }
 
 /// Everything a command needs to act: view state, the agent channels, the
@@ -154,6 +157,11 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
         active_endpoint,
     } = ctx;
     match command {
+        Command::Reload => {
+            // The agent task re-runs discovery and reports back as
+            // UiEvent::Reloaded; the view swaps its skill set there.
+            input_tx.send(super::AgentInput::Reload).await?;
+        }
         Command::Quit => return Ok(true),
         Command::Skills => {
             if skills.is_empty() {
@@ -365,5 +373,6 @@ fn swap_agent(
     *input_tx = tx;
     state.new_session(boot.session_path, boot.sessions_disabled);
     state.seed_from_entries(boot.agent.entries());
+    state.set_skills(std::sync::Arc::new(boot.agent.skills().to_vec()));
     tokio::spawn(super::agent_task::agent_task(boot.agent, rx, ui_tx.clone()));
 }

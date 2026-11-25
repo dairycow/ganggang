@@ -3,3 +3,5 @@
 .cargo/
 .claude/
 /docs/book
+__pycache__/
+*.pyc
