@@ -95,12 +95,7 @@ Choose at the command line with `-P deepseek`, `-m deepseek-flash`, or `-m openc
 | `GG_MODEL` | Model id or `provider/model` |
 | `GG_BASE_URL` | Override the endpoint base URL |
 | `GG_API_KEY` | API key, overriding every other key source |
-| `GG_MAX_TOKENS` | Max output tokens per request |
-| `GG_CONTEXT_WINDOW` | Context window size, in tokens |
 | `GG_BASH_TIMEOUT` | Maximum seconds for one bash call |
-| `GG_REASONING_EFFORT` | Reasoning effort (`low`, `medium`, `high`, `xhigh`, `none`; `""` clears) |
-| `GG_THINKING_BUDGET` | Cap thinking tokens per turn (`0` disables preset cap) |
-| `GG_COMPACT_THRESHOLD` | Auto-compaction token threshold (`0` disables preset threshold) |
 | `GG_MAX_TURNS` | Maximum turns per run (`0` disables) |
 | `GG_MAX_RETRIES` | Extra attempts per transient LLM failure (`0` disables) |
 | `GG_REQUEST_TIMEOUT` | Whole-request timeout in seconds, stream included |
@@ -110,6 +105,8 @@ Choose at the command line with `-P deepseek`, `-m deepseek-flash`, or `-m openc
 | `DEEPSEEK_API_KEY` | Key for `deepseek` |
 | `HOME` | Locates `~/.gg` and `~/.agents`; must be an absolute path |
 | `VISUAL`, `EDITOR` | External editor for `Ctrl+G` (`nano` otherwise) |
+
+Model-scoped settings (`max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`) are configured per provider or per model in `config.toml`. Use `--reasoning-effort`, `--thinking-budget`, and `/think` for one-off overrides.
 
 `gg` also reads `TMUX` to ask the terminal for extended keys.
 

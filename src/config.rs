@@ -3,7 +3,7 @@
 //! [`Config::apply_cli`] after [`load`].
 //!
 //! An invalid value is an error wherever it comes from — a typo'd
-//! `GG_MAX_TOKENS` or a string-typed `max_tokens` must fail loudly,
+//! `GG_MAX_TURNS` or a string-typed `max_tokens` must fail loudly,
 //! never silently fall back to a default that hides the mistake.
 
 pub mod providers;
@@ -19,12 +19,7 @@ pub use providers::{Endpoint, ProviderConfig};
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct EnvOverrides {
     base_url: Option<String>,
-    max_tokens: Option<u32>,
     api_key: Option<Option<String>>,
-    context_window: Option<u32>,
-    reasoning_effort: Option<Option<String>>,
-    reasoning_budget_tokens: Option<Option<u32>>,
-    compact_threshold_tokens: Option<Option<u32>>,
 }
 
 impl EnvOverrides {
@@ -32,25 +27,8 @@ impl EnvOverrides {
         if let Some(v) = &self.base_url {
             ep.base_url = v.clone();
         }
-        if let Some(v) = self.max_tokens {
-            ep.max_tokens = v;
-        }
         if let Some(v) = &self.api_key {
             ep.api_key = v.clone();
-        }
-        if let Some(v) = self.context_window {
-            ep.context_window = v;
-            ep.context_window_explicit = true;
-        }
-        if let Some(v) = &self.reasoning_effort {
-            ep.reasoning_effort = v.clone();
-        }
-        if let Some(v) = self.reasoning_budget_tokens {
-            ep.reasoning_budget_tokens = v;
-        }
-        if let Some(v) = self.compact_threshold_tokens {
-            ep.compact_threshold_tokens = v;
-            ep.compact_threshold_explicit = true;
         }
     }
 }
@@ -463,30 +441,8 @@ pub fn merge(
     if let Some(v) = env_value(env, "GG_BASE_URL") {
         env_overrides.base_url = Some(v);
     }
-    if let Some(raw) = env_value(env, "GG_MAX_TOKENS") {
-        env_overrides.max_tokens = Some(parse_env(Some(raw), "GG_MAX_TOKENS", ep.max_tokens)?);
-    }
     if let Some(v) = env_value(env, "GG_API_KEY") {
         env_overrides.api_key = Some((!v.is_empty()).then_some(v));
-    }
-    if let Some(raw) = env_value(env, "GG_CONTEXT_WINDOW") {
-        env_overrides.context_window = Some(parse_env(
-            Some(raw),
-            "GG_CONTEXT_WINDOW",
-            ep.context_window,
-        )?);
-    }
-    if let Some(v) = env_value(env, "GG_REASONING_EFFORT") {
-        let trimmed = v.trim();
-        env_overrides.reasoning_effort = Some((!trimmed.is_empty()).then(|| trimmed.to_string()));
-    }
-    if let Some(raw) = env_value(env, "GG_THINKING_BUDGET") {
-        let parsed: u32 = parse_env(Some(raw), "GG_THINKING_BUDGET", 0)?;
-        env_overrides.reasoning_budget_tokens = Some((parsed > 0).then_some(parsed));
-    }
-    if let Some(raw) = env_value(env, "GG_COMPACT_THRESHOLD") {
-        let parsed: u32 = parse_env(Some(raw), "GG_COMPACT_THRESHOLD", 0)?;
-        env_overrides.compact_threshold_tokens = Some((parsed > 0).then_some(parsed));
     }
     env_overrides.apply(&mut ep);
     let file_max_turns = project

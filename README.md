@@ -41,7 +41,7 @@ curl -s 127.0.0.1:8080/health
 
 ## Configuration
 
-Precedence: CLI flags > environment (`GG_PROVIDER`, `GG_BASE_URL`, `GG_MODEL`, `GG_API_KEY`, `GG_MAX_TOKENS`, `GG_CONTEXT_WINDOW`, `GG_BASH_TIMEOUT`, `GG_MAX_RETRIES`, `GG_REQUEST_TIMEOUT`, `GG_REASONING_EFFORT`, `GG_THINKING_BUDGET`, `GG_COMPACT_THRESHOLD`, `GG_MAX_TURNS`, `GG_DEBUG_PROMPT=1`, plus provider keys `ZHIPU_API_KEY`, `OPENCODE_API_KEY`, `DEEPSEEK_API_KEY`) > `.gg/config.toml` > `~/.gg/config.toml` > defaults.
+Precedence: CLI flags > environment (`GG_PROVIDER`, `GG_BASE_URL`, `GG_MODEL`, `GG_API_KEY`, `GG_BASH_TIMEOUT`, `GG_MAX_RETRIES`, `GG_REQUEST_TIMEOUT`, `GG_MAX_TURNS`, `GG_DEBUG_PROMPT=1`, plus provider keys `ZHIPU_API_KEY`, `OPENCODE_API_KEY`, `DEEPSEEK_API_KEY`) > `.gg/config.toml` > `~/.gg/config.toml` > defaults.
 
 ```toml
 # ~/.gg/config.toml

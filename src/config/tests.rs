@@ -59,11 +59,11 @@ fn env_overrides_files() {
         Config::default(),
         Some("model = \"user-model\"\n"),
         Some("model = \"project-model\"\nmax_tokens = 1024\n"),
-        &env(&[("GG_MODEL", "env-model"), ("GG_MAX_TOKENS", "2048")]),
+        &env(&[("GG_MODEL", "env-model"), ("GG_BASH_TIMEOUT", "2048")]),
     )
     .unwrap();
     assert_eq!(cfg.model, "env-model");
-    assert_eq!(cfg.max_tokens, 2048);
+    assert_eq!(cfg.bash_timeout_secs, 2048);
 }
 
 #[test]
@@ -88,12 +88,12 @@ fn invalid_env_value_names_the_var() {
         Config::default(),
         None,
         None,
-        &env(&[("GG_MAX_TOKENS", "lots")]),
+        &env(&[("GG_BASH_TIMEOUT", "lots")]),
     )
     .unwrap_err();
     let msg = format!("{err:#}");
     assert!(
-        msg.contains("GG_MAX_TOKENS"),
+        msg.contains("GG_BASH_TIMEOUT"),
         "message should name the var: {msg}"
     );
 }
@@ -531,38 +531,26 @@ fn strata_defaults_and_reasoning_controls_override_cleanly() {
     .unwrap();
     assert_eq!(cleared.reasoning_budget_tokens, None);
 
-    // Env overrides files and presets; empty effort or 0 budget clears them.
-    let env_set = merge(
+    // Model-scoped env vars are ignored by merge: preset values stay,
+    // per-model config and apply_reasoning_cli still work.
+    let env_ignored = merge(
         Config::default(),
         None,
         None,
         &env(&[
             ("GG_REASONING_EFFORT", "low"),
             ("GG_THINKING_BUDGET", "2048"),
+            ("GG_MAX_TOKENS", "2048"),
+            ("GG_CONTEXT_WINDOW", "262144"),
+            ("GG_COMPACT_THRESHOLD", "98304"),
         ]),
     )
     .unwrap();
-    assert_eq!(env_set.reasoning_effort.as_deref(), Some("low"));
-    assert_eq!(env_set.reasoning_budget_tokens, Some(2048));
-
-    let env_clear = merge(
-        Config::default(),
-        None,
-        None,
-        &env(&[("GG_REASONING_EFFORT", ""), ("GG_THINKING_BUDGET", "0")]),
-    )
-    .unwrap();
-    assert_eq!(env_clear.reasoning_effort, None);
-    assert_eq!(env_clear.reasoning_budget_tokens, None);
-
-    let err = merge(
-        Config::default(),
-        None,
-        None,
-        &env(&[("GG_THINKING_BUDGET", "nope")]),
-    )
-    .unwrap_err();
-    assert!(format!("{err:#}").contains("GG_THINKING_BUDGET"));
+    assert_eq!(env_ignored.reasoning_effort.as_deref(), Some("medium"));
+    assert_eq!(env_ignored.reasoning_budget_tokens, Some(4096));
+    assert_eq!(env_ignored.max_tokens, 16_384);
+    assert_eq!(env_ignored.context_window, 131_072);
+    assert_eq!(env_ignored.compact_threshold_tokens, Some(65_536));
 
     // CLI overrides even after provider switch.
     let mut switched = Config::default();
@@ -633,10 +621,9 @@ fn replay_reasoning_compact_threshold_max_turns_and_explicit_ctx() {
         Config::default(),
         None,
         None,
-        &env(&[("GG_COMPACT_THRESHOLD", "98304"), ("GG_MAX_TURNS", "40")]),
+        &env(&[("GG_MAX_TURNS", "40")]),
     )
     .unwrap();
-    assert_eq!(env_cfg.compact_threshold_tokens, Some(98_304));
     assert_eq!(env_cfg.max_turns, Some(40));
 
     let err = merge(
@@ -657,12 +644,7 @@ fn env_overrides_survive_apply_cli_and_resolve_switch() {
         None,
         &env(&[
             ("GG_BASE_URL", "http://127.0.0.1:9999/v1"),
-            ("GG_MAX_TOKENS", "4096"),
             ("GG_API_KEY", "env-key"),
-            ("GG_CONTEXT_WINDOW", "262144"),
-            ("GG_REASONING_EFFORT", "high"),
-            ("GG_THINKING_BUDGET", "1024"),
-            ("GG_COMPACT_THRESHOLD", "0"),
         ]),
     )
     .unwrap();
@@ -671,14 +653,13 @@ fn env_overrides_survive_apply_cli_and_resolve_switch() {
     assert_eq!(cfg.provider, "deepseek");
     assert_eq!(cfg.model, "deepseek-flash");
     assert_eq!(cfg.base_url, "http://127.0.0.1:9999/v1");
-    assert_eq!(cfg.max_tokens, 4096);
     assert_eq!(cfg.api_key.as_deref(), Some("env-key"));
-    assert_eq!(cfg.context_window, 262_144);
-    assert!(cfg.context_window_explicit);
-    assert_eq!(cfg.reasoning_effort.as_deref(), Some("high"));
-    assert_eq!(cfg.reasoning_budget_tokens, Some(1024));
+    // Model-scoped fields come from the target provider, not env vars.
+    assert_eq!(cfg.max_tokens, 16_384);
+    assert_eq!(cfg.context_window, 1_000_000);
+    assert_eq!(cfg.reasoning_effort, None);
+    assert_eq!(cfg.reasoning_budget_tokens, None);
     assert_eq!(cfg.compact_threshold_tokens, None);
-    assert!(cfg.compact_threshold_explicit);
 
     let switched = cfg
         .resolve_switch("opencode-go/deepseek-v4.1-flash")

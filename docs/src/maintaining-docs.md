@@ -8,7 +8,7 @@ Everything under [Reference](reference/cli.md) is rendered from the code: the cl
 
 ```sh
 ./scripts/sync-docs.sh                 # regenerate, verify, build the book if mdbook is installed
-UPDATE_DOCS=1 cargo test doc_sync      # just regenerate
+UPDATE_DOCS=1 cargo test doc_sync      # regenerate only
 ```
 
 A plain `cargo test` **fails** when a generated page is stale, with a message naming the page and the command above. A change to a flag, tool, provider or command cannot merge without its reference page.

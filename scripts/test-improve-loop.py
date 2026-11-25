@@ -7,6 +7,7 @@ Run with ``python3 scripts/test-improve-loop.py``.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -316,6 +317,128 @@ class CompareRunsTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 1)
             self.assertNotIn("unbound variable", proc.stderr)
             self.assertIn("working tree is dirty", proc.stderr)
+
+
+class LoopIntegrationTest(unittest.TestCase):
+    def test_multi_iteration_keep_advances_start_head(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            repo = tmp / "repo"
+            repo.mkdir()
+            work_dir = tmp / "work"
+            stub_bin = tmp / "bin"
+            stub_bin.mkdir()
+
+            def git(*args):
+                return subprocess.run(
+                    ["git", *args],
+                    cwd=repo,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+            git("init", "-b", "exp/test")
+            git("config", "user.name", "Test")
+            git("config", "user.email", "test@example.com")
+
+            (repo / ".gitignore").write_text("target/\n", encoding="utf-8")
+            (repo / "src").mkdir()
+            (repo / "src" / "dummy.txt").write_text("initial\n", encoding="utf-8")
+            scripts_dir = repo / "scripts"
+            scripts_dir.mkdir()
+            shutil.copy(SCRIPT, scripts_dir / "improve-loop.sh")
+
+            eval_sh = scripts_dir / "eval.sh"
+            eval_sh.write_text(
+                """#!/usr/bin/env bash
+# EVAL_ROOT
+set -euo pipefail
+mkdir -p "$EVAL_SESSIONS_DIR"
+state=$(cat "$EVAL_ROOT/src/dummy.txt" | tr -d '\\n')
+if [[ "$state" == "win1" ]]; then
+  passed=2
+elif [[ "$state" == "initial" ]]; then
+  passed=1
+else
+  passed=0
+fi
+printf '{"passed":%d,"total":2,"total_py_calls":0,"total_turns":2,"total_sum_prompt":100,"total_gen_tok":50,"results":[]}\\n' "$passed" >> "$EVAL_OUT"
+""",
+                encoding="utf-8",
+            )
+            eval_sh.chmod(0o755)
+            (scripts_dir / "session-digest.py").write_text(
+                "import sys\nsys.exit(0)\n", encoding="utf-8"
+            )
+
+            git("add", "-A")
+            git("commit", "-m", "initial")
+
+            gg_dir = repo / "target" / "debug"
+            gg_dir.mkdir(parents=True)
+            gg_stub = gg_dir / "gg"
+            counter_file = tmp / "gg_calls"
+            gg_stub.write_text(
+                f"""#!/usr/bin/env bash
+n=0
+if [[ -f "{counter_file}" ]]; then
+  n=$(cat "{counter_file}")
+fi
+n=$((n + 1))
+echo "$n" > "{counter_file}"
+if [[ "$n" -eq 1 ]]; then
+  printf 'win1\\n' > src/dummy.txt
+else
+  printf 'lose2\\n' > src/dummy.txt
+fi
+""",
+                encoding="utf-8",
+            )
+            gg_stub.chmod(0o755)
+
+            cargo_stub = stub_bin / "cargo"
+            cargo_stub.write_text(
+                """#!/usr/bin/env bash
+if [[ "${1:-}" == "test" ]]; then
+  echo "test result: ok. 1 passed; 0 failed"
+fi
+exit 0
+""",
+                encoding="utf-8",
+            )
+            cargo_stub.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{stub_bin}:{env.get('PATH', '')}"
+            env["GG_BIN"] = str(gg_stub)
+            proc = subprocess.run(
+                [
+                    "bash",
+                    str(scripts_dir / "improve-loop.sh"),
+                    "--iterations",
+                    "2",
+                    "--repetitions",
+                    "1",
+                    "--work-dir",
+                    str(work_dir),
+                ],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr + proc.stdout)
+
+            ledger = [
+                json.loads(line)
+                for line in (work_dir / "ledger.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertEqual([entry["outcome"] for entry in ledger], ["keep", "revert"])
+            rev_count = git("rev-list", "--count", "HEAD").stdout.strip()
+            self.assertEqual(rev_count, "2")
+            self.assertEqual((repo / "src" / "dummy.txt").read_text(encoding="utf-8"), "win1\n")
 
 
 if __name__ == "__main__":

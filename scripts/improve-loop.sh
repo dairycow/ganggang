@@ -828,6 +828,10 @@ for ((iter = 1; iter <= ITERATIONS; iter++)); do
     SUMMARY=$(extract_summary "$SESSION_FILE")
     git -C "$ROOT" add -A
     git -C "$ROOT" commit -m "improve: iteration $iter (${SUMMARY:-no summary})"
+    # Advance START_HEAD so subsequent iterations diff, check editor_escaped, and
+    # revert against this kept commit. EVAL_SCRIPT stays pinned to the initial
+    # pristine commit because prepare_harness skips extraction once it exists.
+    START_HEAD=$(git -C "$ROOT" rev-parse HEAD)
     rm -rf "$BASE_SESSIONS" && cp -R "$CAND_SESSIONS" "$BASE_SESSIONS"
     rm -f "$DIGEST"
     cp "$CAND_EVAL" "$BASELINE"

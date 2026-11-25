@@ -41,16 +41,16 @@ fn preamble(tools: &[&str]) -> String {
         if has("read") {
             match (has("outline"), has("grep")) {
                 (true, true) => line.push_str(
-                    " For files over ~200 lines, start with outline or grep (`files_only: true` for broad searches), then targeted read(offset, limit).",
+                    " For files over ~200 lines, start with outline or grep (`files_only: true` for broad searches), then read only the line ranges you need with targeted read(offset, limit); never page through a whole file or re-read lines already in context.",
                 ),
                 (true, false) => line.push_str(
-                    " For files over ~200 lines, start with outline, then targeted read(offset, limit).",
+                    " For files over ~200 lines, start with outline, then read only the line ranges you need with targeted read(offset, limit); never page through a whole file or re-read lines already in context.",
                 ),
                 (false, true) => line.push_str(
-                    " For files over ~200 lines, start with grep (`files_only: true` for broad searches), then targeted read(offset, limit).",
+                    " For files over ~200 lines, start with grep (`files_only: true` for broad searches), then read only the line ranges you need with targeted read(offset, limit); never page through a whole file or re-read lines already in context.",
                 ),
                 (false, false) => line.push_str(
-                    " Prefer targeted read(offset, limit) over full-file reads.",
+                    " Prefer targeted read(offset, limit) over full-file reads; never re-read lines already in context.",
                 ),
             }
         } else if has("grep") {
