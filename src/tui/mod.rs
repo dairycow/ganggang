@@ -17,6 +17,7 @@ pub mod keys;
 pub mod layout;
 pub mod line;
 pub mod mentions;
+pub mod models;
 pub mod reader;
 pub mod shell;
 pub mod suggest;
@@ -188,6 +189,9 @@ pub async fn run(
     let (mut input_tx, input_rx) = mpsc::channel::<AgentInput>(16);
     let (ui_tx, mut ui_rx) = mpsc::channel::<UiEvent>(256);
     tokio::spawn(agent_task(boot.agent, input_rx, ui_tx.clone()));
+    // The `/model` popup's rows refresh in the background: the local
+    // servers' `/v1/models` probes arrive as UiEvent::ModelsDiscovered.
+    models::spawn_model_discovery(config.providers.clone(), ui_tx.clone());
     let mut keys = KeyReader::spawn();
     // Ctrl+G sessions report here. The loop keeps its sender, so the
     // channel only ever speaks when an editor session ended.

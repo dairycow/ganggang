@@ -17,6 +17,8 @@ pub(super) async fn handle_model(choice: Option<String>, ctx: CmdCtx<'_>) -> any
                 crate::llm::discovery::discover_local_providers(&config.providers).await;
             let rows =
                 crate::config::providers::catalog_with_discovered(&config.providers, &discovered);
+            // Keep the `/model` popup in sync with this listing.
+            state.set_models(std::sync::Arc::new(rows.iter().map(Into::into).collect()));
             state.pending_models = rows
                 .iter()
                 .map(|r| (r.provider.clone(), r.model.clone()))

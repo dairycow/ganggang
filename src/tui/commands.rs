@@ -159,6 +159,9 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
             // The agent task re-runs discovery and reports back as
             // UiEvent::Reloaded; the view swaps its skill set there.
             input_tx.send(super::AgentInput::Reload).await?;
+            // The `/model` popup's rows refresh in the background from
+            // the local servers' `/v1/models` probes.
+            super::models::spawn_model_discovery(config.providers.clone(), ui_tx.clone());
         }
         Command::Quit => return Ok(true),
         Command::Hooks => {

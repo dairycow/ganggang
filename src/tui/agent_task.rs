@@ -58,6 +58,10 @@ pub enum UiEvent {
         skills: Arc<Vec<crate::agent::skills::Skill>>,
         warnings: Vec<String>,
     },
+    /// A background local-models probe finished: the refreshed rows for
+    /// the `/model` popup, replacing the catalog seed (and any earlier
+    /// discovery result).
+    ModelsDiscovered(Vec<super::suggest::ModelChoice>),
 }
 
 /// What the UI asks the agent task to do. A plain prompt runs; anything
@@ -270,6 +274,9 @@ pub(super) async fn apply(
             for warning in warnings {
                 state.push_warning(&warning);
             }
+        }
+        UiEvent::ModelsDiscovered(models) => {
+            state.set_models(std::sync::Arc::new(models));
         }
         UiEvent::ShellDone {
             command,

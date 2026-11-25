@@ -63,11 +63,11 @@ Assistant answers render a deliberately small markdown subset; your own messages
 
 Typing `/` opens a suggestion list above the composer: the built-ins and, once `/skill:` is typed, one row per skill. `↑`/`↓` move the highlight, `Tab` completes, and `Enter` still sends exactly what you typed.
 
-Typing `/model` lists the models in the same popup: the built-in row first, then one row per model with its context window, any discovery status, whether a key is missing, and the `· active` mark on the model in use. Typing after the space filters the list case-insensitively, and `Tab` completes the highlighted `provider/model` into the command.
+Typing `/model` lists the models in the same popup: the built-in row first, then one row per model with its context window, any discovery status, whether a key is missing, and the `· active` mark on the model in use. Typing after the space filters the list case-insensitively, and `Tab` completes the highlighted `provider/model` into the command. Live local models (Strata, `llama-server`, Ollama, vLLM) refresh in the background at startup and on `/reload`: their `/v1/models` endpoints are probed off the render loop with short timeouts, so the popup picks up models loaded after the session began without waiting on a down server.
 
 `/think` shows or sets the active OpenAI-compatible model's thinking configuration: with no argument it reports the current setting; a bare word sets the effort; a bare number sets the budget in tokens (0 clears it); `effort budget` sets both; `off` or `none` sets effort to `none` and clears the budget; `default` or `clear` reverts both to provider defaults.
 
-`/reload` re-discovers `AGENTS.md` files and skills from disk: the next system prompt picks up new files and skills, and the `/skill:` rows refresh. The session's entries and identity are kept (see [Reloading context and skills](context-and-skills.md#reloading-context-and-skills)).
+`/reload` re-discovers `AGENTS.md` files and skills from disk: the next system prompt picks up new files and skills, the `/skill:` rows refresh, and the local servers' `/v1/models` probes run again in the background. The session's entries and identity are kept (see [Reloading context and skills](context-and-skills.md#reloading-context-and-skills)).
 
 The command list is in [TUI slash commands](../reference/commands.md). Unknown commands are rejected with the valid set.
 
