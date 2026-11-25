@@ -541,3 +541,94 @@ fn session_files_are_created_and_reopened_with_0600_permissions() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn streaming_read_header_extracts_cwd_preview_and_latest_title_past_corrupt_tail() {
+    let root = tmp_root("scan");
+    let dir = root.join("scan");
+    std::fs::create_dir_all(&dir).unwrap();
+    // e1 is a synthetic abort marker (skipped), e2 is the first real user
+    // message: 100 chars, so the preview must collapse and truncate.
+    let long = "w".repeat(100);
+    let raw = format!(
+        "{{\"type\":\"session\",\"version\":1,\"id\":\"aaaa1111-0000\",\"timestamp\":\"t\",\"cwd\":\"/proj/scan\",\"model\":\"m\"}}\n\
+         {{\"type\":\"message\",\"id\":\"e1\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{{\"role\":\"user\",\"content\":\"[aborted by user]\"}}}}\n\
+         {{\"type\":\"message\",\"id\":\"e2\",\"parentId\":\"e1\",\"timestamp\":\"t\",\"message\":{{\"role\":\"user\",\"content\":\"{long}\"}}}}\n\
+         {{\"type\":\"title\",\"title\":\"first\"}}\n\
+         {{\"type\":\"title\",\"title\":\"latest\"}}\n\
+         {{\"type\":\"mess\n"
+    );
+    let path = dir.join("20260101-0900-aaaa1111.jsonl");
+    std::fs::write(&path, raw).unwrap();
+
+    let (sessions, warnings) = list_sessions(&dir);
+    assert!(
+        warnings.is_empty(),
+        "a torn tail must not warn in a listing: {warnings:?}"
+    );
+    assert_eq!(sessions.len(), 1);
+    let session = &sessions[0];
+    assert_eq!(session.id, "aaaa1111-0000");
+    assert_eq!(session.cwd, "/proj/scan");
+    assert_eq!(
+        session.preview.as_deref(),
+        Some(format!("{}…", "w".repeat(80)).as_str()),
+        "whitespace-collapsed, truncated to 80 chars with …"
+    );
+    assert_eq!(
+        session.title.as_deref(),
+        Some("latest"),
+        "the last title line wins"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn list_all_sessions_merges_cwd_subdirectories_newest_first() {
+    let root = tmp_root("list-all");
+    let header = |id: &str, cwd: &str| {
+        format!(
+            "{{\"type\":\"session\",\"version\":1,\"id\":\"{id}\",\"timestamp\":\"t\",\"cwd\":\"{cwd}\",\"model\":\"m\"}}\n"
+        )
+    };
+    std::fs::create_dir_all(root.join("-proj-a")).unwrap();
+    std::fs::create_dir_all(root.join("-proj-b")).unwrap();
+    std::fs::write(
+        root.join("-proj-a").join("20260101-0900-aaaa1111.jsonl"),
+        header("aaaa1111-0000", "/proj/a"),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("-proj-a").join("20260102-0900-bbbb2222.jsonl"),
+        header("bbbb2222-0000", "/proj/a"),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("-proj-b").join("20260103-0900-cccc3333.jsonl"),
+        header("cccc3333-0000", "/proj/b"),
+    )
+    .unwrap();
+    // A stray file at the root level is not a cwd directory: ignored.
+    std::fs::write(
+        root.join("loose.jsonl"),
+        header("dddd4444-0000", "/proj/none"),
+    )
+    .unwrap();
+
+    let (sessions, warnings) = list_all_sessions(&root);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        sessions.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+        vec!["cccc3333-0000", "bbbb2222-0000", "aaaa1111-0000"],
+        "merged across cwd slugs, newest first"
+    );
+    assert_eq!(sessions[0].cwd, "/proj/b");
+    assert_eq!(sessions[1].cwd, "/proj/a");
+
+    // A missing root is empty, not an error.
+    let (none, none_warnings) = list_all_sessions(&root.join("no-such-root"));
+    assert!(none.is_empty() && none_warnings.is_empty());
+
+    let _ = std::fs::remove_dir_all(&root);
+}

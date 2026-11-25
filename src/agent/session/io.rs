@@ -1,9 +1,14 @@
 //! Session file I/O (spec §13): append-only JSONL under
 //! `~/.gg/sessions/<path-slug>/`, one line per entry, flushed per append.
-//!
 //! Crash safety comes from the append-only shape: a torn trailing line is
-//! skipped with a warning on load, never repaired in place. The raw file is
-//! the source of truth — replay is `load` + [`super::to_wire`].
+//! skipped with a warning on load, never repaired in place. The raw file
+//! is the source of truth — replay is `load` + [`super::to_wire`].
+//!
+//! Listing and resume discovery live in [`list`]; resume-time repairs in
+//! [`repair`]; both are re-exported so callers need zero changes.
+
+pub mod list;
+pub mod repair;
 
 use std::io::Write;
 #[cfg(unix)]
@@ -14,9 +19,19 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use super::Entry;
+use list::{file_stamp, slug};
+use repair::repair_missing_trailing_newline;
 
-/// The first line of a session file. `kind` is always `"session"`; it is
-/// validated on load so a stray entry-line file cannot pose as a session.
+/// Re-export the listing and repair APIs so callers need zero changes.
+#[allow(unused_imports)] // `list_all_sessions` is exported for future callers
+pub use list::{
+    SessionFile, latest_in, list_all_sessions, list_sessions, resolve_prefix, sessions_dir,
+    sessions_root,
+};
+pub use repair::repair_dangling_tool_calls;
+
+/// The first line of a session file; `kind` is validated on load so a stray
+/// entry-line file cannot pose as a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionHeader {
     #[serde(rename = "type")]
@@ -46,8 +61,8 @@ impl SessionHeader {
 /// being written.
 ///
 /// A NEW store is lazy: the file (and its directory) materializes on the
-/// first append. Launch-and-quit must not litter header-only files that
-/// then outrank real sessions in `-c`'s newest-first listing.
+/// first append, so launch-and-quit does not litter header-only files that
+/// would outrank real sessions in `-c`'s newest-first listing.
 pub struct SessionStore {
     path: PathBuf,
     id: String,
@@ -231,246 +246,15 @@ impl SessionStore {
 }
 
 /// Tighten session files to `0o600` on Unix so tool output (which may
-/// capture config files or secrets) is never world-readable.
-#[cfg(unix)]
-fn tighten(path: &Path) {
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-}
-
-#[cfg(not(unix))]
-fn tighten(_path: &Path) {}
-
-/// A crash between a line's text and its newline leaves the file without a
-/// trailing `\n`. Append it back through append-mode (which writes at the
-/// end regardless of any stored offset) so the torn entry stays its own
-/// line instead of concatenating with the next append.
-fn repair_missing_trailing_newline(path: &Path) -> anyhow::Result<()> {
-    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    if matches!(bytes.last(), None | Some(b'\n')) {
-        return Ok(());
-    }
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
-        .open(path)
-        .with_context(|| format!("opening {} for repair", path.display()))?;
-    file.write_all(b"\n")
-        .and_then(|()| file.flush())
-        .with_context(|| format!("repairing {}", path.display()))
-}
-
-/// Resume repair (§8: a tool_call is never replayed without its result):
-/// assistant calls whose results never landed — a kill -9 or Ctrl+C
-/// mid-batch — get synthesized `is_error` results, appended through the
-/// store so disk and memory agree. Returns how many were synthesized.
-pub fn repair_dangling_tool_calls(
-    entries: &mut Vec<Entry>,
-    store: &mut SessionStore,
-) -> anyhow::Result<usize> {
-    let answered: Vec<String> = entries
-        .iter()
-        .filter_map(|entry| match entry {
-            Entry::Message { message, .. } if message.role == super::Role::ToolResult => {
-                message.tool_call_id.clone()
-            }
-            _ => None,
-        })
-        .collect();
-    let dangling: Vec<String> = entries
-        .iter()
-        .filter_map(|entry| match entry {
-            Entry::Message { message, .. } if message.role == super::Role::Assistant => {
-                Some(message.tool_calls.iter().map(|c| c.id.clone()))
-            }
-            _ => None,
-        })
-        .flatten()
-        .filter(|id| !answered.contains(id))
-        .collect();
-
-    let repaired = dangling.len();
-    for id in dangling {
-        // One Entry, one id: appended to disk, then recorded in memory.
-        let entry = Entry::Message {
-            id: super::new_entry_id(),
-            parent_id: entries.last().map(super::last_entry_id),
-            timestamp: super::now_iso(),
-            message: super::Message {
-                role: super::Role::ToolResult,
-                content: Some("aborted before execution".into()),
-                tool_calls: Vec::new(),
-                tool_call_id: Some(id),
-                usage: None,
-                is_error: true,
-                reasoning: None,
-            },
-        };
-        store.append(&entry)?;
-        entries.push(entry);
-    }
-    Ok(repaired)
-}
-
-/// `~/.gg/sessions/<path-slug>` — where a cwd's sessions live. None
-/// without HOME (no home, no sessions).
-pub fn sessions_dir(cwd: &Path) -> Option<PathBuf> {
-    sessions_root().map(|root| root.join(slug(cwd)))
-}
-
-/// `~/.gg/sessions` — the tree root only; [`SessionStore::create_under`]
-/// adds the per-cwd slug itself.
-pub fn sessions_root() -> Option<PathBuf> {
-    crate::home::dir().map(|home| home.join(".gg").join("sessions"))
-}
-
-/// Filesystem-safe encoding of the cwd: `/` → `-`.
-fn slug(cwd: &Path) -> String {
-    cwd.display().to_string().replace('/', "-")
-}
-
-/// `YYYYMMDD-HHMMSS` in UTC. Second precision keeps two sessions started
-/// within a minute sortable by name; within one second, the listing
-/// falls back to mtime (still deterministic in practice).
-fn file_stamp() -> String {
-    let now = time::OffsetDateTime::now_utc();
-    format!(
-        "{:04}{:02}{:02}-{:02}{:02}{:02}",
-        now.year(),
-        u8::from(now.month()),
-        now.day(),
-        now.hour(),
-        now.minute(),
-        now.second()
-    )
-}
-
-/// One resumable session as the CLI sees it.
-#[derive(Debug, Clone)]
-pub struct SessionFile {
-    pub id: String,
-    pub timestamp: String,
-    pub model: String,
-    pub path: PathBuf,
-}
-
-/// All sessions stored under `dir`, newest first. Order: conversations
-/// before header-only files (a `--watch` run materializes its file before
-/// the first message; such a file must not outrank a real conversation in
-/// `-c` or the `/resume` list, yet it stays resolvable by `--resume <id>`),
-/// then filename stamp (descending — it encodes the start time), then mtime
-/// for ties, then the name for full determinism. Files whose header cannot
-/// be read are skipped with a warning — a session that cannot even present
-/// a header is not resumable, but it must not hide the rest either.
-pub fn list_sessions(dir: &Path) -> (Vec<SessionFile>, Vec<String>) {
-    let mut sessions = Vec::new();
-    let mut warnings = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return (sessions, warnings); // no dir yet: no sessions, that is normal
-    };
-    let paths: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
-        .collect();
-    let stamp_of = |p: &Path| -> String {
-        p.file_stem()
-            .and_then(|s| s.to_str())
-            .and_then(|s| s.rsplit_once('-'))
-            .map(|(stamp, _)| stamp.to_string())
-            .unwrap_or_default()
-    };
-    let modified = |p: &Path| -> Option<std::time::SystemTime> {
-        std::fs::metadata(p).and_then(|m| m.modified()).ok()
-    };
-    let mut found: Vec<(SessionFile, bool)> = Vec::new();
-    for path in paths {
-        match read_header(&path) {
-            Ok((header, has_entries)) => found.push((
-                SessionFile {
-                    id: header.id,
-                    timestamp: header.timestamp,
-                    model: header.model,
-                    path,
-                },
-                has_entries,
-            )),
-            Err(e) => warnings.push(format!("skipping session file: {e}")),
-        }
-    }
-    found.sort_by(|(a, a_has), (b, b_has)| {
-        b_has
-            .cmp(a_has)
-            .then_with(|| stamp_of(&b.path).cmp(&stamp_of(&a.path)))
-            .then_with(|| modified(&b.path).cmp(&modified(&a.path)))
-            .then_with(|| b.path.file_name().cmp(&a.path.file_name()))
-    });
-    sessions.extend(found.into_iter().map(|(session, _)| session));
-    (sessions, warnings)
-}
-
-/// Parse just the first line of a session file, and report whether any
-/// entry follows it.
-fn read_header(path: &Path) -> anyhow::Result<(SessionHeader, bool)> {
-    let text =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut lines = text.lines();
-    let first = lines
-        .next()
-        .with_context(|| format!("{} is empty", path.display()))?;
-    let header: SessionHeader =
-        serde_json::from_str(first).with_context(|| format!("{}: bad header", path.display()))?;
-    if header.kind != "session" || header.version != 1 {
-        anyhow::bail!("{}: not a version-1 session file", path.display());
-    }
-    let has_entries = lines.any(|line| !line.trim().is_empty());
-    Ok((header, has_entries))
-}
-
-/// Newest session in an explicit dir (the `-c` rule). Callers resolve the
-/// dir via [`sessions_dir`].
-pub fn latest_in(dir: &Path) -> Option<SessionFile> {
-    let (sessions, _) = list_sessions(dir);
-    sessions.into_iter().next()
-}
-
-/// The 8-hex id embedded in a session file's name — the handle users
-/// actually see in paths and the `session:` line.
-fn file_stem_id(session: &SessionFile) -> &str {
-    session
-        .path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .and_then(|stem| stem.rsplit_once('-'))
-        .map(|(_, id)| id)
-        .unwrap_or("")
-}
-
-/// Resolve `--resume <id-or-prefix>` over an explicit listing: the prefix
-/// may match the session's uuid id or the 8-hex id in its filename. Zero
-/// or several matches are errors — several LIST the candidates so the user
-/// can disambiguate.
-pub fn resolve_prefix(sessions: &[SessionFile], prefix: &str) -> anyhow::Result<SessionFile> {
-    let matches: Vec<&SessionFile> = sessions
-        .iter()
-        .filter(|s| s.id.starts_with(prefix) || file_stem_id(s).starts_with(prefix))
-        .collect();
-    match matches.as_slice() {
-        [one] => Ok((*one).clone()),
-        [] => anyhow::bail!("no session matches {prefix:?}"),
-        many => anyhow::bail!(
-            "ambiguous session prefix {prefix:?}: matches {}",
-            many.iter()
-                .map(|s| s.id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    }
+/// capture secrets) is never world-readable.
+fn tighten(_path: &Path) {
+    #[cfg(unix)]
+    let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o600));
 }
 
 /// Read a session file back: header, entries, and a warning per corrupt
-/// line. A corrupt line anywhere is skipped, not fatal — a torn tail is the
-/// crash case §13 designs for, and mid-file corruption has no better
-/// recovery either. A missing or wrong header IS fatal: without it there is
-/// no version guarantee about the lines below.
+/// line. Corrupt lines are skipped, not fatal (a torn tail is the crash
+/// case §13 designs for); a missing or wrong header IS fatal.
 pub fn load(path: &Path) -> anyhow::Result<(SessionHeader, Vec<Entry>, Vec<String>)> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("reading session {}", path.display()))?;
