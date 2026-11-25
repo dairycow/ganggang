@@ -58,7 +58,7 @@ wait_for() { # wait_for <seconds> <description> <shell test...>
 }
 
 has_watch_footer() { pane | grep -q 'watch debug'; } # the stable prefix: a long pane path truncates the phrase
-has_ready_footer() { pane | grep -q 'rebuild ready · Ctrl+R'; }
+has_ready_footer() { pane | grep -q 'rebuild ready'; } # the stable prefix: a long pane path truncates the phrase
 has_draft() { pane | grep -q 'DRAFT-OK'; }
 restarted_once() { [ "$(restarts)" -ge 1 ]; }
 restarted_twice() { [ "$(restarts)" -ge 2 ]; }
