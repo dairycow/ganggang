@@ -4,7 +4,9 @@ A small agentic harness in Rust (`gg`). `TASKS.md` tracks the build.
 
 ## Before every commit
 
-Commits are gated by `.githooks/pre-commit`, which runs `scripts/pre-commit-check.sh` (format check, clippy, tests). Enable it once per clone with `git config core.hooksPath .githooks`, run the gate before committing, and never pass `--no-verify`.
+Gate: `.githooks/pre-commit` (runs `scripts/pre-commit-check.sh`: format, clippy, tests). Enable per clone: `git config core.hooksPath .githooks`; never `--no-verify`.
+
+Pitfall: the `bash` tool clamps `timeout_secs` to `bash_timeout_secs` (default 30 s), so `cargo test`, `cargo publish`, `git rebase --exec` and `scripts/improve-loop.sh` get killed at 30 s; raise `bash_timeout_secs` in `~/.gg/config.toml` for build/release work and run `cargo publish` in the background.
 
 Style: standard OSS Rust, `//!`/`///` docs, no `unwrap` outside tests, modules ≲300 lines.
 
