@@ -15,6 +15,7 @@ Generated from the command catalogue that drives the `/` suggestion popup.
 | `/hooks` |  | list loaded hooks |
 | `/skill:` | &lt;name> [args] | run a skill now |
 | `/model` | [provider/model] | list or switch provider and model |
+| `/think` | [effort\|off\|default] [budget] | show or set thinking effort and budget |
 | `/quit` |  | exit |
 
 `/exit` is a hidden alias for `/quit`, and `!cmd` / `!!cmd` run a shell line (see [Interactive TUI](../guide/tui.md)).

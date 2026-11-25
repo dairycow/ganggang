@@ -63,6 +63,8 @@ Assistant answers render a deliberately small markdown subset; your own messages
 
 Typing `/` opens a suggestion list above the composer: the built-ins and, once `/skill:` is typed, one row per skill. `↑`/`↓` move the highlight, `Tab` completes, and `Enter` still sends exactly what you typed.
 
+`/think` shows or sets the active OpenAI-compatible model's thinking configuration: with no argument it reports the current setting; a bare word sets the effort; a bare number sets the budget in tokens (0 clears it); `effort budget` sets both; `off` or `none` sets effort to `none` and clears the budget; `default` or `clear` reverts both to provider defaults.
+
 The command list is in [TUI slash commands](../reference/commands.md). Unknown commands are rejected with the valid set.
 
 ## Shell lines: `!` and `!!`

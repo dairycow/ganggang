@@ -37,6 +37,7 @@ fn a_bare_slash_lists_the_whole_builtin_set() {
             "/hooks",
             "/skill:<name> [args]",
             "/model [provider/model]",
+            "/think [effort|off|default] [budget]",
             "/quit",
         ],
         "catalog order, /exit stays hidden"
