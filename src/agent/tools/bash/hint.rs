@@ -319,12 +319,14 @@ fn hint_for(cmd: &str, args: &[String], segment: &str, heredoc_body: &str) -> Op
 }
 
 /// The nudge for a command that duplicates a native tool, or `None` for a
-/// normal shell command. A tool hint outranks a redundant `cd`.
-pub(super) fn workaround_hint(command: &str, cwd: &Path) -> Option<&'static str> {
+/// normal shell command. Collects every distinct tool hint across segments
+/// in order; a tool hint outranks a redundant `cd`.
+pub(super) fn workaround_hint(command: &str, cwd: &Path) -> Option<String> {
     let cwd_str = cwd.to_string_lossy();
     let cwd_dir = cwd_str.trim_end_matches('/');
     let mut redundant_cd = false;
     let mut dir_changed = false;
+    let mut hints: Vec<&'static str> = Vec::new();
     for (line, heredoc_body) in join_line_continuations(strip_comments_and_heredocs(command)) {
         for segment in segments(&line) {
             let words = words(segment);
@@ -350,13 +352,18 @@ pub(super) fn workaround_hint(command: &str, cwd: &Path) -> Option<&'static str>
                 continue;
             }
             let base = cmd.rsplit('/').next().unwrap_or(cmd);
-            if let Some(hint) = hint_for(base, &words[at + 1..], segment, &heredoc_body) {
-                return Some(hint);
+            if let Some(hint) = hint_for(base, &words[at + 1..], segment, &heredoc_body)
+                && !hints.contains(&hint)
+            {
+                hints.push(hint);
             }
         }
     }
+    if !hints.is_empty() {
+        return Some(hints.join("; "));
+    }
     if redundant_cd {
-        return Some(CD_HINT);
+        return Some(CD_HINT.to_string());
     }
     None
 }

@@ -319,11 +319,22 @@ fn workaround_hint_names_the_native_tool() {
     ];
     for (command, expected) in hinted {
         assert_eq!(
-            hint::workaround_hint(command, cwd),
+            hint::workaround_hint(command, cwd).as_deref(),
             Some(expected),
             "{command}"
         );
     }
+    assert_eq!(
+        hint::workaround_hint("ls -la ~/.gg; cat ~/.gg/config.toml", cwd).as_deref(),
+        Some(
+            "use native ls or find instead of bash; \
+             use native read (supports offset/limit and negative offset), outline or edit instead of bash"
+        )
+    );
+    assert_eq!(
+        hint::workaround_hint("cat a; cat b", cwd).as_deref(),
+        Some(READ)
+    );
 }
 
 /// Normal commands, and pipelines whose tail is a coreutils tool, are left
@@ -356,7 +367,7 @@ fn workaround_hint_reads_python_heredoc_bodies() {
     let cwd = Path::new("/work/dir");
     let command = "python3 - <<'PY'\nfrom pathlib import Path\nPath('a.txt').write_text('x')\nPY\n";
     assert_eq!(
-        hint::workaround_hint(command, cwd),
+        hint::workaround_hint(command, cwd).as_deref(),
         Some("use native read, edit or write instead of inline python in bash"),
         "{command}"
     );
@@ -374,7 +385,7 @@ fn workaround_hint_separates_inline_perl_edits_from_ordinary_perl() {
     ];
     for command in hinted {
         assert_eq!(
-            hint::workaround_hint(command, cwd),
+            hint::workaround_hint(command, cwd).as_deref(),
             Some("use native edit (supports replace_all: true) instead of inline perl in bash"),
             "{command}"
         );
