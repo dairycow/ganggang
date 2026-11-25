@@ -69,7 +69,7 @@ Never alter code identifiers, TOML keys, CLI flags, environment variables (`COLO
 
 - **`README.md`:** short project overview, installation, quick usage, and a link to the published guide. Do not duplicate the full user guide in `README.md`.
 - **`docs/src/guide/`:** topic-oriented manual. Use sentence-case headings (`Interactive TUI`, `Watch mode`, `Truncated responses`) and direct table headers (`Key | Action`, `Command | Description`, `Variable | Effect`).
-- **`docs/src/reference/`:** generated from Rust code via `./scripts/sync-docs.sh`. Never edit these files by hand. To fix prose in generated reference pages, edit the source strings (`src/main.rs`, `src/agent/tools/*.rs`, `src/tui/suggest.rs`, `src/doc_sync/generate.rs`) and run `./scripts/sync-docs.sh`.
+- **`docs/src/reference/`:** generated from Rust code via `./scripts/sync-docs.sh` from the repository root. Never edit these files by hand. To fix prose in generated reference pages, edit the source strings (`src/main.rs`, `src/agent/tools/*.rs`, `src/tui/suggest.rs`, `src/doc_sync/generate.rs`) and run `./scripts/sync-docs.sh`.
 
 ### Preserve `src/doc_sync/contracts.rs` invariants
 
@@ -84,7 +84,7 @@ When editing documentation, keep these automated checks passing:
 
 ## Verification workflow
 
-Run these checks after editing documentation:
+Run these checks from the repository root after editing documentation:
 
 ```sh
 grep -rn "—" docs/src/ README.md || true
