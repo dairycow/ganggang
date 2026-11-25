@@ -4,7 +4,7 @@
 //! put back as it was found once a program the terminal was lent to is done
 //! ([`lend`], [`reclaim`], [`settle`]).
 
-use std::io::stdout;
+use std::io::{IsTerminal as _, stdout};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
@@ -136,6 +136,9 @@ fn put_tty_back() -> Option<String> {
 /// terminal, not the tty: nothing undoes them for a program that dies, and
 /// gg's own exit only undoes its own. No-ops after a clean exit.
 pub fn reset_modes() -> anyhow::Result<()> {
+    if !stdout().is_terminal() {
+        return Ok(());
+    }
     execute!(
         stdout(),
         DisableMouseCapture,
