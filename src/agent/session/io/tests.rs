@@ -515,3 +515,29 @@ fn create_at_handles_missing_and_empty_files_and_refuses_non_empty() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[cfg(unix)]
+#[test]
+fn session_files_are_created_and_reopened_with_0600_permissions() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = tmp_root("perms");
+    let cwd = Path::new("/proj/perms");
+    let mut store = SessionStore::create_under(&root, cwd, "m").unwrap();
+    store
+        .append(&entry_message(Some("hello"), vec![], None, false))
+        .unwrap();
+    let path = store.path().to_path_buf();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "newly created session file must be 0600");
+
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let _reopened = SessionStore::open_existing(&path).unwrap();
+    let mode_after = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode_after, 0o600,
+        "reopened session file must be tightened to 0600"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -6,6 +6,8 @@
 //! the source of truth — replay is `load` + [`super::to_wire`].
 
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -125,6 +127,7 @@ impl SessionStore {
             .append(true)
             .open(path)
             .with_context(|| format!("opening {}", path.display()))?;
+        tighten(path);
         Ok(Self {
             path: path.to_path_buf(),
             id: header.id,
@@ -194,6 +197,8 @@ impl SessionStore {
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
         let mut opts = std::fs::OpenOptions::new();
+        #[cfg(unix)]
+        opts.mode(0o600);
         opts.append(true);
         if self.allow_empty_existing {
             opts.create(true);
@@ -203,6 +208,7 @@ impl SessionStore {
         let mut file = opts
             .open(&self.path)
             .with_context(|| format!("creating {}", self.path.display()))?;
+        tighten(&self.path);
         if self.allow_empty_existing
             && file
                 .metadata()
@@ -223,6 +229,16 @@ impl SessionStore {
         Ok(())
     }
 }
+
+/// Tighten session files to `0o600` on Unix so tool output (which may
+/// capture config files or secrets) is never world-readable.
+#[cfg(unix)]
+fn tighten(path: &Path) {
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn tighten(_path: &Path) {}
 
 /// A crash between a line's text and its newline leaves the file without a
 /// trailing `\n`. Append it back through append-mode (which writes at the

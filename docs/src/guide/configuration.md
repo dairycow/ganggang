@@ -121,5 +121,5 @@ Choose at the command line with `-P deepseek`, `-m deepseek-flash`, or `-m openc
 | `~/.gg/hooks.toml` | [Hooks](hooks.md) (user level only) |
 | `~/.gg/AGENTS.md`, `AGENTS.md` | [Context files](context-and-skills.md#agentsmd) |
 | `~/.agents/skills/`, `.agents/skills/` | [Skills](context-and-skills.md#skills) |
-| `~/.gg/sessions/` | [Sessions](sessions-compaction.md) |
+| `~/.gg/sessions/` | [Sessions](sessions-compaction.md), mode `0600` |
 | `~/.gg/history.jsonl` | [Prompt history](tui.md#prompt-history); written by the TUI, mode `0600` |
