@@ -57,7 +57,7 @@ wait_for() { # wait_for <seconds> <description> <shell test...>
     fail "timed out waiting for $what"
 }
 
-has_watch_footer() { pane | grep -q 'watch debug · watching'; }
+has_watch_footer() { pane | grep -q 'watch debug'; } # the stable prefix: a long pane path truncates the phrase
 has_ready_footer() { pane | grep -q 'rebuild ready · Ctrl+R'; }
 has_draft() { pane | grep -q 'DRAFT-OK'; }
 restarted_once() { [ "$(restarts)" -ge 1 ]; }

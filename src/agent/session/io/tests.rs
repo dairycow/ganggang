@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use super::super::{Entry, Message, Role, ToolCall};
+use super::list::list_all_sessions;
 use super::*;
 
 fn tmp_root(tag: &str) -> PathBuf {

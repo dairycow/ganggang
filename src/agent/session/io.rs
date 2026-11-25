@@ -23,10 +23,8 @@ use list::{file_stamp, slug};
 use repair::repair_missing_trailing_newline;
 
 /// Re-export the listing and repair APIs so callers need zero changes.
-#[allow(unused_imports)] // `list_all_sessions` is exported for future callers
 pub use list::{
-    SessionFile, latest_in, list_all_sessions, list_sessions, resolve_prefix, sessions_dir,
-    sessions_root,
+    SessionFile, latest_in, list_sessions, resolve_prefix, sessions_dir, sessions_root,
 };
 pub use repair::repair_dangling_tool_calls;
 
