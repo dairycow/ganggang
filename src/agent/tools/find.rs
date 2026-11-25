@@ -24,7 +24,7 @@ impl FindTool {
     }
 
     fn resolve(&self, path: Option<&str>) -> PathBuf {
-        self.cwd.join(path.unwrap_or("."))
+        super::resolve_path(&self.cwd, path.unwrap_or("."))
     }
 }
 
@@ -166,7 +166,7 @@ to include them). Sorted and capped at max_results (default 50)."
             "type": "object",
             "properties": {
                 "pattern": {"type": "string", "description": "Glob matched against entry names, or relative paths when it contains '/'"},
-                "path": {"type": "string", "description": "Directory to search from (default: the working directory)"},
+                "path": {"type": "string", "description": "Directory to search from, relative to the cwd, absolute, or starting with ~ (default: the working directory)"},
                 "max_results": {"type": "integer", "description": "Maximum paths to return (default 50)"},
                 "include_ignored": {"type": "boolean", "description": "Include .gitignore'd, target/ and node_modules/ entries (default: false)"}
             },

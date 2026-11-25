@@ -34,7 +34,7 @@ impl GrepTool {
     }
 
     fn resolve(&self, path: Option<&str>) -> PathBuf {
-        self.cwd.join(path.unwrap_or("."))
+        super::resolve_path(&self.cwd, path.unwrap_or("."))
     }
 }
 
@@ -153,7 +153,7 @@ supports glob, case_insensitive, context lines and files_only; caps at max_resul
             "type": "object",
             "properties": {
                 "pattern": {"type": "string", "description": "Regex, or literal text when fixed_strings is true"},
-                "path": {"type": "string", "description": "File or directory to search, relative to the cwd (default \".\")"},
+                "path": {"type": "string", "description": "File or directory to search, relative to the cwd, absolute, or starting with ~ (default \".\")"},
                 "glob": {"type": "string", "description": "Glob filter on file names or paths, e.g. \"*.rs\""},
                 "case_insensitive": {"type": "boolean", "description": "Case-insensitive matching (default: false)"},
                 "fixed_strings": {"type": "boolean", "description": "Treat pattern as literal text, not regex (default: false)"},

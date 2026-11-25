@@ -32,7 +32,7 @@ struct WriteArgs {
 /// keeps `..` verbatim, which would let `sub/../escape` slip past a
 /// component-wise `starts_with` containment check.
 fn resolve_lexically(cwd: &Path, path: &str) -> PathBuf {
-    let joined = cwd.join(path);
+    let joined = super::resolve_path(cwd, path);
     let mut resolved = PathBuf::new();
     for component in joined.components() {
         match component {
@@ -95,7 +95,7 @@ force is true; reports bytes written."
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "File to create or overwrite"},
+                "path": {"type": "string", "description": "File to create or overwrite, relative to the cwd, absolute, or starting with ~"},
                 "content": {"type": "string", "description": "Full file content"},
                 "force": {"type": "boolean", "description": "Allow writing outside the working directory"}
             },

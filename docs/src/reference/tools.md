@@ -23,7 +23,7 @@ Read a text file as 1-based numbered lines (N| text). Returns up to 400 lines or
 |---|---|---|---|
 | `limit` | integer | no | Maximum lines to return (default 400, max 2000) |
 | `offset` | integer | no | 1-based line to start at; negative reads the last N lines |
-| `path` | string | yes | File path relative to the working directory |
+| `path` | string | yes | File path relative to the working directory, absolute, or starting with ~ |
 
 ## `bash`
 
@@ -41,7 +41,7 @@ Apply exact-match edits: each old_text must appear exactly once unless the edit 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `edits` | array of object | yes | Edits applied in order, atomically |
-| `path` | string | yes | File to edit |
+| `path` | string | yes | File to edit, relative to the cwd, absolute, or starting with ~ |
 
 ## `write`
 
@@ -51,7 +51,7 @@ Create or overwrite a file. Refuses paths outside the working directory unless f
 |---|---|---|---|
 | `content` | string | yes | Full file content |
 | `force` | boolean | no | Allow writing outside the working directory |
-| `path` | string | yes | File to create or overwrite |
+| `path` | string | yes | File to create or overwrite, relative to the cwd, absolute, or starting with ~ |
 
 ## `grep`
 
@@ -65,7 +65,7 @@ Search file contents by regex, or literal text with fixed_strings. Respects .git
 | `fixed_strings` | boolean | no | Treat pattern as literal text, not regex (default: false) |
 | `glob` | string | no | Glob filter on file names or paths, e.g. "*.rs" |
 | `max_results` | integer | no | Maximum matching lines to return (default 50) |
-| `path` | string | no | File or directory to search, relative to the cwd (default ".") |
+| `path` | string | no | File or directory to search, relative to the cwd, absolute, or starting with ~ (default ".") |
 | `pattern` | string | yes | Regex, or literal text when fixed_strings is true |
 
 ## `find`
@@ -76,7 +76,7 @@ Find files and directories by glob (e.g. "*.rs", "**/*.md"). Respects .gitignore
 |---|---|---|---|
 | `include_ignored` | boolean | no | Include .gitignore'd, target/ and node_modules/ entries (default: false) |
 | `max_results` | integer | no | Maximum paths to return (default 50) |
-| `path` | string | no | Directory to search from (default: the working directory) |
+| `path` | string | no | Directory to search from, relative to the cwd, absolute, or starting with ~ (default: the working directory) |
 | `pattern` | string | yes | Glob matched against entry names, or relative paths when it contains '/' |
 
 ## `ls`
@@ -85,7 +85,7 @@ List one directory level: directories (name/) then files with byte size, alphabe
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `path` | string | no | Directory to list (default: the working directory) |
+| `path` | string | no | Directory to list, relative to the cwd, absolute, or starting with ~ (default: the working directory) |
 
 ## `outline`
 
@@ -94,4 +94,4 @@ Return a compact structural outline of a file: symbol or heading signatures with
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `max_entries` | integer | no | Maximum entries to return (default 200, max 500) |
-| `path` | string | yes | File path relative to the working directory |
+| `path` | string | yes | File path relative to the working directory, absolute, or starting with ~ |

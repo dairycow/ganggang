@@ -68,7 +68,7 @@ impl Tool for OutlineTool {
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "File path relative to the working directory" },
+                "path": { "type": "string", "description": "File path relative to the working directory, absolute, or starting with ~" },
                 "max_entries": { "type": "integer", "description": "Maximum entries to return (default 200, max 500)" },
             },
             "required": ["path"]
@@ -93,7 +93,7 @@ impl Tool for OutlineTool {
                 .max_entries
                 .unwrap_or(DEFAULT_MAX_ENTRIES)
                 .min(MAX_ENTRIES);
-            let path = cwd.join(&args.path);
+            let path = super::resolve_path(&cwd, &args.path);
             let cancel = cancel.clone();
             let outlined =
                 tokio::task::spawn_blocking(move || outline(&path, &cwd, max, &cancel)).await;

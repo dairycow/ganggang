@@ -158,7 +158,7 @@ replace_all: true, and any miss or ambiguity writes nothing."
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "File to edit"},
+                "path": {"type": "string", "description": "File to edit, relative to the cwd, absolute, or starting with ~"},
                 "edits": {
                     "type": "array",
                     "description": "Edits applied in order, atomically",
@@ -189,7 +189,7 @@ replace_all: true, and any miss or ambiguity writes nothing."
                 Ok(a) => a,
                 Err(e) => return ToolResult::err(e),
             };
-            let full_path = self.cwd.join(&args.path);
+            let full_path = super::resolve_path(&self.cwd, &args.path);
             let cwd = self.cwd.clone();
             let edits = args.edits;
             tokio::task::spawn_blocking(move || edit(&cwd, &full_path, &edits))

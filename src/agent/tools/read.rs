@@ -39,7 +39,7 @@ impl ReadTool {
     }
 
     fn resolve(&self, path: &str) -> PathBuf {
-        self.cwd.join(path)
+        super::resolve_path(&self.cwd, path)
     }
 }
 
@@ -86,7 +86,7 @@ impl Tool for ReadTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "File path relative to the working directory"},
+                "path": {"type": "string", "description": "File path relative to the working directory, absolute, or starting with ~"},
                 "offset": {"type": "integer", "description": "1-based line to start at; negative reads the last N lines"},
                 "limit": {"type": "integer", "description": "Maximum lines to return (default 400, max 2000)"}
             },

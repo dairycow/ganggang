@@ -7,6 +7,7 @@
 - Mutating tools (`bash`, `edit`, `write`) run **one at a time**, in the order the model called them. Contiguous runs of 2+ read-only tools (`read`, `grep`, `find`, `ls`, `outline`) execute **in parallel** (up to 8 in flight) while preserving call order in events and session history.
 - Tool failures are returned to the model as tool results so it can recover. Only transport and session I/O errors abort a run.
 - Truncated outputs include an explicit truncation marker.
+- Every tool `path` resolves the same way: relative to the working directory, absolute, or starting with `~` (expanded against `$HOME`; `~user` stays literal).
 
 ## Stopping a run
 
@@ -42,7 +43,7 @@ Exact-match replacement. Each `old_text` must occur **exactly once**; any miss o
 
 ## `write`
 
-Creates or overwrites a file, creating parent directories. Paths that resolve (lexically, after `..`) outside the working directory are refused unless the call passes `force: true`. This guardrail prevents accidental writes outside the workspace but is not a sandbox (`bash` can write anywhere).
+Creates or overwrites a file, creating parent directories. Paths that resolve (lexically, after `..`) outside the working directory are refused unless the call passes `force: true`. `~` is expanded before that check, so a home path such as `~/notes.md` needs `force: true` unless home sits inside the working directory. This guardrail prevents accidental writes outside the workspace but is not a sandbox (`bash` can write anywhere).
 
 ## `grep`
 

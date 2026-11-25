@@ -21,8 +21,11 @@ mod find;
 mod grep;
 mod ls;
 mod outline;
+mod path;
 mod read;
 mod write;
+
+pub(crate) use path::{display, display_relative, resolve_path, resolve_walk_root};
 
 /// What a tool produced. `is_error` results go back to the model verbatim;
 /// they never propagate as Rust errors.
@@ -260,45 +263,7 @@ pub(crate) fn parse_args<T: DeserializeOwned>(args: &Value) -> Result<T, String>
     serde_json::from_value(args.clone()).map_err(|e| format!("invalid arguments: {e}"))
 }
 
-/// Render a path for tool output without `.` noise: a search rooted at
-/// `.` must report `sub/f.txt`, not `./sub/f.txt`. Lexical only — `..`
-/// is preserved and the filesystem is not consulted.
-pub(crate) fn display(path: &std::path::Path) -> String {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        if let std::path::Component::CurDir = component {
-            continue;
-        }
-        out.push(component.as_os_str());
-    }
-    out.display().to_string()
-}
-
 pub(crate) const PRUNED_DIRS: &[&str] = &[".git", "target", "node_modules"];
-
-pub(crate) fn display_relative(cwd: &std::path::Path, path: &std::path::Path) -> String {
-    let rel = path.strip_prefix(cwd).unwrap_or(path);
-    let rendered = display(rel);
-    if rendered.is_empty() {
-        ".".to_string()
-    } else {
-        rendered
-    }
-}
-
-pub(crate) fn resolve_walk_root(root: &std::path::Path) -> (PathBuf, bool) {
-    let is_symlink = std::fs::symlink_metadata(root)
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false);
-    if is_symlink {
-        (
-            std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()),
-            true,
-        )
-    } else {
-        (root.to_path_buf(), false)
-    }
-}
 
 /// Names of the default registry's tools, in advertisement order. The
 /// config allowlist and hook matchers validate against this canonical

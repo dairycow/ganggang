@@ -19,7 +19,7 @@ impl LsTool {
     }
 
     fn resolve(&self, path: Option<&str>) -> PathBuf {
-        self.cwd.join(path.unwrap_or("."))
+        super::resolve_path(&self.cwd, path.unwrap_or("."))
     }
 }
 
@@ -104,7 +104,7 @@ unreadable entries are noted, not fatal."
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Directory to list (default: the working directory)"}
+                "path": {"type": "string", "description": "Directory to list, relative to the cwd, absolute, or starting with ~ (default: the working directory)"}
             }
         })
     }
