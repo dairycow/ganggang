@@ -15,6 +15,7 @@ impl super::super::State {
 
     pub fn set_model(&mut self, label: &str, context_window: u32) {
         self.footer.set_model(label);
+        self.active_model = label.to_string();
         self.context_window = context_window as u64;
         self.footer
             .set_context(self.last_context_tokens, self.context_window);

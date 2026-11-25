@@ -67,6 +67,11 @@ pub struct State {
     /// amendment): skills for `/skill:<name>` rows. Shared read-only
     /// with the command handler.
     skills: Arc<Vec<crate::agent::skills::Skill>>,
+    /// The model rows the `/model` popup lists from, and the active
+    /// model's `provider/model` label, so its row reads `· active`.
+    /// Shared read-only with the command handler, like `skills`.
+    models: Arc<Vec<crate::tui::suggest::ModelChoice>>,
+    active_model: String,
     /// Highlighted row of the suggestion popup. Resets to the top
     /// whenever the composer text changes (render syncs it); ↑/↓ move
     /// it, Tab completes from it.
@@ -131,6 +136,8 @@ impl State {
             context_window: context_window as u64,
             last_context_tokens: 0,
             skills,
+            models: Arc::new(Vec::new()),
+            active_model: model.to_string(),
             suggest_selected: 0,
             suggest_filter: String::new(),
             suggest_view_rows: 0,
@@ -154,6 +161,14 @@ impl State {
     /// against a new list.
     pub fn set_skills(&mut self, skills: Arc<Vec<crate::agent::skills::Skill>>) {
         self.skills = skills;
+        self.suggest_selected = 0;
+        self.suggest_filter.clear();
+    }
+
+    /// Replace the model rows the `/model` popup lists from and reset the
+    /// popup's selection, as [`set_skills`](Self::set_skills) does.
+    pub fn set_models(&mut self, models: Arc<Vec<crate::tui::suggest::ModelChoice>>) {
+        self.models = models;
         self.suggest_selected = 0;
         self.suggest_filter.clear();
     }

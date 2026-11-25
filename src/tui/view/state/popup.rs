@@ -7,7 +7,12 @@
 impl crate::tui::view::State {
     /// The live suggestion list for what the composer holds.
     pub fn suggestions(&self) -> Vec<crate::tui::suggest::Suggestion> {
-        crate::tui::suggest::suggestions(self.editor.text(), &self.skills)
+        crate::tui::suggest::suggestions(
+            self.editor.text(),
+            &self.skills,
+            &self.models,
+            &self.active_model,
+        )
     }
 
     /// Whether the popup should draw: a bare command word that matches

@@ -427,6 +427,126 @@ fn set_skills_rebuilds_the_skill_rows() {
     assert_eq!(state.suggest_selected_for_test(), 0, "the selection resets");
 }
 
+fn model_choice(
+    provider: &str,
+    model: &str,
+    context_window: u32,
+) -> crate::tui::suggest::ModelChoice {
+    crate::tui::suggest::ModelChoice {
+        provider: provider.into(),
+        model: model.into(),
+        context_window,
+        status: None,
+        needs_key: false,
+        has_key: false,
+    }
+}
+
+/// `/model <filter>` completes the argument in place: Tab puts the
+/// highlighted `provider/model` into the composer, no trailing space.
+#[test]
+fn tab_on_a_model_filter_completes_the_argument() {
+    let mut state = State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        std::sync::Arc::new(Vec::new()),
+        History::default(),
+    );
+    state.set_models(std::sync::Arc::new(vec![
+        model_choice("anthropic", "claude-sonnet", 200_000),
+        model_choice("openai", "gpt-5", 400_000),
+    ]));
+    state.editor.set_text("/model gpt");
+    assert!(state.suggest_open(), "the filter keeps the popup open");
+    assert_eq!(
+        state.suggestions().first().map(|s| s.label.as_str()),
+        Some("openai/gpt-5"),
+        "the filter narrows to one row"
+    );
+    state.complete_suggestion();
+    assert_eq!(
+        state.editor.text(),
+        "/model openai/gpt-5",
+        "the completion has no trailing space"
+    );
+}
+
+/// A late model list (discovery arriving) replaces the rows and resets
+/// the selection, as `set_skills` does.
+#[test]
+fn set_models_resets_the_selection() {
+    let mut state = State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        std::sync::Arc::new(Vec::new()),
+        History::default(),
+    );
+    state.editor.set_text("/");
+    state.suggest_next();
+    state.suggest_next();
+    assert_eq!(state.suggest_selected_for_test(), 2);
+    state.set_models(std::sync::Arc::new(vec![model_choice(
+        "openai", "gpt-5", 400_000,
+    )]));
+    assert_eq!(state.suggest_selected_for_test(), 0, "the selection resets");
+    state.editor.set_text("/model");
+    assert_eq!(
+        state
+            .suggestions()
+            .iter()
+            .map(|s| s.label.clone())
+            .collect::<Vec<_>>(),
+        vec!["/model [provider/model]", "openai/gpt-5"],
+        "the new rows are listed"
+    );
+}
+
+/// The `· active` mark follows the model the session runs on: `set_model`
+/// moves it, so the popup always shows which row is the one in use.
+#[test]
+fn the_active_mark_follows_set_model() {
+    let mut state = State::new(
+        std::path::Path::new("/tmp/x"),
+        "anthropic/claude-sonnet",
+        131_072,
+        std::sync::Arc::new(Vec::new()),
+        History::default(),
+    );
+    state.set_models(std::sync::Arc::new(vec![
+        model_choice("anthropic", "claude-sonnet", 200_000),
+        model_choice("openai", "gpt-5", 400_000),
+    ]));
+    state.editor.set_text("/model");
+    let descriptions = |state: &State| {
+        state
+            .suggestions()
+            .iter()
+            .map(|s| s.description.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        descriptions(&state),
+        vec![
+            "list or switch provider and model",
+            "ctx 200k · active",
+            "ctx 400k",
+        ],
+        "the boot model is marked"
+    );
+    state.set_model("openai/gpt-5", 400_000);
+    assert_eq!(
+        descriptions(&state),
+        vec![
+            "list or switch provider and model",
+            "ctx 200k",
+            "ctx 400k · active",
+        ],
+        "the mark moves with set_model"
+    );
+}
+
 /// The `/reload` reply swaps the popup set, reports the counts and surfaces
 /// the discovery warnings in the transcript.
 #[tokio::test]

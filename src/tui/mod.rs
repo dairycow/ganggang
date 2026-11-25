@@ -136,6 +136,18 @@ pub async fn run(
         skills,
         history,
     );
+    // The `/model` popup's rows, seeded from the catalog before any
+    // network call: discovery statuses arrive later and refresh the
+    // rows then.
+    state.set_models(Arc::new(
+        crate::config::providers::catalog_with_discovered(
+            &config.providers,
+            &std::collections::BTreeMap::new(),
+        )
+        .iter()
+        .map(Into::into)
+        .collect(),
+    ));
     state.set_thinking(
         active_endpoint.reasoning_effort.as_deref(),
         active_endpoint.reasoning_budget_tokens,
