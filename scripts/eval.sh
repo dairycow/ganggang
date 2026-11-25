@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local-compute eval suite: runs 7 deterministic tasks against a live Strata
+# Local-compute eval suite: runs 9 deterministic tasks against a live Strata
 # server in isolated temp workspaces and reports functional pass/fail plus
 # tool-discipline & token-efficiency metrics.
 #
@@ -210,8 +210,149 @@ with open(sys.argv[1], "w") as f:
     f.write("\n".join(lines) + "\n")
 PY
 
+# --- Task 8: replace_all refactor across two modules ---
+T8="$SCRATCH/t8"
+mkdir -p "$T8/src"
+cat > "$T8/Cargo.toml" <<'EOF'
+[package]
+name = "eval_rename"
+version = "0.1.0"
+edition = "2024"
+EOF
+cat > "$T8/src/lib.rs" <<'EOF'
+//! Crate whose legacy helper is called from this module and from `extra`.
+#![allow(dead_code)]
+
+pub mod extra;
+
+pub fn legacy_compute(x: i32) -> i32 {
+    x * 2 + 1
+}
+
+fn wrap_a(x: i32) -> i32 {
+    legacy_compute(x) + 1
+}
+
+fn wrap_b(x: i32) -> i32 {
+    legacy_compute(wrap_a(x))
+}
+
+fn wrap_c(x: i32) -> i32 {
+    legacy_compute(x) * 2
+}
+
+fn wrap_d(x: i32) -> i32 {
+    legacy_compute(x) - 3
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extra, legacy_compute, wrap_b, wrap_c, wrap_d};
+
+    #[test]
+    fn legacy_compute_doubles_and_increments() {
+        assert_eq!(legacy_compute(3), 7);
+    }
+
+    #[test]
+    fn wrappers_compose() {
+        assert_eq!(wrap_b(1), 9);
+        assert_eq!(wrap_c(2), 10);
+        assert_eq!(wrap_d(4), 6);
+    }
+
+    #[test]
+    fn extra_module_shares_the_helper() {
+        assert_eq!(extra::extra_total(2), 35);
+    }
+}
+EOF
+cat > "$T8/src/extra.rs" <<'EOF'
+//! Second module that imports the same crate-level helper.
+#![allow(dead_code)]
+
+use crate::legacy_compute;
+
+fn extra_a(x: i32) -> i32 {
+    legacy_compute(x)
+}
+
+fn extra_b(x: i32) -> i32 {
+    legacy_compute(x + 1)
+}
+
+fn extra_c(x: i32) -> i32 {
+    legacy_compute(legacy_compute(x))
+}
+
+fn extra_d(x: i32) -> i32 {
+    legacy_compute(x) + legacy_compute(x + 1)
+}
+
+pub fn extra_total(x: i32) -> i32 {
+    extra_a(x) + extra_b(x) + extra_c(x) + extra_d(x)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extra_total;
+
+    #[test]
+    fn extra_total_sums_the_helper_calls() {
+        assert_eq!(extra_total(2), 35);
+    }
+}
+EOF
+
+# --- Task 9: locate one helper in a ~700-line file ---
+T9="$SCRATCH/t9"
+mkdir -p "$T9/src"
+cat > "$T9/Cargo.toml" <<'EOF'
+[package]
+name = "eval_discount"
+version = "0.1.0"
+edition = "2024"
+EOF
+python3 - "$T9/src/lib.rs" <<'PY'
+import sys
+
+lines = [
+    "//! Eval crate with a deliberately wrong discount helper.",
+    "#![allow(dead_code)]",
+    "",
+]
+for i in range(1, 161):
+    lines.append(f"fn helper_{i:03d}(x: i32) -> i32 {{")
+    lines.append("    x + 1")
+    lines.append("}")
+for i in range(14):
+    lines.append("// padding comment for layout" if i else "// Discount helpers live below this block.")
+lines.append("/// Compute a 15% discount (integer division).")
+lines.append("pub fn calculate_discount(price: i32) -> i32 {")
+lines.append("    price * 25 / 100")
+lines.append("}")
+for i in range(161, 211):
+    lines.append(f"fn helper_{i:03d}(x: i32) -> i32 {{")
+    lines.append("    x + 1")
+    lines.append("}")
+lines.extend([
+    "",
+    "#[cfg(test)]",
+    "mod tests {",
+    "    use super::calculate_discount;",
+    "",
+    "    #[test]",
+    "    fn discount_is_fifteen_percent() {",
+    "        assert_eq!(calculate_discount(200), 30);",
+    "    }",
+    "}",
+])
+with open(sys.argv[1], "w") as f:
+    f.write("\n".join(lines) + "\n")
+PY
+
 python3 - "$ROOT" "$GG_BIN" "$HOME_DIR" "$EVAL_TIMEOUT" "$GG_ARGS" "$EVAL_OUT" "$SCRATCH" \
-    "$T1" "$T2" "$T3" "$T4" "$T5" "$T6" "$T7" \
+    "$T1" "$T2" "$T3" "$T4" "$T5" "$T6" "$T7" "$T8" "$T9" \
     "$STRATA_MODEL" "$STRATA_MAX_CONTEXT" "$EVAL_MAX_TURNS" <<'PY'
 import json, os, re, shlex, subprocess, sys, time
 
@@ -230,6 +371,8 @@ import json, os, re, shlex, subprocess, sys, time
     t5,
     t6,
     t7,
+    t8,
+    t9,
     model,
     max_context,
     eval_max_turns,
@@ -238,6 +381,23 @@ timeout_s = int(timeout_s)
 max_context = int(max_context)
 eval_max_turns = int(eval_max_turns)
 extra_args = shlex.split(gg_args)
+
+def rename_refactor_ok(cwd):
+    """Cargo tests pass, and the rename landed in both modules."""
+    if subprocess.run(
+        ["cargo", "test", "--quiet"], cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    ).returncode != 0:
+        return False
+    for fname in ("lib.rs", "extra.rs"):
+        try:
+            with open(os.path.join(cwd, "src", fname)) as fh:
+                text = fh.read()
+        except OSError:
+            return False
+        if "legacy_compute" in text or "modern_compute" not in text:
+            return False
+    return True
+
 
 tasks = [
     (
@@ -286,6 +446,18 @@ tasks = [
         "Fix the failing test in this Rust crate and run cargo test to verify it passes.",
         lambda ans, cwd: subprocess.run(["cargo", "test", "--quiet"], cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0,
     ),
+    (
+        "T8_replace_all_refactor",
+        t8,
+        "Rename the function `legacy_compute` to `modern_compute` across `src/lib.rs` and `src/extra.rs` (definition, imports, call sites and tests), then run `cargo test` to verify it passes.",
+        lambda ans, cwd: rename_refactor_ok(cwd),
+    ),
+    (
+        "T9_large_file_outline",
+        t9,
+        "A test in this Rust crate is failing because `calculate_discount` uses the wrong percentage (it should be 15%). Locate `calculate_discount`, fix it, and run `cargo test` to verify it passes.",
+        lambda ans, cwd: subprocess.run(["cargo", "test", "--quiet"], cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0,
+    ),
 ]
 
 results = []
@@ -321,6 +493,7 @@ for name, cwd, prompt, check_fn in tasks:
     py_calls = 0
     redundant_cd = 0
     empty_trunc = 0
+    cache_n = 0
     tools = {}
     answer_parts = []
     session_id = None
@@ -341,6 +514,8 @@ for name, cwd, prompt, check_fn in tasks:
         elif et == "turn_ended":
             if ev.get("stop_reason") in {"length", "stream_cut"}:
                 empty_trunc += 1
+            timings = ev.get("timings") or {}
+            cache_n += int(timings.get("cache_n") or 0)
         elif et == "warned":
             message = ev.get("message", "")
             if "had no content" in message:
@@ -354,8 +529,8 @@ for name, cwd, prompt, check_fn in tasks:
                 cstr = str(args.get("command", ""))
                 if f"cd {cwd}" in cstr:
                     redundant_cd += 1
-                # Count legitimate bash (cargo/git) as non-workaround; sed/cat/grep/rg/find/ls/python as workaround
-                workarounds = {"sed", "cat", "head", "tail", "grep", "rg", "find", "ls", "python", "python3"}
+                # Count legitimate bash (cargo/git) as non-workaround; sed/cat/grep/rg/find/ls/perl/python as workaround
+                workarounds = {"sed", "cat", "head", "tail", "grep", "rg", "find", "ls", "perl", "python", "python3"}
                 is_workaround = False
                 uses_python = False
                 for seg in re.split(r"\s*(?:&&|\|\||[;\n])\s*", cstr):
@@ -420,6 +595,8 @@ for name, cwd, prompt, check_fn in tasks:
     ok = (not timed_out) and check_fn(answer, cwd)
     native_pct = (100.0 * native_calls / calls) if calls else 100.0
     batch = round(calls / tool_turns, 2) if tool_turns else 0.0
+    outline_calls = tools.get("outline", 0)
+    cache_hit_pct = round(100.0 * cache_n / sum_prompt, 1) if sum_prompt else 0.0
     if reasoning_tok > 0 and gen_tok > 0:
         think_pct = min(100.0, 100.0 * reasoning_tok / gen_tok)
     elif reason_chars + out_chars:
@@ -443,23 +620,27 @@ for name, cwd, prompt, check_fn in tasks:
         "gen_tok": gen_tok,
         "think_pct": round(think_pct, 1),
         "empty_trunc": empty_trunc,
+        "outline_calls": outline_calls,
+        "cache_n": cache_n,
+        "cache_hit_pct": cache_hit_pct,
         "tools": tools,
     })
 
 print(f"Model: {model} (max_context={max_context}) | Binary: {gg_bin}")
 print(
-    f"{'Task':<18} {'Status':<6} {'Wall':>7} {'Turns':>5} {'Calls':>5} {'Batch':>5} "
+    f"{'Task':<24} {'Status':<6} {'Wall':>7} {'Turns':>5} {'Calls':>5} {'Batch':>5} "
     f"{'Native%':>7} {'Py':>4} {'Cd':>3} {'ToolKB':>7} {'PeakCtx':>8} {'SumCtx':>8} "
-    f"{'GenTok':>7} {'Think%':>7} {'Cut':>4}"
+    f"{'GenTok':>7} {'Think%':>7} {'Cut':>4} {'Outl':>4} {'Cache%':>7}"
 )
-print("-" * 116)
+print("-" * 134)
 for r in results:
     st = "PASS" if r["pass"] else ("TIME" if r["timed_out"] else "FAIL")
     print(
-        f"{r['task']:<18} {st:<6} {r['wall_s']:>6.1f}s {r['turns']:>5} {r['calls']:>5} "
+        f"{r['task']:<24} {st:<6} {r['wall_s']:>6.1f}s {r['turns']:>5} {r['calls']:>5} "
         f"{r['batch']:>5.2f} {r['native_pct']:>6.1f}% {r['py_calls']:>4} "
         f"{r['redundant_cd']:>3} {r['tool_bytes'] / 1024:>7.1f} {r['peak_prompt']:>8,} "
-        f"{r['sum_prompt']:>8,} {r['gen_tok']:>7,} {r['think_pct']:>6.1f}% {r['empty_trunc']:>4}"
+        f"{r['sum_prompt']:>8,} {r['gen_tok']:>7,} {r['think_pct']:>6.1f}% {r['empty_trunc']:>4} "
+        f"{r['outline_calls']:>4} {r['cache_hit_pct']:>6.1f}%"
     )
 
 tot_wall = sum(r["wall_s"] for r in results)
@@ -471,12 +652,18 @@ tot_gen = sum(r["gen_tok"] for r in results)
 tot_py = sum(r["py_calls"] for r in results)
 tot_cd = sum(r["redundant_cd"] for r in results)
 tot_cut = sum(r["empty_trunc"] for r in results)
+tot_outline = sum(r["outline_calls"] for r in results)
+tot_cache_n = sum(r["cache_n"] for r in results)
+overall_cache_hit_pct = (
+    round(100.0 * tot_cache_n / tot_sum_prompt, 1) if tot_sum_prompt else 0.0
+)
 passed = sum(1 for r in results if r["pass"])
-print("-" * 116)
+print("-" * 134)
 print(
-    f"{'TOTAL':<18} {f'{passed}/{len(results)}':<6} {tot_wall:>6.1f}s {tot_turns:>5} {tot_calls:>5} "
+    f"{'TOTAL':<24} {f'{passed}/{len(results)}':<6} {tot_wall:>6.1f}s {tot_turns:>5} {tot_calls:>5} "
     f"{'':>5} {'':>7} {tot_py:>4} {tot_cd:>3} {tot_tool_bytes / 1024:>7.1f} "
-    f"{max(r['peak_prompt'] for r in results):>8,} {tot_sum_prompt:>8,} {tot_gen:>7,} {'':>7} {tot_cut:>4}"
+    f"{max(r['peak_prompt'] for r in results):>8,} {tot_sum_prompt:>8,} {tot_gen:>7,} {'':>7} {tot_cut:>4} "
+    f"{tot_outline:>4} {overall_cache_hit_pct:>6.1f}%"
 )
 
 if eval_out:
@@ -498,6 +685,8 @@ if eval_out:
         "total_gen_tok": tot_gen,
         "total_py_calls": tot_py,
         "total_empty_trunc": tot_cut,
+        "total_outline_calls": tot_outline,
+        "overall_cache_hit_pct": overall_cache_hit_pct,
         "results": results,
     }
     with open(eval_out, "a") as f:
