@@ -70,6 +70,8 @@ Like pi, `gg` does not prompt for tool permissions. The `bash` tool and hooks ru
 
 ```sh
 cargo fmt --all && cargo test && cargo clippy --all-targets -- -D warnings
+git config core.hooksPath .githooks   # once per clone: gate commits with scripts/pre-commit-check.sh
+scripts/pre-commit-check.sh           # the commit gate: fmt check, clippy, tests
 scripts/smoke.sh            # live acceptance against a running Strata (print mode)
 scripts/eval.sh             # local-compute eval suite (tool discipline, tokens, latency)
 scripts/hooks-live.sh       # hooks: deny path, observe paths, --no-hooks, project hooks

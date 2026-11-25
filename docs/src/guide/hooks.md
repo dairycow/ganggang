@@ -81,4 +81,25 @@ fi
 
 Format after edits (`post_tool` on `edit` and `write`), or notify when a long run finishes (`run_end`), as in the configuration above.
 
+## Commit gate
+
+The repository ships a commit gate: `.githooks/pre-commit` runs `scripts/pre-commit-check.sh`, which checks formatting, clippy, and the test suite. Enable it once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+`scripts/gg-commit-gate.sh` is the same gate as a generic `pre_tool` hook: before any `git commit` it runs the pre-commit hook and denies the call if the gate fails or if the command tries to bypass hooks with `--no-verify` or `-n`. Copy it to `~/.gg/hooks/commit-gate.sh` and register it:
+
+```toml
+# ~/.gg/hooks.toml
+[[hooks]]
+event = "pre_tool"
+tools = ["bash"]
+command = "~/.gg/hooks/commit-gate.sh"
+timeout_secs = 300
+```
+
+A `pre_tool` deny is workflow policy, not a security boundary. The hook requires `jq` and git 2.36 or newer.
+
 > Hooks run with your permissions and are unsandboxed. A `pre_tool` deny is workflow policy, not a security boundary. See the [Security model](security.md).
