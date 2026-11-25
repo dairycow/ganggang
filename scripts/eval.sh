@@ -12,6 +12,9 @@ ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && pwd)
 GG_BIN="${GG_BIN:-$ROOT/target/debug/gg}"
 EVAL_TIMEOUT="${EVAL_TIMEOUT:-180}"
 EVAL_MAX_TURNS="${EVAL_MAX_TURNS:-25}"
+EVAL_BASE_URL="${EVAL_BASE_URL:-http://127.0.0.1:8080/v1}"
+EVAL_MODEL="${EVAL_MODEL:-}"
+EVAL_LABEL="${EVAL_LABEL:-}"
 GG_ARGS="${GG_ARGS:-}"
 EVAL_OUT="${EVAL_OUT:-}"
 
@@ -20,28 +23,80 @@ if [[ ! -x "$GG_BIN" ]]; then
   exit 1
 fi
 
-# Auto-detect the model Strata has loaded. The config below deliberately omits
-# `model`, so `gg` adopts the active model from /health on every run.
-HEALTH_JSON=$(curl -sf -m 5 http://127.0.0.1:8080/health 2>/dev/null) || {
-  echo "FAIL: Strata not answering on 127.0.0.1:8080/health (strata launch)" >&2
+BASE_TRIMMED="${EVAL_BASE_URL%/}"
+ROOT_URL="${BASE_TRIMMED%/v1}"
+
+# Probe /health first, then fall back to /v1/models (llama-server returns
+# {"status":"ok"} on /health and lists the active model on /v1/models).
+HEALTH_JSON=$(curl -sf -m 5 "${ROOT_URL}/health" 2>/dev/null) || {
+  echo "FAIL: server not answering on ${ROOT_URL}/health" >&2
   exit 1
 }
-HEALTH_PARSED=$(printf '%s' "$HEALTH_JSON" | python3 -c '
+MODELS_JSON=$(curl -sf -m 5 "${BASE_TRIMMED}/models" 2>/dev/null || echo "")
+
+HEALTH_PARSED=$(python3 - "$HEALTH_JSON" "$MODELS_JSON" "$EVAL_MODEL" <<'PY'
 import json, sys
+
+health_raw, models_raw, override_model = sys.argv[1:4]
+model = ""
+max_context = 0
+
 try:
-    health = json.load(sys.stdin)
+    health = json.loads(health_raw)
+    model = str(health.get("model") or "").strip()
+    max_context = int(health.get("max_context") or 0)
 except Exception:
-    sys.exit(1)
-model = str(health.get("model") or "").strip()
+    pass
+
+if (not model or max_context == 0) and models_raw:
+    try:
+        data = json.loads(models_raw).get("data") or []
+        chosen = None
+        for item in data:
+            st = item.get("status")
+            if isinstance(st, dict) and st.get("value") == "loaded":
+                chosen = item
+                break
+        if chosen is None and data:
+            chosen = data[0]
+        if chosen is not None:
+            if not model:
+                model = str(chosen.get("id") or "").strip()
+            if max_context == 0:
+                meta = chosen.get("meta") if isinstance(chosen.get("meta"), dict) else {}
+                for k in ("max_model_len", "context_length", "max_context_length"):
+                    v = chosen.get(k)
+                    if isinstance(v, int) and v > 0:
+                        max_context = v
+                        break
+                if max_context == 0 and isinstance(meta.get("n_ctx"), int) and meta["n_ctx"] > 0:
+                    max_context = meta["n_ctx"]
+                if max_context == 0:
+                    st = chosen.get("status")
+                    args = st.get("args") if isinstance(st, dict) else None
+                    if isinstance(args, list):
+                        for i, arg in enumerate(args[:-1]):
+                            if arg in ("--ctx-size", "-c"):
+                                try:
+                                    val = int(args[i + 1])
+                                    if val > 0:
+                                        max_context = val
+                                        break
+                                except (TypeError, ValueError):
+                                    pass
+    except Exception:
+        pass
+
+if override_model.strip():
+    model = override_model.strip()
+
 if not model:
     sys.exit(1)
-try:
-    max_context = int(health.get("max_context") or 0)
-except (TypeError, ValueError):
-    max_context = 0
+
 print(f"{model}\t{max_context}")
-') || {
-  echo "FAIL: Strata /health did not report a loaded model" >&2
+PY
+) || {
+  echo "FAIL: neither ${ROOT_URL}/health nor ${BASE_TRIMMED}/models reported a loaded model" >&2
   exit 1
 }
 IFS=$'\t' read -r STRATA_MODEL STRATA_MAX_CONTEXT <<< "$HEALTH_PARSED"
@@ -51,12 +106,15 @@ trap 'rm -rf "$SCRATCH"' EXIT
 
 HOME_DIR="$SCRATCH/home"
 mkdir -p "$HOME_DIR/.gg"
-cat > "$HOME_DIR/.gg/config.toml" <<'EOF'
-provider = "strata"
-
-[providers.strata]
-base_url = "http://127.0.0.1:8080/v1"
-EOF
+{
+  echo 'provider = "strata"'
+  echo ''
+  echo '[providers.strata]'
+  echo "base_url = \"$BASE_TRIMMED\""
+  if [[ -n "$EVAL_MODEL" ]]; then
+    echo "model = \"$EVAL_MODEL\""
+  fi
+} > "$HOME_DIR/.gg/config.toml"
 
 # --- Task 1: regex grep ---
 T1="$SCRATCH/t1"
@@ -353,7 +411,7 @@ PY
 
 python3 - "$ROOT" "$GG_BIN" "$HOME_DIR" "$EVAL_TIMEOUT" "$GG_ARGS" "$EVAL_OUT" "$SCRATCH" \
     "$T1" "$T2" "$T3" "$T4" "$T5" "$T6" "$T7" "$T8" "$T9" \
-    "$STRATA_MODEL" "$STRATA_MAX_CONTEXT" "$EVAL_MAX_TURNS" <<'PY'
+    "$STRATA_MODEL" "$STRATA_MAX_CONTEXT" "$EVAL_MAX_TURNS" "$BASE_TRIMMED" "$EVAL_LABEL" <<'PY'
 import json, os, re, shlex, subprocess, sys, time
 
 (
@@ -376,6 +434,8 @@ import json, os, re, shlex, subprocess, sys, time
     model,
     max_context,
     eval_max_turns,
+    base_url,
+    eval_label,
 ) = sys.argv[1:]
 timeout_s = int(timeout_s)
 max_context = int(max_context)
@@ -494,6 +554,14 @@ for name, cwd, prompt, check_fn in tasks:
     redundant_cd = 0
     empty_trunc = 0
     cache_n = 0
+    pred_n = 0
+    pred_ms = 0.0
+    prompt_n = 0
+    prompt_ms = 0.0
+    draft_n = 0
+    draft_acc = 0
+    pred_tps_samples = []
+    prompt_tps_samples = []
     tools = {}
     answer_parts = []
     session_id = None
@@ -516,6 +584,16 @@ for name, cwd, prompt, check_fn in tasks:
                 empty_trunc += 1
             timings = ev.get("timings") or {}
             cache_n += int(timings.get("cache_n") or 0)
+            pred_n += int(timings.get("predicted_n") or 0)
+            pred_ms += float(timings.get("predicted_ms") or 0.0)
+            prompt_n += int(timings.get("prompt_n") or 0)
+            prompt_ms += float(timings.get("prompt_ms") or 0.0)
+            draft_n += int(timings.get("draft_n") or 0)
+            draft_acc += int(timings.get("draft_n_accepted") or 0)
+            if timings.get("predicted_per_second"):
+                pred_tps_samples.append(float(timings["predicted_per_second"]))
+            if timings.get("prompt_per_second"):
+                prompt_tps_samples.append(float(timings["prompt_per_second"]))
         elif et == "warned":
             message = ev.get("message", "")
             if "had no content" in message:
@@ -597,6 +675,19 @@ for name, cwd, prompt, check_fn in tasks:
     batch = round(calls / tool_turns, 2) if tool_turns else 0.0
     outline_calls = tools.get("outline", 0)
     cache_hit_pct = round(100.0 * cache_n / sum_prompt, 1) if sum_prompt else 0.0
+    if pred_n > 0 and pred_ms > 0:
+        dec_tps = round(pred_n / (pred_ms / 1000.0), 1)
+    elif pred_tps_samples:
+        dec_tps = round(sum(pred_tps_samples) / len(pred_tps_samples), 1)
+    else:
+        dec_tps = 0.0
+    if prompt_n > 0 and prompt_ms > 0:
+        pre_tps = round(prompt_n / (prompt_ms / 1000.0), 1)
+    elif prompt_tps_samples:
+        pre_tps = round(sum(prompt_tps_samples) / len(prompt_tps_samples), 1)
+    else:
+        pre_tps = 0.0
+    draft_acc_pct = round(100.0 * draft_acc / draft_n, 1) if draft_n > 0 else None
     if reasoning_tok > 0 and gen_tok > 0:
         think_pct = min(100.0, 100.0 * reasoning_tok / gen_tok)
     elif reason_chars + out_chars:
@@ -623,24 +714,35 @@ for name, cwd, prompt, check_fn in tasks:
         "outline_calls": outline_calls,
         "cache_n": cache_n,
         "cache_hit_pct": cache_hit_pct,
+        "pred_n": pred_n,
+        "pred_ms": round(pred_ms, 1),
+        "dec_tps": dec_tps,
+        "prompt_n": prompt_n,
+        "prompt_ms": round(prompt_ms, 1),
+        "pre_tps": pre_tps,
+        "draft_n": draft_n,
+        "draft_acc": draft_acc,
+        "draft_acc_pct": draft_acc_pct,
         "tools": tools,
     })
 
-print(f"Model: {model} (max_context={max_context}) | Binary: {gg_bin}")
+label_part = f" | Label: {eval_label}" if eval_label else ""
+print(f"Model: {model} (max_context={max_context}){label_part} | Binary: {gg_bin}")
 print(
     f"{'Task':<24} {'Status':<6} {'Wall':>7} {'Turns':>5} {'Calls':>5} {'Batch':>5} "
     f"{'Native%':>7} {'Py':>4} {'Cd':>3} {'ToolKB':>7} {'PeakCtx':>8} {'SumCtx':>8} "
-    f"{'GenTok':>7} {'Think%':>7} {'Cut':>4} {'Outl':>4} {'Cache%':>7}"
+    f"{'GenTok':>7} {'Think%':>7} {'Cut':>4} {'Outl':>4} {'Cache%':>7} {'DecT/s':>7} {'Draft%':>7}"
 )
-print("-" * 134)
+print("-" * 150)
 for r in results:
     st = "PASS" if r["pass"] else ("TIME" if r["timed_out"] else "FAIL")
+    draft_str = f"{r['draft_acc_pct']:>6.1f}%" if r["draft_acc_pct"] is not None else f"{'-':>7}"
     print(
         f"{r['task']:<24} {st:<6} {r['wall_s']:>6.1f}s {r['turns']:>5} {r['calls']:>5} "
         f"{r['batch']:>5.2f} {r['native_pct']:>6.1f}% {r['py_calls']:>4} "
         f"{r['redundant_cd']:>3} {r['tool_bytes'] / 1024:>7.1f} {r['peak_prompt']:>8,} "
         f"{r['sum_prompt']:>8,} {r['gen_tok']:>7,} {r['think_pct']:>6.1f}% {r['empty_trunc']:>4} "
-        f"{r['outline_calls']:>4} {r['cache_hit_pct']:>6.1f}%"
+        f"{r['outline_calls']:>4} {r['cache_hit_pct']:>6.1f}% {r['dec_tps']:>7.1f} {draft_str}"
     )
 
 tot_wall = sum(r["wall_s"] for r in results)
@@ -654,16 +756,26 @@ tot_cd = sum(r["redundant_cd"] for r in results)
 tot_cut = sum(r["empty_trunc"] for r in results)
 tot_outline = sum(r["outline_calls"] for r in results)
 tot_cache_n = sum(r["cache_n"] for r in results)
+tot_pred_n = sum(r["pred_n"] for r in results)
+tot_pred_ms = sum(r["pred_ms"] for r in results)
+tot_prompt_n = sum(r["prompt_n"] for r in results)
+tot_prompt_ms = sum(r["prompt_ms"] for r in results)
+tot_draft_n = sum(r["draft_n"] for r in results)
+tot_draft_acc = sum(r["draft_acc"] for r in results)
 overall_cache_hit_pct = (
     round(100.0 * tot_cache_n / tot_sum_prompt, 1) if tot_sum_prompt else 0.0
 )
+overall_dec_tps = round(tot_pred_n / (tot_pred_ms / 1000.0), 1) if tot_pred_n > 0 and tot_pred_ms > 0 else 0.0
+overall_pre_tps = round(tot_prompt_n / (tot_prompt_ms / 1000.0), 1) if tot_prompt_n > 0 and tot_prompt_ms > 0 else 0.0
+overall_draft_acc_pct = round(100.0 * tot_draft_acc / tot_draft_n, 1) if tot_draft_n > 0 else None
+tot_draft_str = f"{overall_draft_acc_pct:>6.1f}%" if overall_draft_acc_pct is not None else f"{'-':>7}"
 passed = sum(1 for r in results if r["pass"])
-print("-" * 134)
+print("-" * 150)
 print(
     f"{'TOTAL':<24} {f'{passed}/{len(results)}':<6} {tot_wall:>6.1f}s {tot_turns:>5} {tot_calls:>5} "
     f"{'':>5} {'':>7} {tot_py:>4} {tot_cd:>3} {tot_tool_bytes / 1024:>7.1f} "
     f"{max(r['peak_prompt'] for r in results):>8,} {tot_sum_prompt:>8,} {tot_gen:>7,} {'':>7} {tot_cut:>4} "
-    f"{tot_outline:>4} {overall_cache_hit_pct:>6.1f}%"
+    f"{tot_outline:>4} {overall_cache_hit_pct:>6.1f}% {overall_dec_tps:>7.1f} {tot_draft_str}"
 )
 
 if eval_out:
@@ -671,6 +783,8 @@ if eval_out:
     rec = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "rev": rev,
+        "label": eval_label or None,
+        "base_url": base_url,
         "gg_bin": gg_bin,
         "model": model,
         "max_context": max_context,
@@ -687,6 +801,15 @@ if eval_out:
         "total_empty_trunc": tot_cut,
         "total_outline_calls": tot_outline,
         "overall_cache_hit_pct": overall_cache_hit_pct,
+        "total_pred_n": tot_pred_n,
+        "total_pred_ms": round(tot_pred_ms, 1),
+        "overall_dec_tps": overall_dec_tps,
+        "total_prompt_n": tot_prompt_n,
+        "total_prompt_ms": round(tot_prompt_ms, 1),
+        "overall_pre_tps": overall_pre_tps,
+        "total_draft_n": tot_draft_n,
+        "total_draft_acc": tot_draft_acc,
+        "overall_draft_acc_pct": overall_draft_acc_pct,
         "results": results,
     }
     with open(eval_out, "a") as f:

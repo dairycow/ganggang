@@ -46,6 +46,10 @@ pub struct Timings {
     pub predicted_per_second: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_n: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_n: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_n_accepted: Option<u32>,
 }
 
 impl Timings {
@@ -483,10 +487,18 @@ mod tests {
 
     #[test]
     fn timings_deserializes_and_computes_fallbacks() {
-        let raw = r#"{"cache_n":0,"prompt_n":42,"prompt_ms":1653.5,"prompt_per_second":25.4,"predicted_n":22,"predicted_ms":520.2,"predicted_per_second":42.3,"draft_n":18}"#;
+        let raw = r#"{"cache_n":0,"prompt_n":42,"prompt_ms":1653.5,"prompt_per_second":25.4,"predicted_n":22,"predicted_ms":520.2,"predicted_per_second":42.3,"draft_n":18,"draft_n_accepted":12}"#;
         let t: Timings = serde_json::from_str(raw).unwrap();
         assert_eq!(t.decode_tok_per_sec(), Some(42.3));
         assert_eq!(t.prompt_tok_per_sec(), Some(25.4));
+        assert_eq!(t.draft_n, Some(18));
+        assert_eq!(t.draft_n_accepted, Some(12));
+
+        let fixture: ChatResponse =
+            serde_json::from_str(include_str!("../../fixtures/tool_call_response.json")).unwrap();
+        let ft = fixture.timings.expect("fixture timings");
+        assert_eq!(ft.draft_n, Some(88));
+        assert_eq!(ft.draft_n_accepted, Some(51));
 
         let fallback = Timings {
             predicted_n: Some(100),
