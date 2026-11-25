@@ -339,7 +339,7 @@ fn suggestion_popup_tracks_the_composer() {
     assert!(!state.suggest_open(), "plain composer: no popup");
     state.editor.insert_char('/');
     assert!(state.suggest_open(), "a bare slash opens the catalog");
-    assert_eq!(state.suggestions().len(), 12, "the built-in set");
+    assert_eq!(state.suggestions().len(), 11, "the built-in set");
 
     // Filtering: two down and one up leaves the highlight on /compact.
     state.suggest_next();
@@ -357,8 +357,7 @@ fn suggestion_popup_tracks_the_composer() {
     state.suggest_next();
     state.editor.set_text("/sk");
     state.complete_suggestion();
-    assert_eq!(state.editor.text(), "/skills ");
-    assert!(!state.suggest_open(), "whitespace closes the popup");
+    assert_eq!(state.editor.text(), "/skill:");
 
     // The skill colon expands one row per matching skill.
     state.editor.set_text("/skill:p");
@@ -500,7 +499,7 @@ fn the_selection_stops_at_the_last_drawn_row_on_short_terminals() {
         state.suggest_next();
     }
     state.complete_suggestion();
-    assert_eq!(state.editor.text(), "/session ", "row 4 of the catalog");
+    assert_eq!(state.editor.text(), "/context ", "row 4 of the catalog");
 
     // Never rendered: the whole list is reachable.
     state.editor.set_text("/");

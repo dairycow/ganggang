@@ -30,7 +30,7 @@ fn slash_lines_classify_to_commands() {
     );
     assert_eq!(
         classify_submission("/skills"),
-        Submission::Command(Command::Skills)
+        Submission::Command(Command::Unknown("skills".into()))
     );
     assert_eq!(
         classify_submission("/session"),
@@ -90,6 +90,53 @@ async fn reload_forwards_to_the_agent_task() {
         input_rx.try_recv().unwrap(),
         super::super::AgentInput::Reload
     ));
+}
+
+/// `/skills` is gone: submitting it warns that `/skill:` lists skills.
+#[tokio::test]
+async fn skills_command_is_removed_with_a_hint() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    let mut state = super::super::view::State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        Arc::new(vec![]),
+        History::default(),
+    );
+    let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
+    let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
+    let factory: super::super::Factory = Arc::new(|_, _, _| unreachable!("no /new on this path"));
+    let config = crate::config::Config::default();
+    let mut active_endpoint = config.active_endpoint();
+    let abort = Arc::new(AtomicBool::new(false));
+    let cwd = std::path::PathBuf::from("/tmp/x");
+
+    handle_command(
+        Command::Unknown("skills".into()),
+        CmdCtx {
+            state: &mut state,
+            factory: &factory,
+            input_tx: &mut input_tx,
+            ui_tx: &ui_tx,
+            skills: &[],
+            hooks: &crate::agent::hooks::Hooks::default(),
+            cwd: &cwd,
+            abort: &abort,
+            config: &config,
+            active_endpoint: &mut active_endpoint,
+        },
+    )
+    .await
+    .unwrap();
+    let lines = state.line_texts_for_test();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("/skills was removed: type /skill: to list skills")),
+        "{lines:?}"
+    );
 }
 
 #[test]

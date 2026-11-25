@@ -54,7 +54,7 @@ Two repository skills carry the procedure:
 - `self-improve` mines recent sessions and routes durable findings into `AGENTS.md`, a new skill, or a hook suggestion.
 - `harness-improve` is the manual version of the eval-driven loop.
 
-Both are `disable-model-invocation: true`. Run `/skill:self-improve` or `/skill:harness-improve` explicitly. After writing a new skill, run `/reload` so the next system prompt, the `/skills` list and the `/skill:` rows pick it up without losing the conversation.
+Both are `disable-model-invocation: true`. Run `/skill:self-improve` or `/skill:harness-improve` explicitly. After writing a new skill, run `/reload` so the next system prompt and the `/skill:` rows pick it up without losing the conversation.
 
 ## See also
 

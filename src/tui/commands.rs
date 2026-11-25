@@ -35,7 +35,6 @@ pub enum Command {
     /// Compact the context now; an argument becomes focus instructions
     /// for the summarize call (§14's manual path).
     Compact(Option<String>),
-    Skills,
     Session,
     /// Dump the assembled system prompt (§12's debugging affordance).
     Context,
@@ -89,7 +88,6 @@ pub fn classify_submission(text: &str) -> Submission {
             "new" => Command::New,
             "resume" => Command::Resume(Some(arg)).filter_arg(),
             "compact" => Command::Compact(Some(arg)).filter_arg(),
-            "skills" => Command::Skills,
             "session" => Command::Session,
             "context" => Command::Context,
             "model" => Command::Model(Some(arg)).filter_arg(),
@@ -123,7 +121,7 @@ impl Command {
 
 /// The valid commands, for unknown-command feedback.
 pub fn known_commands() -> &'static str {
-    "/new /resume [n|prefix] /compact [instructions] /skills /session /context /hooks /skill:<name> [args] /model [provider/model] /think [effort|off|default] [budget] /reload /quit"
+    "/new /resume [n|prefix] /compact [instructions] /session /context /hooks /skill:<name> [args] /model [provider/model] /think [effort|off|default] [budget] /reload /quit"
 }
 
 /// Everything a command needs to act: view state, the agent channels, the
@@ -163,23 +161,6 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
             input_tx.send(super::AgentInput::Reload).await?;
         }
         Command::Quit => return Ok(true),
-        Command::Skills => {
-            if skills.is_empty() {
-                state.push_info("no skills discovered");
-            }
-            for skill in skills {
-                state.push_info(&format!(
-                    "  {}{} — {}",
-                    skill.name,
-                    if skill.disable_model_invocation {
-                        " (model-invocation disabled)"
-                    } else {
-                        ""
-                    },
-                    skill.path.display(),
-                ));
-            }
-        }
         Command::Hooks => {
             if hooks.disabled() {
                 state.push_info("hooks disabled by --no-hooks");
@@ -233,7 +214,7 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
         Command::Skill { name, args } => {
             let Some(skill) = skills.iter().find(|s| s.name == name) else {
                 state.push_warning(&format!(
-                    "no skill named {name:?}; /skills lists what exists"
+                    "no skill named {name:?}; type /skill: to list skills"
                 ));
                 return Ok(false);
             };
@@ -351,10 +332,14 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
             .await?;
         }
         Command::Unknown(name) => {
-            state.push_warning(&format!(
-                "unknown command /{name} — valid: {}",
-                known_commands()
-            ));
+            if name == "skills" {
+                state.push_warning("/skills was removed: type /skill: to list skills");
+            } else {
+                state.push_warning(&format!(
+                    "unknown command /{name} — valid: {}",
+                    known_commands()
+                ));
+            }
         }
     }
     Ok(false)

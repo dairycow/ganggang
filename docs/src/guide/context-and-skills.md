@@ -31,9 +31,9 @@ Only each skill's **name, description and path** are advertised in the system pr
 
 - Frontmatter is simple `key: value` lines (quotes are stripped); unknown keys are ignored. `name` and `description` are required, otherwise the skill is skipped with a warning.
 - `disable-model-invocation: true` hides a skill from the prompt while keeping it available on demand.
-- `/skills` lists discovered skills; `/skill:<name> [args]` forces one: its instructions become your next message and run immediately.
+- `/skill:` lists discovered skills in the suggestion popup; `/skill:<name> [args]` forces one: its instructions become your next message and run immediately.
 - `@file` mentions in the arguments work as they do in a plain message: the transcript keeps the arguments you typed, and the attached file content reaches the model with the instructions. The skill's own instructions are never scanned for mentions.
 
 ## Reloading context and skills
 
-`/reload` re-discovers `AGENTS.md` files and skills from disk while the session is running: new files and skill directories are picked up, removed ones drop out of the next system prompt, and the TUI's `/skills` list and `/skill:` rows refresh to match. The session's entries, session id, and frozen prompt date are kept, so the reload never invalidates the conversation. Discovery warnings (unreadable files, skills with missing fields) are shown in the transcript.
+`/reload` re-discovers `AGENTS.md` files and skills from disk while the session is running: new files and skill directories are picked up, removed ones drop out of the next system prompt, and the TUI's `/skill:` rows refresh to match. The session's entries, session id, and frozen prompt date are kept, so the reload never invalidates the conversation. Discovery warnings (unreadable files, skills with missing fields) are shown in the transcript.

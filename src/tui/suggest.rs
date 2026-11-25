@@ -13,10 +13,10 @@ use ratatui::text::{Line as UiLine, Span};
 
 use super::theme::Palette;
 
-/// Rows the popup shows at most. Twelve is the whole built-in set (the
+/// Rows the popup shows at most. Eleven is the whole built-in set (the
 /// merged set includes `/hooks`, §22, `/model`, `/think`, and `/reload`);
 /// skills flow in as the prefix narrows.
-const MAX_ROWS: usize = 12;
+const MAX_ROWS: usize = 11;
 
 /// One popup row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,7 +40,6 @@ pub(crate) const BUILTINS: &[(&str, &str, &str)] = &[
         " [instructions]",
         "summarise and rebuild the context",
     ),
-    ("/skills", "", "list discovered skills"),
     ("/session", "", "session path, entries, token totals"),
     ("/context", "", "show the assembled system prompt"),
     ("/hooks", "", "list loaded hooks"),
@@ -82,10 +81,14 @@ pub fn suggestions(text: &str, skills: &[Skill]) -> Vec<Suggestion> {
         // itself closes on whitespace, so it could not even be typed).
         for skill in skills {
             if skill.name.starts_with(prefix) && !skill.name.chars().any(char::is_whitespace) {
+                let mut description = skill.description.clone();
+                if skill.disable_model_invocation {
+                    description.push_str(" · manual only");
+                }
                 out.push(Suggestion {
                     label: format!("/skill:{}", skill.name),
                     completion: format!("/skill:{} ", skill.name),
-                    description: skill.description.clone(),
+                    description,
                 });
             }
         }

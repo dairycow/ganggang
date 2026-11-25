@@ -31,7 +31,6 @@ fn a_bare_slash_lists_the_whole_builtin_set() {
             "/new",
             "/resume [n|prefix]",
             "/compact [instructions]",
-            "/skills",
             "/session",
             "/context",
             "/hooks",
@@ -53,10 +52,9 @@ fn the_typed_prefix_filters_and_keeps_order() {
         labels("/c", &[]),
         vec!["/compact [instructions]", "/context"]
     );
-    // `/skill` is a prefix of both the list command and the forcing
-    // form — both are real continuations, both show.
-    assert_eq!(labels("/sk", &[]), vec!["/skills", "/skill:<name> [args]"]);
-    assert_eq!(labels("/skills", &[]), vec!["/skills"]);
+    // `/sk` only matches the forcing form: the list command is gone.
+    assert_eq!(labels("/sk", &[]), vec!["/skill:<name> [args]"]);
+    assert_eq!(labels("/skills", &[]), Vec::<String>::new());
     assert_eq!(labels("/zzz", &[]), Vec::<String>::new());
 }
 
@@ -67,7 +65,7 @@ fn completions_carry_a_trailing_space_for_arguments() {
     // The generic skill row completes to the colon, not a space —
     // the name is still to come.
     let got = suggestions("/ski", &[]);
-    assert_eq!(got[1].completion, "/skill:");
+    assert_eq!(got[0].completion, "/skill:");
 }
 
 #[test]
@@ -107,6 +105,18 @@ fn whitespace_named_skills_are_not_advertised() {
         vec!["/skill:pdf-tools"],
         "the spaced imposter is skipped (it would match the prefix), the real one shows"
     );
+}
+
+/// A `disable-model-invocation` skill is flagged in its row: the popup
+/// says what the system prompt does not.
+#[test]
+fn manual_only_skills_are_flagged_in_their_row() {
+    let mut manual = skill("pdf-tools", "pdf extraction");
+    manual.disable_model_invocation = true;
+    let skills = [manual, skill("web", "fetch pages")];
+    let got = suggestions("/skill:", &skills);
+    assert_eq!(got[0].description, "pdf extraction · manual only");
+    assert_eq!(got[1].description, "fetch pages");
 }
 
 #[test]

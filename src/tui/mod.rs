@@ -79,7 +79,7 @@ pub type Factory = Arc<
 
 /// The discovery sets the TUI renders lists from, shared read-only with
 /// the command handler. The Agent discovers its own copy of the skills
-/// (same cwd, same result); `/skills`, `/skill:`, `/hooks` and `/model`
+/// (same cwd, same result); `/skill:`, `/hooks` and `/model`
 /// all answer without a round-trip to the agent task.
 pub struct Discovered {
     pub skills: Arc<Vec<Skill>>,

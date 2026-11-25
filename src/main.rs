@@ -302,7 +302,7 @@ async fn main() -> anyhow::Result<()> {
             (Some(_), Some(path)) => tui::watch::take_draft(path),
             _ => None,
         };
-        // Shared discovery for /skills and /skill: — the Agent discovers
+        // Shared discovery for /skill: — the Agent discovers
         // its own copy at construction; same cwd, same result.
         let (skills, _) = agent::skills::discover(&cwd);
         let discovered = tui::Discovered {
