@@ -2,7 +2,7 @@
 
 ## The system prompt
 
-`gg` builds the system prompt fresh for every request from named sections, in this order: preamble, context files (`AGENTS.md`), skills, then working directory (cwd, OS, date). Empty sections are omitted. Tool names, descriptions and JSON schemas ride in the API `tools` array on every request, so the system prompt does not repeat them. Inspect exactly what the next request carries with `/context` in the TUI, or set `GG_DEBUG_PROMPT=1` to dump it to stderr.
+`gg` builds the system prompt fresh for every request from named sections, in this order: preamble, context files (`AGENTS.md`), skills, then environment (cwd, OS, date, active model). Empty sections are omitted. Tool names, descriptions and JSON schemas ride in the API `tools` array on every request, so the system prompt does not repeat them; the preamble's working-style guidance names only the enabled tools (see [Choosing which tools are offered](tools.md#choosing-which-tools-are-offered)), so a read-only run never advertises `edit` or `bash`. Inspect exactly what the next request carries with `/context` in the TUI, or set `GG_DEBUG_PROMPT=1` to dump it to stderr.
 
 ## AGENTS.md
 

@@ -25,6 +25,7 @@ pub struct Agent {
     pub(super) entries: Vec<session::Entry>,
     pub(super) tools: tools::Registry,
     pub(super) model: String,
+    pub(super) model_label: Option<String>,
     pub(super) max_tokens: u32,
     pub(super) abort: Arc<AtomicBool>,
     /// Session cwd: tools run here and the system prompt reports it.
@@ -92,6 +93,7 @@ impl Agent {
             entries: Vec::new(),
             tools,
             model,
+            model_label: None,
             max_tokens,
             abort,
             cwd,
@@ -126,6 +128,11 @@ impl Agent {
         self
     }
 
+    pub fn with_model_label(mut self, label: impl Into<String>) -> Self {
+        self.model_label = Some(label.into());
+        self
+    }
+
     pub fn switch_endpoint(&mut self, endpoint: &crate::config::Endpoint) -> anyhow::Result<()> {
         // The retry budget and the request timeout are the run's, not the
         // endpoint's: carry both onto the fresh client rather than falling
@@ -136,6 +143,7 @@ impl Agent {
             .with_request_timeout(self.client.request_timeout_secs());
         self.client = client;
         self.model = endpoint.model.clone();
+        self.model_label = Some(endpoint.label());
         self.max_tokens = endpoint.max_tokens;
         self.context_window = endpoint.context_window;
         self.replay_reasoning = endpoint.replay_reasoning;
@@ -153,11 +161,14 @@ impl Agent {
     /// each request through this, and the TUI's `/context` shows exactly
     /// the same assembly.
     pub fn system_prompt(&self) -> String {
-        context::build_system_prompt_with_date(
+        let tool_names: Vec<&str> = self.tools.tools().iter().map(|t| t.name()).collect();
+        context::build_system_prompt_for(
             &self.cwd,
             &self.agents_files,
             &self.skills,
             &self.prompt_date,
+            Some(self.model_label.as_deref().unwrap_or(&self.model)),
+            &tool_names,
         )
     }
 

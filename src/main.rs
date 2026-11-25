@@ -624,7 +624,8 @@ fn build_agent(
     )
     .with_replay_reasoning(endpoint.replay_reasoning)
     .with_compact_threshold(endpoint.compact_threshold_tokens)
-    .with_max_turns(cfg.max_turns))
+    .with_max_turns(cfg.max_turns)
+    .with_model_label(endpoint.label()))
 }
 
 /// Resolve a session pick into (store, entries-to-replay, path). New:

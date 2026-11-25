@@ -234,6 +234,64 @@ async fn system_prompt_is_byte_identical_across_turns() {
     assert_eq!(requests[0]["messages"][0], requests[1]["messages"][0]);
 }
 
+#[test]
+fn system_prompt_reports_model_label_and_updates_on_switch_endpoint() {
+    let registry = Registry::new();
+    let client = LlmClient::new("http://127.0.0.1:8080/v1").unwrap();
+    let mut agent = Agent::new(
+        client,
+        registry,
+        "raw-model".into(),
+        512,
+        Arc::new(AtomicBool::new(false)),
+        std::env::temp_dir(),
+        None,
+        false,
+        131_072,
+        Default::default(),
+    )
+    .with_model_label("byteshape/byteshape-qwen3.8-27b-iq3_s");
+    assert!(
+        agent
+            .system_prompt()
+            .contains("model: byteshape/byteshape-qwen3.8-27b-iq3_s")
+    );
+
+    let cfg = crate::config::Config::default();
+    let ep = cfg.active_endpoint();
+    agent.switch_endpoint(&ep).unwrap();
+    assert!(
+        agent
+            .system_prompt()
+            .contains(&format!("model: {}", ep.label()))
+    );
+}
+
+#[test]
+fn system_prompt_adapts_to_registered_tools_and_uses_environment_header() {
+    let mut registry = Registry::new();
+    registry.register(Box::new(Echo));
+    let client = LlmClient::new("http://127.0.0.1:8080/v1").unwrap();
+    let agent = Agent::new(
+        client,
+        registry,
+        "raw-model".into(),
+        512,
+        Arc::new(AtomicBool::new(false)),
+        std::env::temp_dir(),
+        None,
+        false,
+        131_072,
+        Default::default(),
+    )
+    .with_model_label("test/model");
+    let prompt = agent.system_prompt();
+    assert!(prompt.contains("# Environment"));
+    assert!(prompt.contains("model: test/model"));
+    assert!(!prompt.contains("bash runs in cwd"));
+    assert!(!prompt.contains("calling edit"));
+}
+
 #[tokio::test]
 async fn prompt_date_stays_frozen_when_overridden() {
     let server = FakeServer::spawn(vec![

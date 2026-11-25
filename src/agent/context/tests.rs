@@ -10,9 +10,7 @@ fn sections_appear_in_spec_order_with_no_files_or_skills() {
     let prompt = build_system_prompt(Path::new("/tmp/proj"), &[], &[]);
 
     let preamble_at = prompt.find("You are gg").expect("preamble first");
-    let workdir_at = prompt
-        .find("# Working directory")
-        .expect("working dir last");
+    let workdir_at = prompt.find("# Environment").expect("environment last");
     assert!(preamble_at < workdir_at);
     assert!(prompt.contains("Ground every claim in tool output"));
     assert!(prompt.contains("never `cd <cwd> &&`"));
@@ -26,11 +24,11 @@ fn sections_appear_in_spec_order_with_no_files_or_skills() {
 }
 
 #[test]
-fn working_dir_section_names_the_cwd_and_today() {
+fn environment_section_names_the_cwd_and_today() {
     let cwd = Path::new("/home/user/Projects/ganggang");
     let prompt = build_system_prompt(cwd, &[], &[]);
     let section = prompt
-        .split("# Working directory")
+        .split("# Environment")
         .nth(1)
         .expect("section present");
     assert!(section.contains("/home/user/Projects/ganggang"));
@@ -66,7 +64,7 @@ fn context_files_render_with_their_origin_and_content_root_first() {
     // The context section sits between preamble and working directory.
     let ctx_at = prompt.find("# Context files").unwrap();
     assert!(prompt.find("You are gg").unwrap() < ctx_at);
-    assert!(ctx_at < prompt.find("# Working directory").unwrap());
+    assert!(ctx_at < prompt.find("# Environment").unwrap());
 }
 
 fn touch(path: &std::path::Path, content: &str) {
@@ -170,7 +168,7 @@ fn skills_advertise_name_description_path_and_hide_disabled() {
     );
 
     let skills_at = prompt.find("# Skills").expect("skills section present");
-    let workdir_at = prompt.find("# Working directory").expect("workdir");
+    let workdir_at = prompt.find("# Environment").expect("environment");
     assert!(
         prompt.find("You are gg").unwrap() < skills_at && skills_at < workdir_at,
         "§12 order"
@@ -199,17 +197,101 @@ fn build_system_prompt_with_date_pins_the_supplied_date() {
 fn preamble_batches_reads_and_re_reads_after_compaction_or_formatting() {
     let prompt = build_system_prompt(Path::new("/tmp/proj"), &[], &[]);
     assert!(
-        prompt.contains("batch every independent read-only call"),
-        "{prompt}"
-    );
-    assert!(
-        prompt.contains("(outline, grep, read, find, ls)"),
+        prompt.contains("Batch all independent read-only calls (outline, grep, read, find, ls)"),
         "{prompt}"
     );
     assert!(prompt.contains("over ~200 lines"), "{prompt}");
     assert!(prompt.contains("`files_only: true`"), "{prompt}");
+    assert!(prompt.contains("read(offset, limit)"), "{prompt}");
     assert!(
-        prompt.contains("re-read the target lines before calling edit"),
+        prompt.contains("re-read target lines before calling edit"),
         "{prompt}"
     );
+    assert!(prompt.contains("pipefail"), "{prompt}");
+    assert!(prompt.contains("~/.gg/config.toml"), "{prompt}");
+    assert!(
+        prompt.contains("system or new dependency installs"),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("cargo fmt"), "{prompt}");
+    assert!(!prompt.contains("Routine dependency installs"), "{prompt}");
+}
+
+#[test]
+fn preamble_adapts_to_tool_allowlist() {
+    let ro = build_system_prompt_for(
+        Path::new("/repo"),
+        &[],
+        &[],
+        "2026-11-25",
+        None,
+        &["read", "grep", "find", "ls"],
+    );
+    assert!(ro.contains("(grep, read, find, ls)"), "{ro}");
+    assert!(ro.contains("`files_only: true`"), "{ro}");
+    assert!(ro.contains("read(offset, limit)"), "{ro}");
+    assert!(!ro.contains("outline"), "{ro}");
+    assert!(!ro.contains("bash"), "{ro}");
+    assert!(!ro.contains("calling edit"), "{ro}");
+
+    let bash_only =
+        build_system_prompt_for(Path::new("/repo"), &[], &[], "2026-11-25", None, &["bash"]);
+    assert!(bash_only.contains("bash runs in cwd"), "{bash_only}");
+    assert!(bash_only.contains("pipefail"), "{bash_only}");
+    assert!(
+        !bash_only.contains("Use native tools instead of bash"),
+        "{bash_only}"
+    );
+    assert!(!bash_only.contains("read-only calls"), "{bash_only}");
+    assert!(!bash_only.contains("calling edit"), "{bash_only}");
+
+    let read_only =
+        build_system_prompt_for(Path::new("/repo"), &[], &[], "2026-11-25", None, &["read"]);
+    assert!(
+        read_only.contains("Batch all independent read-only calls (read)"),
+        "{read_only}"
+    );
+    assert!(
+        read_only.contains("Prefer targeted read(offset, limit)"),
+        "{read_only}"
+    );
+    assert!(!read_only.contains("outline"), "{read_only}");
+    assert!(!read_only.contains("grep"), "{read_only}");
+    assert!(!read_only.contains("bash"), "{read_only}");
+    assert!(!read_only.contains("calling edit"), "{read_only}");
+}
+
+#[test]
+fn build_system_prompt_for_includes_model_label_and_skill_path_guidance() {
+    use crate::agent::skills::Skill;
+    let skills = [Skill {
+        name: "docs".into(),
+        description: "sync docs".into(),
+        disable_model_invocation: false,
+        path: PathBuf::from("/repo/.agents/skills/docs/SKILL.md"),
+        instructions: "body".into(),
+    }];
+    let with_model = build_system_prompt_for(
+        Path::new("/repo"),
+        &[],
+        &skills,
+        "2026-11-25",
+        Some("byteshape/byteshape-qwen3.8-27b-iq3_s"),
+        crate::agent::tools::NAMES,
+    );
+    assert!(with_model.contains("model: byteshape/byteshape-qwen3.8-27b-iq3_s"));
+    assert!(
+        with_model
+            .contains("bundled skill files live beside SKILL.md; repository commands run from cwd")
+    );
+
+    let blank_model = build_system_prompt_for(
+        Path::new("/repo"),
+        &[],
+        &[],
+        "2026-11-25",
+        Some("  "),
+        crate::agent::tools::NAMES,
+    );
+    assert!(!blank_model.contains("model:"));
 }
