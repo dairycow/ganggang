@@ -51,6 +51,9 @@ pub struct Config {
     pub compact_threshold_tokens: Option<u32>,
     pub compact_threshold_explicit: bool,
     pub max_turns: Option<u32>,
+    /// Optional wall-clock budget per run in seconds (`--max-seconds` /
+    /// `GG_MAX_SECONDS`), `None` or `0` for no limit.
+    pub max_seconds: Option<u64>,
     pub bash_timeout_secs: u64,
     /// Extra attempts a transient LLM transport failure earns (0 turns
     /// retrying off). The policy itself lives in `llm::retry`.
@@ -92,6 +95,7 @@ impl Default for Config {
             compact_threshold_tokens: ep.compact_threshold_tokens,
             compact_threshold_explicit: ep.compact_threshold_explicit,
             max_turns: None,
+            max_seconds: None,
             bash_timeout_secs: 30,
             max_retries: 5,
             request_timeout_secs: 600,
@@ -186,6 +190,13 @@ impl Config {
     pub fn apply_max_turns_cli(&mut self, max_turns: Option<u32>) {
         if let Some(n) = max_turns {
             self.max_turns = (n > 0).then_some(n);
+        }
+    }
+
+    /// Apply `--max-seconds`; `0` disables the budget.
+    pub fn apply_max_seconds_cli(&mut self, max_seconds: Option<u64>) {
+        if let Some(n) = max_seconds {
+            self.max_seconds = (n > 0).then_some(n);
         }
     }
 
@@ -299,6 +310,7 @@ struct FileConfig {
     reasoning_budget_tokens: Option<u32>,
     compact_threshold_tokens: Option<u32>,
     max_turns: Option<u32>,
+    max_seconds: Option<u64>,
     bash_timeout_secs: Option<u64>,
     max_retries: Option<u32>,
     request_timeout_secs: Option<u64>,
@@ -456,6 +468,17 @@ pub fn merge(
         }
         None => file_max_turns,
     };
+    let file_max_seconds = project
+        .max_seconds
+        .or(user.max_seconds)
+        .and_then(|n| (n > 0).then_some(n));
+    let max_seconds = match env_value(env, "GG_MAX_SECONDS") {
+        Some(raw) => {
+            let parsed: u64 = parse_env(Some(raw), "GG_MAX_SECONDS", 0)?;
+            (parsed > 0).then_some(parsed)
+        }
+        None => file_max_seconds,
+    };
 
     let cfg = Config {
         provider: ep.provider,
@@ -474,6 +497,7 @@ pub fn merge(
         compact_threshold_tokens: ep.compact_threshold_tokens,
         compact_threshold_explicit: ep.compact_threshold_explicit,
         max_turns,
+        max_seconds,
         bash_timeout_secs: parse_env(
             env_value(env, "GG_BASH_TIMEOUT"),
             "GG_BASH_TIMEOUT",

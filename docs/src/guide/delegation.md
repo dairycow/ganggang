@@ -24,6 +24,7 @@ The `bash` tool describes the run in a few environment variables (see [Configura
 |---|---|
 | Tools | A subset of the parent's allowlist. `--tools` may only name tools the parent has; a name outside it is an error |
 | Turns | At most the parent's `max_turns`, when it has one |
+| Time | At most the parent's `max_seconds`, when it has one |
 | Hooks | The parent's, on or off. `--no-hooks` is ignored, with a warning |
 | Model | The parent's current model, unless `-m` or `-P` is given |
 | Depth | One level: a nested run cannot start a nested run |
@@ -50,6 +51,6 @@ The [delegate skill](#the-delegate-skill) starts a job that has `--timeout` in a
 The `ganggang` repository ships a `delegate` skill in `.agents/skills/delegate/`:
 
 - `SKILL.md` tells the model when and how to delegate.
-- `delegate.sh` runs one job and keeps `NAME.prompt.md`, `NAME.out`, `NAME.err` and `NAME.jsonl` together. It stops a job at `--timeout` and reports an empty answer as `NO ANSWER`.
+- `delegate.sh` runs one job and keeps `NAME.prompt.md`, `NAME.out`, `NAME.err` and `NAME.jsonl` together. It stops a job at `--timeout` and reports an empty answer as `NO ANSWER`. A `--timeout` of 20 s or more gives the job a [time budget](modes.md#run-budgets) 10 s short of the timeout (`--timeout 60` passes `--max-seconds 50`), so the job asks for its final answer and writes `NAME.out` before the watchdog stops it.
 
 Copy the directory into `~/.agents/skills/` to use it in any repository.

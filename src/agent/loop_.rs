@@ -6,11 +6,15 @@
 //! optional `--max-turns` / `GG_MAX_TURNS` cap. The cap bounds one thing
 //! more than it did: a truncated answer earns a few "keep going" turns
 //! ([`cut`]), and those count toward it like any other.
+//!
+//! `--max-seconds` is the same budget on the clock ([`time_budget`]): a
+//! nudge at 80% of it, a final request at the end of it, and the run stops
+//! when that request's turn is over.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::Sender;
 
@@ -20,12 +24,16 @@ use crate::llm::types::ChatMessage;
 use super::Agent;
 use super::compaction;
 use super::session::{self, Role};
-use super::tools::Cancel;
+use super::tools::{Cancel, ToolResult};
+
+/// The answer a tool call gets on the time budget's final turn.
+const TIME_BUDGET_SPENT: &str = "not executed: time budget reached";
 
 mod ask;
 mod cut;
 mod dispatch;
 mod record;
+mod time_budget;
 
 pub(crate) async fn wait_for_abort(abort: &Arc<AtomicBool>) {
     loop {
@@ -60,6 +68,19 @@ pub(super) fn wrap_up_notice(turns: u32, limit: u32) -> Option<String> {
 }
 
 impl Agent {
+    /// End the run on the time budget: the warning every interface sees.
+    async fn emit_time_stop(&self, events: &mut Sender<AgentEvent>) -> anyhow::Result<()> {
+        let Some(limit) = self.max_seconds else {
+            return Ok(());
+        };
+        events
+            .send(AgentEvent::Warned {
+                message: format!("reached max_seconds ({limit}s); stopping run"),
+            })
+            .await?;
+        Ok(())
+    }
+
     /// Record an abort marker in the session and emit `Warned` + `RunAborted`.
     pub(super) async fn emit_abort(
         &mut self,
@@ -93,6 +114,9 @@ impl Agent {
         // by an earlier run (or an interface path that forgot to reset it)
         // would phantom-abort this one between tool calls.
         self.abort.store(false, Ordering::Release);
+        // The clock the time budget is read from: one start for the run.
+        let started_at = Instant::now();
+        self.run_started_at = Some(started_at);
         // The tool-facing view of that same flag: one handle for every call
         // this run dispatches, so a running tool notices the stop request
         // instead of only being skipped between calls.
@@ -113,6 +137,10 @@ impl Agent {
         }
 
         let mut turns = 0u32;
+        // The time budget's two lines, each crossed once per run: the 80%
+        // nudge, then the final request.
+        let mut time_soft_nudged = false;
+        let mut time_final_turn = false;
         // Wrap-up notices keyed by the entry id they ride: recorded once and
         // replayed from then on, so the request stays append-only past the
         // 80% line and the provider's KV prefix cache survives the nudges.
@@ -147,6 +175,33 @@ impl Agent {
                 content: Some(system),
                 ..ChatMessage::default()
             }];
+            // The time budget, read before the request: the 80% line
+            // nudges once, the budget itself makes this the final turn.
+            let mut time_notice = None;
+            if let Some((elapsed, limit)) =
+                time_budget::clock(self.seconds_into_run(), self.max_seconds)
+            {
+                let step = time_budget::step(elapsed, limit, time_soft_nudged, time_final_turn);
+                let warning = match step {
+                    time_budget::Step::None => None,
+                    time_budget::Step::Soft => {
+                        time_soft_nudged = true;
+                        Some(format!(
+                            "approaching max_seconds ({elapsed}s/{limit}s); nudging model to wrap up"
+                        ))
+                    }
+                    time_budget::Step::Final => {
+                        time_final_turn = true;
+                        Some(format!(
+                            "reached max_seconds ({limit}s); asking model for final response"
+                        ))
+                    }
+                };
+                if let Some(message) = warning {
+                    events.send(AgentEvent::Warned { message }).await?;
+                }
+                time_notice = time_budget::notice(step, elapsed, limit);
+            }
             if let Some(limit) = self.max_turns
                 && limit >= 2
                 && turns == soft_nudge_turn(limit)
@@ -159,10 +214,19 @@ impl Agent {
                     })
                     .await?;
             }
+            // The turn budget's notice and the time budget's ride together:
+            // both are earned at most twice a run and both stay put.
             let mut trailing_notice: Option<String> = None;
-            if let Some(limit) = self.max_turns
-                && let Some(notice) = wrap_up_notice(turns, limit)
-            {
+            let budget_notice = self
+                .max_turns
+                .and_then(|limit| wrap_up_notice(turns, limit));
+            let budget_notice = match (budget_notice, time_notice) {
+                (Some(turns_notice), Some(time_notice)) => {
+                    Some(format!("{turns_notice}\n\n{time_notice}"))
+                }
+                (one, other) => one.or(other),
+            };
+            if let Some(notice) = budget_notice {
                 // The notice rides the entry backing the last wire message
                 // (the last tool result, or the continuation instruction),
                 // where it stays for the rest of the run. A message of its
@@ -268,7 +332,8 @@ impl Agent {
             let retry_without_reasoning = thought_only
                 && !reasoning_off
                 && !self.client.reasoning_is_off()
-                && !self.at_turn_limit(turns);
+                && !self.at_turn_limit(turns)
+                && !time_final_turn;
             // The retry of a thought-only turn is no recovery yet: only a
             // turn that needed no retry ends the run of thought-only cuts.
             if !thought_only && !reasoning_off {
@@ -323,6 +388,7 @@ impl Agent {
                     },
                     thought_only: retry_without_reasoning,
                     thought_only_again,
+                    at_time_limit: time_final_turn,
                 };
                 let tool_call_ids = message
                     .tool_calls
@@ -352,7 +418,12 @@ impl Agent {
                         without_reasoning = true;
                         continue;
                     }
-                    cut::After::EndRun => break,
+                    cut::After::EndRun => {
+                        if time_final_turn {
+                            self.emit_time_stop(events).await?;
+                        }
+                        break;
+                    }
                     cut::After::Aborted => {
                         // The loop's abort shape finishes the run with every
                         // entry it has.
@@ -373,9 +444,32 @@ impl Agent {
                         })
                         .await?;
                 }
+                // The final turn's answer ends the run, budget spent.
+                if time_final_turn {
+                    self.emit_time_stop(events).await?;
+                }
                 events
                     .send(AgentEvent::TurnEnded {
                         stop_reason: "stop".into(),
+                        usage: turn_usage,
+                        timings,
+                        thinking_pct,
+                    })
+                    .await?;
+                break;
+            }
+
+            // The final turn asked for tools anyway: none of them run, since
+            // the budget is spent, yet each gets a result so the session
+            // stays replay-safe.
+            if time_final_turn {
+                for call in &message.tool_calls {
+                    self.push_tool_result(&call.id, &ToolResult::err(TIME_BUDGET_SPENT.into()))?;
+                }
+                self.emit_time_stop(events).await?;
+                events
+                    .send(AgentEvent::TurnEnded {
+                        stop_reason: "tool_calls".into(),
                         usage: turn_usage,
                         timings,
                         thinking_pct,

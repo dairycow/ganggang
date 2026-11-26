@@ -500,6 +500,7 @@ fn a_command_carries_the_whole_nest_set_or_removed() {
     // stand in for this run's.
     assert_eq!(seen[PARENT_MODEL], None);
     assert_eq!(seen[MAX_TURNS_CAP], None);
+    assert_eq!(seen[crate::nested::MAX_SECONDS_CAP], None);
 }
 
 #[tokio::test]
@@ -508,14 +509,19 @@ async fn a_command_sees_the_nest_of_the_run_that_started_it() {
         session: Some("parent-1".into()),
         tool_cap: Some(vec!["read".into(), "bash".into()]),
         max_turns_cap: Some(9),
+        max_seconds_cap: Some(120),
         ..ParentEnv::default()
     };
     let tool = BashTool::new(std::env::temp_dir(), 30, nest.shared());
     let r = tool
         .execute(
-            &serde_json::json!({"command": "printf '%s\\n' \"$GG_NEST_DEPTH|$GG_PARENT_SESSION|$GG_TOOL_CAP|$GG_MAX_TURNS_CAP\""}),
+            &serde_json::json!({"command": "printf '%s\\n' \"$GG_NEST_DEPTH|$GG_PARENT_SESSION|$GG_TOOL_CAP|$GG_MAX_TURNS_CAP|$GG_MAX_SECONDS_CAP\""}),
             &no_cancel(),
         )
         .await;
-    assert!(r.output.contains("1|parent-1|read,bash|9"), "{}", r.output);
+    assert!(
+        r.output.contains("1|parent-1|read,bash|9|120"),
+        "{}",
+        r.output
+    );
 }

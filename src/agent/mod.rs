@@ -56,6 +56,15 @@ pub struct Agent {
     pub(super) compact_threshold_tokens: Option<u32>,
     /// Optional per-run turn budget (`--max-turns` / `GG_MAX_TURNS`).
     pub(super) max_turns: Option<u32>,
+    /// Optional per-run wall-clock budget in seconds (`--max-seconds` /
+    /// `GG_MAX_SECONDS`).
+    pub(super) max_seconds: Option<u64>,
+    /// When [`Agent::run`] started, for the time budget. `None` until a
+    /// run does, which leaves a run without a clock unlimited.
+    pub(super) run_started_at: Option<std::time::Instant>,
+    /// How far ahead of the clock a scripted test's run is.
+    #[cfg(test)]
+    pub(super) time_ahead: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Frozen UTC date (`YYYY-MM-DD`) captured at Agent creation so
     /// midnight UTC never invalidates the KV prefix mid-session.
     pub(super) prompt_date: String,
@@ -109,6 +118,10 @@ impl Agent {
             context_window,
             compact_threshold_tokens: None,
             max_turns: None,
+            max_seconds: None,
+            run_started_at: None,
+            #[cfg(test)]
+            time_ahead: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             prompt_date: context::today_utc_iso(),
             replay_reasoning: session::ReplayReasoning::Never,
             session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
@@ -130,6 +143,34 @@ impl Agent {
     pub fn with_max_turns(mut self, max_turns: Option<u32>) -> Self {
         self.max_turns = max_turns.filter(|&n| n > 0);
         self
+    }
+
+    pub fn with_max_seconds(mut self, max_seconds: Option<u64>) -> Self {
+        self.max_seconds = max_seconds.filter(|&n| n > 0);
+        self
+    }
+
+    /// Whole seconds since the run started, as a scripted test has moved
+    /// it; `None` until a run does.
+    pub(super) fn seconds_into_run(&self) -> Option<u64> {
+        let started_at = self.run_started_at?;
+        Some(
+            started_at
+                .elapsed()
+                .as_secs()
+                .saturating_add(self.seconds_ahead()),
+        )
+    }
+
+    /// How far ahead of the clock a scripted test's run is.
+    #[cfg(test)]
+    fn seconds_ahead(&self) -> u64 {
+        self.time_ahead.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[cfg(not(test))]
+    fn seconds_ahead(&self) -> u64 {
+        0
     }
 
     pub fn with_model_label(mut self, label: impl Into<String>) -> Self {

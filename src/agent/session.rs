@@ -477,7 +477,7 @@ pub fn from_response(resp: ChatResponse) -> anyhow::Result<(Message, Vec<String>
                 completion_tokens: u.completion_tokens,
                 total_tokens: u.total_tokens,
                 reasoning_tokens,
-                cache_read_tokens: u.cache_read_tokens,
+                cache_read_tokens: u.effective_cache_read_tokens(resp.timings.as_ref()),
             }
         }),
         is_error: false,

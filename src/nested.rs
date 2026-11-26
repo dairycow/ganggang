@@ -8,6 +8,7 @@
 //!
 //! - tools: a subset of the parent's allowlist;
 //! - turns: at most the parent's `max_turns`;
+//! - time: at most the parent's `max_seconds`;
 //! - hooks: the parent's, on or off; `--no-hooks` is ignored;
 //! - model: the parent's current model unless `-m` or `-P` names one;
 //! - depth: one level, so a nested run cannot start a nested run;
@@ -31,6 +32,8 @@ pub const PARENT_MODEL: &str = "GG_PARENT_MODEL";
 pub const TOOL_CAP: &str = "GG_TOOL_CAP";
 /// The parent run's `max_turns`, when it has one.
 pub const MAX_TURNS_CAP: &str = "GG_MAX_TURNS_CAP";
+/// The parent run's `max_seconds`, when it has one.
+pub const MAX_SECONDS_CAP: &str = "GG_MAX_SECONDS_CAP";
 /// `1` when the parent run's hooks are off.
 pub const NO_HOOKS: &str = "GG_NO_HOOKS";
 
@@ -55,6 +58,8 @@ pub struct ParentEnv {
     pub tool_cap: Option<Vec<String>>,
     /// The run's effective `max_turns`.
     pub max_turns_cap: Option<u32>,
+    /// The run's effective `max_seconds`.
+    pub max_seconds_cap: Option<u64>,
     /// Whether the run's hooks are off.
     pub hooks_off: bool,
 }
@@ -79,6 +84,7 @@ impl ParentEnv {
                 self.tool_cap.as_ref().map(|tools| tools.join(",")),
             ),
             (MAX_TURNS_CAP, self.max_turns_cap.map(|n| n.to_string())),
+            (MAX_SECONDS_CAP, self.max_seconds_cap.map(|n| n.to_string())),
             (NO_HOOKS, self.hooks_off.then(|| "1".to_string())),
         ]
     }
@@ -111,6 +117,7 @@ pub struct NestedBoot {
     /// Empty when the parent allows no tools at all.
     pub tool_cap: Vec<String>,
     pub max_turns_cap: Option<u32>,
+    pub max_seconds_cap: Option<u64>,
     pub hooks_off: bool,
 }
 
@@ -143,12 +150,20 @@ impl NestedBoot {
             })?)
             .filter(|turns| *turns > 0),
         };
+        let max_seconds_cap = match non_empty(get(MAX_SECONDS_CAP)) {
+            None => None,
+            Some(raw) => Some(raw.parse::<u64>().with_context(|| {
+                format!("{MAX_SECONDS_CAP} must be a non-negative integer, got {raw:?}")
+            })?)
+            .filter(|seconds| *seconds > 0),
+        };
         Ok(Some(Self {
             depth,
             parent_session: non_empty(get(PARENT_SESSION)),
             parent_model: non_empty(get(PARENT_MODEL)),
             tool_cap: split_tools(get(TOOL_CAP).as_deref()),
             max_turns_cap,
+            max_seconds_cap,
             hooks_off: get(NO_HOOKS).as_deref() == Some("1"),
         }))
     }
@@ -182,6 +197,16 @@ impl NestedBoot {
     pub fn effective_max_turns(&self, max_turns: Option<u32>) -> Option<u32> {
         match (max_turns, self.max_turns_cap) {
             (Some(turns), Some(cap)) => Some(turns.min(cap)),
+            (None, Some(cap)) => Some(cap),
+            (other, None) => other,
+        }
+    }
+
+    /// The time budget of a nested run: its own `max_seconds`, lowered to
+    /// the parent's when the parent has one.
+    pub fn effective_max_seconds(&self, max_seconds: Option<u64>) -> Option<u64> {
+        match (max_seconds, self.max_seconds_cap) {
+            (Some(seconds), Some(cap)) => Some(seconds.min(cap)),
             (None, Some(cap)) => Some(cap),
             (other, None) => other,
         }

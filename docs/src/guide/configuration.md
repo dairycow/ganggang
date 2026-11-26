@@ -4,7 +4,7 @@
 
 Highest wins:
 
-1. CLI flags: `-P`/`--provider`, `-m`/`--model`, `--tools`, `--reasoning-effort`, `--thinking-budget`, `--max-turns`, `--session-file`
+1. CLI flags: `-P`/`--provider`, `-m`/`--model`, `--tools`, `--reasoning-effort`, `--thinking-budget`, `--max-turns`, `--max-seconds`, `--session-file`
 2. Environment variables
 3. `.gg/config.toml` (project, relative to the directory you run `gg` in)
 4. `~/.gg/config.toml` (user)
@@ -35,13 +35,14 @@ model = "deepseek-flash"
 # api_key = "…"  # or export DEEPSEEK_API_KEY
 ```
 
-Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `api_key`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`, `max_turns`, `bash_timeout_secs`, `max_retries`, `request_timeout_secs`, `tools`. The flat provider-level keys only apply when they belong to the active provider; `max_retries` and `request_timeout_secs` are top-level only.
+Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `api_key`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`, `max_turns`, `max_seconds`, `bash_timeout_secs`, `max_retries`, `request_timeout_secs`, `tools`. The flat provider-level keys only apply when they belong to the active provider; `max_retries` and `request_timeout_secs` are top-level only.
 
 - `api` is `"open-ai-completions"` (default) or `"anthropic-messages"` (note the spelling: the `openai-completions` shown by `--list-models` is display text, not the config value).
 - `auth` is `"auto"` (Bearer for OpenAI, `x-api-key` for Anthropic), `"bearer"`, or `"x-api-key"`.
 - `replay_reasoning` controls whether earlier thinking is sent back to the model: `"never"` (`false`), `"turn"` (only assistant turns since the last user message; `strata` default), or `"all"` (`true`).
 - `compact_threshold_tokens` caps when auto-compaction triggers (e.g. `65536` on `strata` to stay within local VRAM KV residency; `0` disables).
 - `max_turns` caps turns per run (`0` disables); `gg` nudges the model to wrap up at 80% of the budget.
+- `max_seconds` caps the wall-clock time of one run, in seconds (`0` disables). At 80% of the budget `gg` nudges the model to wrap up. Once the budget is spent, the next request tells the model to answer without tools and the run ends with that answer. A budget of under 5 s has no nudge. See [Run budgets](modes.md#run-budgets).
 - `bash_timeout_secs` is the ceiling for one `bash` call, in seconds (minimum `1`); a call's `timeout_secs` is clamped to it. A [nested run](delegation.md) started from `bash` lives inside that call, so delegating needs either a ceiling of minutes or `background: true` on the call, which keeps the run as a [background job](tools.md#bash) past the ceiling.
 - `max_retries` sets the number of extra attempts for transient LLM failures (HTTP 408, 429, 5xx, timeouts, and dropped connections). Backoff starts at 1000 ms with jitter and doubles with each retry, up to 30 s; a `Retry-After` header overrides the backoff (also capped at 30 s). A stream that fails before its first output, such as a connection that drops or a body that ends empty, is retried on the same budget. Once any text has streamed, a cut answer is [continued](modes.md#truncated-responses) rather than retried, so nothing is shown twice. Set to `0` to disable retries. Other 4xx responses fail immediately. When every attempt fails, the run ends and the error is [recorded in the session](sessions-compaction.md#failed-runs).
 - `request_timeout_secs` sets the total timeout in seconds for a complete LLM request and response stream (minimum `1`). Responses exceeding this limit are cut off and partial text is kept (see [Output modes and export](modes.md#print-mode)).
@@ -109,6 +110,7 @@ models = [
 | `GG_API_KEY` | API key, overriding every other key source |
 | `GG_BASH_TIMEOUT` | Maximum seconds for one bash call |
 | `GG_MAX_TURNS` | Maximum turns per run (`0` disables) |
+| `GG_MAX_SECONDS` | Maximum wall-clock seconds per run (`0` disables) |
 | `GG_MAX_RETRIES` | Extra attempts per transient LLM failure (`0` disables) |
 | `GG_REQUEST_TIMEOUT` | Whole-request timeout in seconds, stream included |
 | `GG_DEBUG_PROMPT` | Set to `1` to dump the assembled system prompt to stderr |
@@ -117,6 +119,7 @@ models = [
 | `GG_PARENT_MODEL` | The parent run's current model, the nested run's default |
 | `GG_TOOL_CAP` | The parent run's tool allowlist, the most a nested run may have |
 | `GG_MAX_TURNS_CAP` | The parent run's `max_turns`, the most a nested run may take |
+| `GG_MAX_SECONDS_CAP` | The parent run's `max_seconds`, the most a nested run may take |
 | `GG_NO_HOOKS` | `1` when the parent run's hooks are off, so the nested run's are too |
 | `ZHIPU_API_KEY` | Key for `glm-coding-plan` |
 | `OPENCODE_API_KEY` | Key for `opencode-go` |

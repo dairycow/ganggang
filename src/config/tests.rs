@@ -701,10 +701,11 @@ fn replay_reasoning_compact_threshold_max_turns_and_explicit_ctx() {
     assert_eq!(def.compact_threshold_tokens, Some(65_536));
     assert!(!def.context_window_explicit);
     assert_eq!(def.max_turns, None);
+    assert_eq!(def.max_seconds, None);
 
     let cfg = merge(
         Config::default(),
-        Some("replay_reasoning = \"all\"\ncompact_threshold_tokens = 0\nmax_turns = 25\ncontext_window = 262144\n"),
+        Some("replay_reasoning = \"all\"\ncompact_threshold_tokens = 0\nmax_turns = 25\nmax_seconds = 900\ncontext_window = 262144\n"),
         None,
         &[],
     )
@@ -712,6 +713,14 @@ fn replay_reasoning_compact_threshold_max_turns_and_explicit_ctx() {
     assert_eq!(cfg.replay_reasoning, ReplayReasoning::All);
     assert_eq!(cfg.compact_threshold_tokens, None);
     assert_eq!(cfg.max_turns, Some(25));
+    assert_eq!(cfg.max_seconds, Some(900));
+    let mut cli_cfg = cfg.clone();
+    cli_cfg.apply_max_seconds_cli(Some(0));
+    assert_eq!(cli_cfg.max_seconds, None, "0 disables");
+    cli_cfg.apply_max_seconds_cli(None);
+    assert_eq!(cli_cfg.max_seconds, None);
+    cli_cfg.apply_max_seconds_cli(Some(45));
+    assert_eq!(cli_cfg.max_seconds, Some(45));
     assert!(cfg.context_window_explicit);
 
     let bool_cfg = merge(
@@ -750,6 +759,31 @@ fn replay_reasoning_compact_threshold_max_turns_and_explicit_ctx() {
     )
     .unwrap_err();
     assert!(format!("{err:#}").contains("GG_MAX_TURNS"));
+
+    let seconds_cfg = merge(
+        Config::default(),
+        Some("max_seconds = 900\n"),
+        None,
+        &env(&[("GG_MAX_SECONDS", "0")]),
+    )
+    .unwrap();
+    assert_eq!(seconds_cfg.max_seconds, None, "the environment wins");
+    let seconds_cfg = merge(
+        Config::default(),
+        Some("max_seconds = 0\n"),
+        None,
+        &env(&[("GG_MAX_SECONDS", "120")]),
+    )
+    .unwrap();
+    assert_eq!(seconds_cfg.max_seconds, Some(120));
+    let err = merge(
+        Config::default(),
+        None,
+        None,
+        &env(&[("GG_MAX_SECONDS", "soon")]),
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("GG_MAX_SECONDS"));
 }
 
 #[test]

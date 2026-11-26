@@ -6,7 +6,7 @@ use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::stream::AnthropicAssembler;
 use super::{build_request, messages_url, parse_response};
@@ -84,7 +84,14 @@ fn build_request_extracts_system_converts_tools_and_merges_user_turns() {
     let req = build_request("claude-haiku-5-5", &messages, 4096, &tools, true);
     assert_eq!(req["model"], "claude-haiku-5-5");
     assert_eq!(req["max_tokens"], 4096);
-    assert_eq!(req["system"], "sys 1");
+    assert_eq!(
+        req["system"],
+        json!([{
+            "type": "text",
+            "text": "sys 1",
+            "cache_control": { "type": "ephemeral" }
+        }])
+    );
     assert_eq!(req["stream"], true);
     assert_eq!(req["tools"][0]["name"], "read");
     assert_eq!(
@@ -102,6 +109,86 @@ fn build_request_extracts_system_converts_tools_and_merges_user_turns() {
     assert_eq!(msgs[2]["role"], "user");
     assert_eq!(msgs[2]["content"][0]["type"], "tool_result");
     assert_eq!(msgs[2]["content"][1]["is_error"], true);
+    assert_eq!(
+        msgs[2]["content"][1]["cache_control"],
+        json!({ "type": "ephemeral" })
+    );
+    assert_eq!(
+        req["tools"][0]["cache_control"],
+        json!({ "type": "ephemeral" })
+    );
+}
+
+/// Three breakpoints, no more: the system prompt, the last tool and the
+/// last block of the last `user` message. Everything else stays unmarked.
+#[test]
+fn build_request_marks_three_cache_breakpoints() {
+    let message = |role: &str, content: &str| ChatMessage {
+        role: role.into(),
+        content: Some(content.into()),
+        ..Default::default()
+    };
+    let call = |id: &str| ChatMessage {
+        role: "tool".into(),
+        content: Some("result".into()),
+        tool_call_id: Some(id.into()),
+        ..Default::default()
+    };
+    let messages = vec![
+        message("system", "sys"),
+        message("user", "question"),
+        ChatMessage {
+            role: "assistant".into(),
+            content: Some("looking".into()),
+            tool_calls: vec![
+                ToolCall::function("c1".into(), "read".into(), "{}".into()),
+                ToolCall::function("c2".into(), "grep".into(), "{}".into()),
+            ],
+            ..Default::default()
+        },
+        call("c1"),
+        call("c2"),
+    ];
+    let tool = |name: &str| {
+        json!({
+            "type": "function",
+            "function": { "name": name, "parameters": { "type": "object" } }
+        })
+    };
+    let req = build_request("m", &messages, 1024, &[tool("read"), tool("grep")], false);
+    let marked = json!({ "type": "ephemeral" });
+
+    assert_eq!(req["system"][0]["cache_control"], marked);
+    assert_eq!(req["tools"][1]["cache_control"], marked);
+    assert!(req["tools"][0].get("cache_control").is_none());
+    let msgs = req["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 3, "user, assistant, tool results");
+    assert_eq!(msgs[2]["role"], "user");
+    assert_eq!(msgs[2]["content"][1]["cache_control"], marked);
+    assert!(msgs[2]["content"][0].get("cache_control").is_none());
+    assert!(msgs[1]["content"][0].get("cache_control").is_none());
+    assert!(msgs[0]["content"][0].get("cache_control").is_none());
+    assert!(msgs.iter().all(|m| m.get("cache_control").is_none()));
+
+    // The count over the whole body.
+    fn count(value: &Value) -> usize {
+        match value {
+            Value::Object(map) => {
+                usize::from(map.contains_key("cache_control"))
+                    + map.values().map(count).sum::<usize>()
+            }
+            Value::Array(items) => items.iter().map(count).sum(),
+            _ => 0,
+        }
+    }
+    assert_eq!(count(&req), 3);
+
+    // Nothing to mark: no system prompt, no tools, and a request that
+    // ends on an assistant message.
+    let bare = build_request("m", &messages[2..3], 1024, &[], false);
+    assert!(bare.get("system").is_none());
+    assert!(bare.get("tools").is_none());
+    assert_eq!(count(&bare), 0);
 }
 
 #[test]

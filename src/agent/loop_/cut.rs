@@ -72,6 +72,16 @@ pub(super) struct ShortTurn<'a> {
     /// [`Self::thought_only`], and the turn before it needed the same
     /// retry: reasoning goes off for the rest of the run.
     pub thought_only_again: bool,
+    /// The time budget is spent: this was the final request whatever the
+    /// turn budget says.
+    pub at_time_limit: bool,
+}
+
+/// The budget a short turn ran out of, when one is spent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Spent {
+    Turns,
+    Seconds,
 }
 
 /// How many times one run may ask the model to continue a short answer
@@ -187,7 +197,7 @@ fn plan(
     cut: Cut,
     budget: &Continuations,
     max_tokens: u32,
-    at_turn_limit: bool,
+    spent: Option<Spent>,
     has_visible_output: bool,
     thought_only: bool,
     again: bool,
@@ -207,7 +217,7 @@ fn plan(
         }
     };
     if !has_visible_output {
-        if thought_only && !at_turn_limit {
+        if thought_only && spent.is_none() {
             return Plan {
                 warning: if again {
                     format!(
@@ -232,9 +242,13 @@ fn plan(
             without_reasoning: false,
         };
     }
-    if at_turn_limit {
+    if let Some(spent) = spent {
+        let budget = match spent {
+            Spent::Turns => "max_turns",
+            Spent::Seconds => "max_seconds",
+        };
         Plan {
-            warning: format!("{head}; reached max_turns — the partial answer stands"),
+            warning: format!("{head}; reached {budget} — the partial answer stands"),
             continue_turn: false,
             without_reasoning: false,
         }
@@ -336,9 +350,15 @@ impl Agent {
             };
             self.push_tool_result(id, &ToolResult::err(answer.into()))?;
         }
-        // A turn at the run's turn budget is not continued, whatever the
-        // continuation budget says.
-        let at_turn_limit = self.at_turn_limit(turn.number);
+        // A turn at the run's turn budget, or the time budget's final turn,
+        // is not continued, whatever the continuation budget says.
+        let spent = if turn.at_time_limit {
+            Some(Spent::Seconds)
+        } else if self.at_turn_limit(turn.number) {
+            Some(Spent::Turns)
+        } else {
+            None
+        };
         // A truncation warns about itself, then decides on a continuation;
         // an abort warns about nothing (its own marker covers it) and never
         // continues. Empty warning means nothing to say.
@@ -346,7 +366,7 @@ impl Agent {
             cut,
             budget,
             self.max_tokens,
-            at_turn_limit,
+            spent,
             has_visible_output,
             turn.thought_only,
             turn.thought_only_again,

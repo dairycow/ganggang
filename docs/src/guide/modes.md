@@ -23,6 +23,15 @@ A response can end early if the provider returns `finish_reason: "length"` (the 
 
 Transient transport failures are retried (see `max_retries` in [Configuration](configuration.md)), including a stream that drops before its first output; each retry is a `warning:` line on stderr. When a run fails for good, the error is [recorded in the session](sessions-compaction.md#failed-runs).
 
+## Run budgets
+
+Two settings bound one run, and either can be left off:
+
+- `--max-turns N` (or `max_turns`, `GG_MAX_TURNS`) caps the number of requests to the model. At 80% of the budget the next request carries a notice asking the model to wrap up; the last request tells it to answer without tools.
+- `--max-seconds SECS` (or `max_seconds`, `GG_MAX_SECONDS`) caps the run's wall-clock time. The clock starts with the run and counts every request and tool call. At 80% of the budget the next request carries a wrap-up notice, and emits `warning: approaching max_seconds (80s/100s); nudging model to wrap up`. Once the budget is spent, `gg` emits `warning: reached max_seconds (100s); asking model for final response` and the next request tells the model to answer without tools. The run then ends with `warning: reached max_seconds (100s); stopping run`, whether the model answered or asked for tools again. Tool calls in that last answer are not run; each gets an error result, so the session stays replayable.
+
+The notices ride the last message already in the history, so each request is the one before with text appended and the provider's prefix cache keeps its hits. A short answer on the last request is not continued. A [nested run](delegation.md) cannot exceed its parent's budget.
+
 ## JSON mode
 
 ```sh

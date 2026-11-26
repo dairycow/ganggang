@@ -171,6 +171,64 @@ fn no_choices_is_an_error() {
     assert!(from_response(resp).is_err());
 }
 
+/// Every shape a provider reports cache reads in lands on the session's
+/// `cache_read_tokens`.
+#[test]
+fn from_response_reads_cache_hits_from_every_provider_shape() {
+    let response = |usage: &str, timings: Option<&str>| ChatResponse {
+        choices: vec![Choice {
+            message: crate::llm::types::ChatMessage {
+                role: "assistant".into(),
+                content: Some("ok".into()),
+                ..Default::default()
+            },
+            finish_reason: Some("stop".into()),
+        }],
+        usage: serde_json::from_str(usage).unwrap(),
+        timings: timings.map(|raw| serde_json::from_str(raw).unwrap()),
+    };
+    let cache_reads = |resp: ChatResponse| {
+        from_response(resp)
+            .unwrap()
+            .0
+            .usage
+            .unwrap_or_default()
+            .cache_read_tokens
+    };
+    // OpenAI, OpenRouter and Zhipu.
+    assert_eq!(
+        cache_reads(response(
+            r#"{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":64}}"#,
+            None
+        )),
+        64
+    );
+    // DeepSeek.
+    assert_eq!(
+        cache_reads(response(
+            r#"{"prompt_tokens":100,"prompt_cache_hit_tokens":90}"#,
+            None
+        )),
+        90
+    );
+    // Strata / llama.cpp: no usage field, the timing figure instead.
+    assert_eq!(
+        cache_reads(response(
+            r#"{"prompt_tokens":100}"#,
+            Some(r#"{"cache_n":70}"#)
+        )),
+        70
+    );
+    // A figure above the prompt total is clamped to it.
+    assert_eq!(
+        cache_reads(response(
+            r#"{"prompt_tokens":100,"prompt_cache_hit_tokens":400}"#,
+            None
+        )),
+        100
+    );
+}
+
 #[test]
 fn roles_map_to_wire_names_and_compaction_governs_replay() {
     let raw = include_str!("../../../fixtures/session_minimal.jsonl");

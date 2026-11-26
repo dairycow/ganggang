@@ -42,6 +42,7 @@ fn exports_round_trip_through_a_nested_boot() {
         model: Some("provider/model".into()),
         tool_cap: Some(vec!["read".into(), "bash".into()]),
         max_turns_cap: Some(12),
+        max_seconds_cap: Some(300),
         hooks_off: true,
     };
     let vars: Vec<(String, String)> = env
@@ -65,6 +66,7 @@ fn exports_round_trip_through_a_nested_boot() {
             parent_model: Some("provider/model".into()),
             tool_cap: vec!["read".into(), "bash".into()],
             max_turns_cap: Some(12),
+            max_seconds_cap: Some(300),
             hooks_off: true,
         }
     );
@@ -80,6 +82,7 @@ fn an_empty_parent_is_only_a_depth_marker() {
         PARENT_MODEL,
         TOOL_CAP,
         MAX_TURNS_CAP,
+        MAX_SECONDS_CAP,
         NO_HOOKS,
     ] {
         assert_eq!(vars[name], None, "{name} must be removed, not inherited");
@@ -153,6 +156,18 @@ fn a_malformed_turn_cap_fails_the_boot() {
 }
 
 #[test]
+fn a_malformed_time_cap_fails_the_boot() {
+    let err = boot(&[(DEPTH, "1"), (MAX_SECONDS_CAP, "soon")])
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("must be a non-negative integer"), "{err}");
+    let nest = boot(&[(DEPTH, "1"), (MAX_SECONDS_CAP, "0")])
+        .unwrap()
+        .expect("nested");
+    assert_eq!(nest.max_seconds_cap, None, "0 is no cap");
+}
+
+#[test]
 fn a_named_tool_outside_the_parent_allowlist_fails_the_boot() {
     let nest = boot(&[(DEPTH, "1"), (TOOL_CAP, "read,bash")])
         .unwrap()
@@ -210,6 +225,7 @@ fn the_turn_budget_can_only_go_down() {
         parent_model: None,
         tool_cap: Vec::new(),
         max_turns_cap: Some(10),
+        max_seconds_cap: None,
         hooks_off: false,
     };
     assert_eq!(capped.effective_max_turns(Some(4)), Some(4));
@@ -218,10 +234,20 @@ fn the_turn_budget_can_only_go_down() {
 
     let uncapped = NestedBoot {
         max_turns_cap: None,
-        ..capped
+        ..capped.clone()
     };
     assert_eq!(uncapped.effective_max_turns(Some(40)), Some(40));
     assert_eq!(uncapped.effective_max_turns(None), None);
+
+    let capped = NestedBoot {
+        max_seconds_cap: Some(60),
+        ..capped.clone()
+    };
+    assert_eq!(capped.effective_max_seconds(Some(30)), Some(30));
+    assert_eq!(capped.effective_max_seconds(Some(600)), Some(60));
+    assert_eq!(capped.effective_max_seconds(None), Some(60));
+    assert_eq!(uncapped.effective_max_seconds(Some(600)), Some(600));
+    assert_eq!(uncapped.effective_max_seconds(None), None);
 }
 
 #[test]

@@ -4,6 +4,13 @@
 //! declarations into Anthropic's `messages` + top-level `system` +
 //! `input_schema` request shape, and folds Anthropic responses back into
 //! [`ChatResponse`] so the agent loop and session store stay protocol-agnostic.
+//!
+//! Prompt caching: [`build_request`] marks three breakpoints with an
+//! ephemeral `cache_control`, the most a growing conversation keeps under
+//! Anthropic's limit of four. The system prompt and the tool declarations
+//! are marked once per request; the last content block of the last `user`
+//! message carries the third, so each turn extends the cached prefix of
+//! the conversation as it stands.
 
 pub(super) mod stream;
 #[cfg(test)]
@@ -15,6 +22,12 @@ use serde_json::{Map, Value, json};
 use super::types::{ChatMessage, ChatResponse, Choice, ToolCall, Usage};
 
 pub(super) const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// An ephemeral cache breakpoint: Anthropic keeps everything up to and
+/// including the marked block in the prompt cache.
+fn ephemeral() -> Value {
+    json!({ "type": "ephemeral" })
+}
 
 /// Resolve the `/messages` endpoint URL from a configured `base_url`.
 pub(super) fn messages_url(base_url: &str) -> String {
@@ -94,11 +107,18 @@ pub(super) fn build_request(
     body.insert("model".into(), json!(model));
     body.insert("max_tokens".into(), json!(max_tokens));
     if !system_parts.is_empty() {
-        body.insert("system".into(), json!(system_parts.join("\n\n")));
+        body.insert(
+            "system".into(),
+            Value::Array(vec![json!({
+                "type": "text",
+                "text": system_parts.join("\n\n"),
+                "cache_control": ephemeral(),
+            })]),
+        );
     }
     body.insert("messages".into(), Value::Array(out_messages));
 
-    let anthropic_tools: Vec<Value> = tools
+    let mut anthropic_tools: Vec<Value> = tools
         .iter()
         .filter_map(|t| {
             let func = t.get("function")?;
@@ -117,8 +137,29 @@ pub(super) fn build_request(
             Some(Value::Object(tool))
         })
         .collect();
+    if let Some(last) = anthropic_tools.last_mut()
+        && let Some(tool) = last.as_object_mut()
+    {
+        tool.insert("cache_control".into(), ephemeral());
+    }
     if !anthropic_tools.is_empty() {
         body.insert("tools".into(), Value::Array(anthropic_tools));
+    }
+    // The conversation grows at its end, so the breakpoint moves to the
+    // last block of the last `user` message on every request. A request
+    // that ends on an assistant message gets none here: nothing follows
+    // it to reuse the cache.
+    let last_user_block = body
+        .get_mut("messages")
+        .and_then(Value::as_array_mut)
+        .and_then(|messages| messages.last_mut())
+        .filter(|message| message["role"] == "user")
+        .and_then(|message| message.get_mut("content"))
+        .and_then(Value::as_array_mut)
+        .and_then(|blocks| blocks.last_mut())
+        .and_then(Value::as_object_mut);
+    if let Some(block) = last_user_block {
+        block.insert("cache_control".into(), ephemeral());
     }
     if stream {
         body.insert("stream".into(), json!(true));
