@@ -93,7 +93,7 @@ impl Default for Config {
             compact_threshold_explicit: ep.compact_threshold_explicit,
             max_turns: None,
             bash_timeout_secs: 30,
-            max_retries: 3,
+            max_retries: 5,
             request_timeout_secs: 600,
             tools: crate::agent::tools::NAMES
                 .iter()

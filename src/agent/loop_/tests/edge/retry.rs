@@ -37,7 +37,7 @@ async fn a_retried_request_is_reported_as_a_warning_in_the_event_stream() {
         .collect();
     assert_eq!(warnings.len(), 1, "{values:?}");
     assert!(
-        warnings[0].contains("429 Too Many Requests") && warnings[0].contains("retry 1 of 3"),
+        warnings[0].contains("429 Too Many Requests") && warnings[0].contains("retry 1 of 5"),
         "{}",
         warnings[0]
     );

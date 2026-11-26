@@ -77,7 +77,7 @@ impl LlmClient {
 
     /// Test seam: decide like production, never sleep.
     #[cfg(test)]
-    pub(super) fn with_retry_delay(mut self, base: Duration) -> Self {
+    pub(in crate::llm) fn with_retry_delay(mut self, base: Duration) -> Self {
         self.retry.base_delay = base;
         self
     }

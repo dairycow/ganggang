@@ -22,7 +22,7 @@ max_tokens = 16384
 # reasoning_effort = "medium"       # strata default
 # reasoning_budget_tokens = 4096    # strata default (0 disables)
 bash_timeout_secs = 30
-max_retries = 3
+max_retries = 5
 request_timeout_secs = 600
 tools = ["read", "bash", "edit", "write", "grep", "find", "ls", "outline"]
 
@@ -43,7 +43,7 @@ Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `a
 - `compact_threshold_tokens` caps when auto-compaction triggers (e.g. `65536` on `strata` to stay within local VRAM KV residency; `0` disables).
 - `max_turns` caps turns per run (`0` disables); `gg` nudges the model to wrap up at 80% of the budget.
 - `bash_timeout_secs` is the ceiling for one `bash` call, in seconds (minimum `1`); a call's `timeout_secs` is clamped to it. A [nested run](delegation.md) started from `bash` lives inside that call, so delegating needs either a ceiling of minutes or `background: true` on the call, which keeps the run as a [background job](tools.md#bash) past the ceiling.
-- `max_retries` sets the number of extra attempts for transient LLM failures (HTTP 408, 429, 5xx, timeouts, and dropped connections). Backoff starts at 500 ms with jitter; a `Retry-After` header overrides the backoff (capped at 30 s). Set to `0` to disable retries. Other 4xx responses fail immediately.
+- `max_retries` sets the number of extra attempts for transient LLM failures (HTTP 408, 429, 5xx, timeouts, and dropped connections). Backoff starts at 1000 ms with jitter and doubles with each retry, up to 30 s; a `Retry-After` header overrides the backoff (also capped at 30 s). A stream that fails before its first output, such as a connection that drops or a body that ends empty, is retried on the same budget. Once any text has streamed, a cut answer is [continued](modes.md#truncated-responses) rather than retried, so nothing is shown twice. Set to `0` to disable retries. Other 4xx responses fail immediately. When every attempt fails, the run ends and the error is [recorded in the session](sessions-compaction.md#failed-runs).
 - `request_timeout_secs` sets the total timeout in seconds for a complete LLM request and response stream (minimum `1`). Responses exceeding this limit are cut off and partial text is kept (see [Output modes and export](modes.md#print-mode)).
 - `tools` is the allowlist of tools offered to the model (also `--tools read,grep`). Unknown names are an error. See [Tools](tools.md).
 - `context_window` should match the server's real window: compaction and the footer's context percentage use it. When unset on `strata` or a local URL, `gg` probes `/health` at startup for `max_context` (and `kv_resident` when `compact_threshold_tokens` is unset), falling back to `/v1/models` when needed. On `strata`, `gg` also adopts whichever model the server currently has loaded unless overridden via `-m` or `GG_MODEL`. See [Sessions and compaction](sessions-compaction.md).

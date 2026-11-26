@@ -21,7 +21,7 @@ The final answer goes to **stdout**; progress (turn markers, formatted tool-call
 
 A response can end early if the provider returns `finish_reason: "length"` (the `max_tokens` limit) or the stream closes before its end marker (timeout or dropped connection). `gg` keeps the partial output, logs a `warning:` line, and asks the model to continue from where it stopped, up to 3 times per run and within `--max-turns`. A truncation that produced no visible text or tool call is not continued: `gg` warns and stops instead, leaving no blank assistant entry. A turn that spent the whole `max_tokens` on reasoning, with nothing else, is the exception: `gg` asks for the same turn again with `reasoning_effort: "none"` and keeps reasoning off for the rest of the run, without recording an entry for the cut turn. A server that refuses that request ends the run with a warning that quotes the refusal. The next run starts with the configured reasoning settings. Continuation chunks are joined into a single answer on stdout. Tool calls cut off mid-arguments are not executed and receive an error result.
 
-Transient transport failures are retried (see `max_retries` in [Configuration](configuration.md)); each retry is a `warning:` line on stderr.
+Transient transport failures are retried (see `max_retries` in [Configuration](configuration.md)), including a stream that drops before its first output; each retry is a `warning:` line on stderr. When a run fails for good, the error is [recorded in the session](sessions-compaction.md#failed-runs).
 
 ## JSON mode
 

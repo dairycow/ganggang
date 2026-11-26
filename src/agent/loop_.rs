@@ -198,7 +198,9 @@ impl Agent {
                 // `reasoning_effort` but not `"none"`): the run ends the
                 // way the truncation alone would have ended it, and the
                 // warning says what the server answered. Every other
-                // failure is the request's own, and fails the run.
+                // failure is the request's own, and fails the run: the
+                // error is written into the session first, so the file
+                // says why the history stops where it does.
                 Err(err) if retrying_without_reasoning && crate::llm::client::is_refusal(&err) => {
                     events
                         .send(AgentEvent::Warned {
@@ -210,7 +212,10 @@ impl Agent {
                         .await?;
                     break;
                 }
-                Err(err) => return Err(err),
+                Err(err) => {
+                    let _ = self.push_error(&format!("{err:#}"));
+                    return Err(err);
+                }
             };
             retrying_without_reasoning = false;
             // Read before `from_response` consumes the response: the wire

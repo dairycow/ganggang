@@ -127,11 +127,10 @@ impl super::super::State {
     }
 
     /// Run-level failures render as warnings in the transcript — the same
-    /// shape a `Warned` event uses.
+    /// shape a `Warned` event uses, and the one a persisted failure is
+    /// replayed with.
     pub fn push_failure(&mut self, error: &str) {
-        self.transcript.apply(&AgentEvent::Warned {
-            message: format!("run failed: {error}"),
-        });
+        self.transcript.push_failure(error);
     }
 
     /// Command failures (a failed model switch, a missing skill) are

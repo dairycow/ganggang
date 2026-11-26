@@ -30,6 +30,16 @@ Session files are plain JSON you can read, `grep`, or [export](modes.md#html-exp
 - Aborted runs append `[aborted by user]` after any partial output. Interrupted tool calls receive synthetic `aborted before execution` results so the session stays valid. Aborting before the first token creates no blank assistant entry.
 - A truncated answer is [continued](modes.md#truncated-responses): the next user entry is `[continue exactly where you stopped; do not repeat text you already wrote]`, and any tool call cut off with the answer is answered `not executed: response was truncated` rather than run. A truncation that produced no visible text or tool call is not continued: `gg` warns and stops, and no blank assistant entry is recorded. A turn that was nothing but reasoning is asked again with reasoning off instead (see [Truncated responses](modes.md#truncated-responses)), and the cut turn leaves no entry.
 
+### Failed runs
+
+When a run ends on an error, such as every retry of a request failing or the server refusing it, `gg` appends a diagnostic entry carrying the error text, so the file says why the history stops where it does:
+
+```json
+{"type":"error","id":"e2a9c4f1","parentId":"c3d4e5f6","timestamp":"2026-11-26T01:02:03Z","error":"POST http://127.0.0.1:8080/v1/chat/completions failed (503 Service Unavailable): upstream exploded"}
+```
+
+The entry is for you, not the model: it is never sent in a later request and counts for no context tokens. A resumed session shows it as a `run failed:` line, and the [HTML export](modes.md#html-export) renders it as a marked block. An aborted run records no such entry; its marker is the `[aborted by user]` line above.
+
 ## Compaction
 
 When the conversation nears the context limit, older history is summarised in one extra model call and recorded as a `Compaction` entry. Raw history is never deleted from the file.

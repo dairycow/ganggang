@@ -169,6 +169,8 @@ pub(super) fn entry_token_estimate_with(entry: &Entry, include_reasoning: bool) 
                 }
         }
         Entry::Compaction { summary, .. } => summary.chars().count(),
+        // Never sent, so it never takes room in the window.
+        Entry::Error { .. } => 0,
     };
     (chars / 4) as u32
 }

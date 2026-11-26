@@ -350,7 +350,9 @@ async fn a_cut_stream_keeps_its_partial_answer_and_says_it_is_incomplete() {
 }
 
 /// A cut with nothing assembled is still an error: there is no partial
-/// answer to salvage and nothing for the loop to continue from.
+/// answer to salvage and nothing for the loop to continue from. The
+/// client retries it first (`client::stream_tests`); with retries off it
+/// is the call's error at once.
 #[tokio::test]
 async fn a_cut_stream_that_assembled_nothing_is_an_error() {
     let mut body =
@@ -359,7 +361,7 @@ async fn a_cut_stream_that_assembled_nothing_is_an_error() {
     body.truncate(body.len() - "data: [DONE]\n\n".len());
     let server = SseServer::spawn(vec![body]);
 
-    let client = LlmClient::new(&server.base_url).unwrap();
+    let client = LlmClient::new(&server.base_url).unwrap().with_retry(0);
     let err = client
         .send_stream("m", &[], 64, &[], &never_abort(), |_| Box::pin(async {}))
         .await

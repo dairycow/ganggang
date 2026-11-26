@@ -25,6 +25,25 @@ impl Agent {
         Ok(())
     }
 
+    /// Record the error that ended a run, so the session file says why
+    /// the history stops where it does. Persisted before it joins memory
+    /// like every entry. The caller treats it as best-effort: the run is
+    /// already failing, and a session that cannot be written to cannot
+    /// take a diagnostic either.
+    pub(super) fn push_error(&mut self, error: &str) -> anyhow::Result<()> {
+        let entry = Entry::Error {
+            id: session::new_entry_id(),
+            parent_id: self.entries.last().map(last_entry_id),
+            timestamp: session::now_iso(),
+            error: error.to_string(),
+        };
+        if let Some(store) = &mut self.store {
+            store.append(&entry)?;
+        }
+        self.entries.push(entry);
+        Ok(())
+    }
+
     pub(super) fn push_message(
         &mut self,
         role: Role,

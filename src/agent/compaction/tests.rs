@@ -206,6 +206,29 @@ fn entry_estimates_measure_own_text_only() {
         serde_json::to_value(&compacted).unwrap()["firstKeptId"],
         json!("a1")
     );
+
+    // An error entry is never sent, so however long it adds nothing: not
+    // to the walk, and not to the count of entries appended since the last
+    // usage.
+    let failed = Entry::Error {
+        id: "e9".into(),
+        parent_id: None,
+        timestamp: String::new(),
+        error: "e".repeat(400),
+    };
+    assert_eq!(entry_token_estimate_with(&failed, true), 0);
+    let measured = msg_entry(
+        "a2",
+        Role::Assistant,
+        "answer",
+        Some(Usage {
+            prompt_tokens: 100,
+            completion_tokens: 10,
+            total_tokens: 110,
+            ..Usage::default()
+        }),
+    );
+    assert_eq!(context_tokens_of(&[measured, failed]), Some(110));
 }
 
 // ---------------------------------------------------------- cut point

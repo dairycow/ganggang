@@ -98,12 +98,12 @@ fn invalid_env_value_names_the_var() {
     );
 }
 
-/// The retry budget is a setting like any other: default 3, file then
+/// The retry budget is a setting like any other: default 5, file then
 /// env over it, and zero is a real value (one attempt, no retrying).
 #[test]
 fn max_retries_merges_like_other_numbers() {
     let default = merge(Config::default(), None, None, &[]).unwrap();
-    assert_eq!(default.max_retries, 3);
+    assert_eq!(default.max_retries, 5);
     let cfg = merge(
         Config::default(),
         Some("max_retries = 5\n"),

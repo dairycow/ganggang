@@ -9,10 +9,11 @@
 
 use std::time::Duration;
 
-/// Ceiling on a `Retry-After` the provider asks for. Only delta-seconds
-/// is read (the HTTP-date form would mean parsing dates without a date
-/// library, and providers in practice send seconds); a request past this
-/// cap is answered with our own backoff rather than by sitting still.
+/// The longest single wait a retry costs, whether the provider asks for it
+/// with `Retry-After` or the doubling backoff grows into it. Only
+/// delta-seconds is read from the header (the HTTP-date form would mean
+/// parsing dates without a date library, and providers in practice send
+/// seconds); past this cap gg waits its own backoff rather than sitting still.
 pub(super) const RETRY_AFTER_CAP: Duration = Duration::from_secs(30);
 
 /// The retry budget and what waiting costs. `max_retries` is configurable
@@ -27,8 +28,8 @@ pub struct Backoff {
 impl Default for Backoff {
     fn default() -> Self {
         Self {
-            max_retries: 3,
-            base_delay: Duration::from_millis(500),
+            max_retries: 5,
+            base_delay: Duration::from_millis(1000),
         }
     }
 }
@@ -41,8 +42,10 @@ impl Backoff {
 
     /// The wait before retry `nth`: doubling from `base_delay` plus a
     /// jitter of 0..25 %, so a fleet of clients woken by the same 429
-    /// does not stampede back in lockstep. A `Retry-After` the provider
-    /// named wins, up to [`RETRY_AFTER_CAP`].
+    /// does not stampede back in lockstep. The curve stops at
+    /// [`RETRY_AFTER_CAP`], so a large `max_retries` never turns one wait
+    /// into minutes. A `Retry-After` the provider named wins, up to the
+    /// same cap.
     pub fn delay(&self, nth: u32, retry_after: Option<Duration>) -> Duration {
         match retry_after {
             Some(after) => after.min(RETRY_AFTER_CAP),
@@ -55,7 +58,7 @@ impl Backoff {
                 } else {
                     doubled.saturating_add(spread(nth) % window)
                 };
-                Duration::from_millis(jittered)
+                Duration::from_millis(jittered).min(RETRY_AFTER_CAP)
             }
         }
     }
@@ -98,8 +101,9 @@ impl Verdict {
 }
 
 /// Classify a reqwest failure up to and including the send. Only failures
-/// before the response head arrives reach here: once a body starts
-/// streaming, the caller has already decided nothing will be re-asked.
+/// before the response head arrives reach here: a body that fails while
+/// streaming is the decoders' to judge (anything shown means no retry;
+/// nothing shown means [`Verdict::Transport`]).
 pub(super) fn classify_err(err: &reqwest::Error) -> Verdict {
     // `is_body` before `is_request`: a body-send error is also a request
     // error, and half an upload is not a clean retry.
@@ -158,12 +162,29 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_three_retries_off_a_500ms_base() {
+    fn defaults_are_five_retries_off_a_1000ms_base() {
         let b = Backoff::default();
-        assert_eq!(b.max_retries, 3);
-        assert_eq!(b.base_delay, Duration::from_millis(500));
-        assert!(b.allows(2) && !b.allows(3));
-        assert!(!backoff(0, 500).allows(0), "zero retries means one attempt");
+        assert_eq!(b.max_retries, 5);
+        assert_eq!(b.base_delay, Duration::from_millis(1000));
+        assert!(b.allows(4) && !b.allows(5));
+        assert!(
+            !backoff(0, 1000).allows(0),
+            "zero retries means one attempt"
+        );
+    }
+
+    /// The doubling stops at the cap: with the default budget the last
+    /// retry waits 30 s and not 32 s, and a budget far past it waits the
+    /// same. Under the cap the curve still doubles.
+    #[test]
+    fn the_exponential_curve_stops_at_the_cap() {
+        let b = Backoff::default();
+        for nth in [5u32, 6, 10, 29] {
+            assert_eq!(b.delay(nth, None), RETRY_AFTER_CAP, "retry {nth}");
+        }
+        assert!(b.delay(4, None) < RETRY_AFTER_CAP, "still on the curve");
+        let steep = backoff(40, Duration::MAX.as_millis() as u64);
+        assert_eq!(steep.delay(0, None), RETRY_AFTER_CAP);
     }
 
     /// Delays double per attempt and stay inside the jitter window; a

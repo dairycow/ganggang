@@ -40,6 +40,16 @@ pub enum Entry {
         #[serde(rename = "firstKeptId")]
         first_kept_id: String,
     },
+    /// The error that ended a run, appended so the file says why the
+    /// history stops where it does. A diagnostic for the human: it is never
+    /// sent to the model and counts for no context.
+    Error {
+        id: String,
+        #[serde(rename = "parentId")]
+        parent_id: Option<String>,
+        timestamp: String,
+        error: String,
+    },
 }
 
 /// Domain message: strict where the wire is loose.
@@ -211,7 +221,8 @@ pub fn now_iso() -> String {
 /// The id of an entry, whatever variant it is — the parent of whatever
 /// comes next in the linear chain.
 pub(crate) fn last_entry_id(entry: &Entry) -> String {
-    let (Entry::Message { id, .. } | Entry::Compaction { id, .. }) = entry;
+    let (Entry::Message { id, .. } | Entry::Compaction { id, .. } | Entry::Error { id, .. }) =
+        entry;
     id.clone()
 }
 
@@ -290,7 +301,10 @@ fn wire_view(entries: &[Entry], replay_reasoning: ReplayReasoning) -> Vec<(Strin
                         message_to_wire(message, replay_reasoning, include_reasoning),
                     ))
                 }
-                Entry::Compaction { .. } => None,
+                // Neither is a message: the compaction's note is built
+                // around the kept span below, and an error entry is for the
+                // human reading the file.
+                Entry::Compaction { .. } | Entry::Error { .. } => None,
             })
             .collect::<Vec<_>>()
     };

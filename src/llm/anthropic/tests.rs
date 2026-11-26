@@ -1,8 +1,9 @@
 mod abort;
+mod retry;
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -179,6 +180,9 @@ fn assembler_folds_thinking_text_and_split_tool_json() {
     assert_eq!(u.cache_read_tokens, 8);
 }
 
+/// Headers and the three ways a stream can go wrong: the truncated one
+/// fails on its first attempt here (retries are off, so the script stays
+/// three connections long; `tests::retry` covers the retried case).
 #[tokio::test]
 async fn anthropic_client_sends_headers_and_handles_sse_errors() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -226,7 +230,8 @@ async fn anthropic_client_sends_headers_and_handles_sse_errors() {
         .unwrap()
         .with_api(ApiKind::AnthropicMessages)
         .with_auth(AuthStyle::Auto)
-        .with_api_key(Some("secret-k".into()));
+        .with_api_key(Some("secret-k".into()))
+        .with_retry(0);
 
     let outcome = client
         .send_stream("claude-haiku-5-5", &[], 64, &[], &never_abort(), |_| {
@@ -269,7 +274,8 @@ async fn anthropic_client_sends_headers_and_handles_sse_errors() {
 
 /// The same salvage rule as the OpenAI stream (GAP 2): a body cut before
 /// `message_stop` keeps what it assembled and reports `complete: false`
-/// with the usage seen so far; a cut that assembled nothing still errors.
+/// with the usage seen so far; a cut that assembled nothing still fails
+/// (retries are off here, so it fails on its first attempt).
 #[tokio::test]
 async fn an_anthropic_stream_cut_mid_text_is_salvaged() {
     let body = concat!(
@@ -288,7 +294,8 @@ async fn an_anthropic_stream_cut_mid_text_is_salvaged() {
     ]);
     let client = LlmClient::new(&server.base_url)
         .unwrap()
-        .with_api(ApiKind::AnthropicMessages);
+        .with_api(ApiKind::AnthropicMessages)
+        .with_retry(0);
 
     let outcome = client
         .send_stream("claude-haiku-5-5", &[], 64, &[], &never_abort(), |_| {
@@ -322,23 +329,42 @@ async fn an_anthropic_stream_cut_mid_text_is_salvaged() {
     );
 }
 
-/// Serves one SSE body per connection, then closes — a clean EOF standing
-/// in for a server that died mid-generation.
+/// Serves one response per connection, then closes: a clean EOF standing
+/// in for a server that died mid-generation. Connections are counted, so a
+/// script can assert how many attempts a call made.
 struct CutServer {
     base_url: String,
+    attempts: Arc<AtomicUsize>,
 }
 
 impl CutServer {
+    /// One SSE body per connection, with the stream's response head in
+    /// front of it.
     fn spawn(bodies: Vec<String>) -> Self {
+        let responses = bodies
+            .into_iter()
+            .map(|body| format!("{SSE_HEAD}{body}"))
+            .collect();
+        Self::serve(responses)
+    }
+
+    /// Whole raw HTTP responses, exactly as given: for scripts about the
+    /// transport, where the framing is the point.
+    fn spawn_raw(responses: Vec<String>) -> Self {
+        Self::serve(responses)
+    }
+
+    fn serve(responses: Vec<String>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counted = attempts.clone();
         std::thread::spawn(move || {
-            for body in bodies {
+            for response in responses {
                 let (mut stream, _) = listener.accept().unwrap();
                 read_anthropic_request_head(&mut stream);
-                let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
-                stream.write_all(head.as_bytes()).unwrap();
-                for piece in body.as_bytes().chunks(7) {
+                counted.fetch_add(1, Ordering::SeqCst);
+                for piece in response.as_bytes().chunks(7) {
                     stream.write_all(piece).unwrap();
                 }
                 drop(stream);
@@ -346,9 +372,15 @@ impl CutServer {
         });
         Self {
             base_url: format!("http://{addr}"),
+            attempts,
         }
     }
 }
+
+/// The framing of a stream response this module scripts: the head, and
+/// `Connection: close` so every attempt is its own connection.
+const SSE_HEAD: &str =
+    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
 
 fn read_anthropic_request_head(stream: &mut std::net::TcpStream) {
     let mut buf = Vec::new();

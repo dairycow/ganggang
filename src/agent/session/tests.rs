@@ -1,5 +1,7 @@
 //! Tests for [`super`]: session round-trips and domain ↔ wire conversion.
 
+mod diagnostics;
+
 use super::*;
 use crate::llm::types::Choice;
 

@@ -8,6 +8,7 @@
 
 mod cancel;
 mod continuation;
+mod failure;
 mod reasoning;
 mod retry;
 mod stream_abort;
