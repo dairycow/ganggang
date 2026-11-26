@@ -1,6 +1,6 @@
 # ganggang
 
-A small, sharp agentic harness in Rust. One agent loop, eight tools, and a terminal UI, modelled on [pi](https://github.com/earendil-works/pi).
+A small, sharp agentic harness in Rust. One agent loop, nine tools, and a terminal UI, modelled on [pi](https://github.com/earendil-works/pi).
 
 **[Read the user guide](https://dairycow.github.io/ganggang/)**
 
@@ -51,7 +51,7 @@ max_tokens = 16384
 bash_timeout_secs = 30
 max_retries = 3           # extra attempts on a transient transport failure
 request_timeout_secs = 600  # whole-response timeout (a stream included)
-tools = ["read", "bash", "edit", "write", "grep", "find", "ls", "outline"]
+tools = ["read", "bash", "edit", "write", "grep", "find", "ls", "outline", "task"]
 
 [providers.strata]
 base_url = "http://127.0.0.1:8080/v1"

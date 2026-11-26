@@ -217,7 +217,8 @@ fn events_hooks_and_keys_are_exhaustively_documented() {
         | AgentEvent::TurnEnded { .. }
         | AgentEvent::RunEnded { .. }
         | AgentEvent::RunAborted
-        | AgentEvent::Warned { .. } => serde_json::to_value(e).expect("serializable")["type"]
+        | AgentEvent::Warned { .. }
+        | AgentEvent::Subtask { .. } => serde_json::to_value(e).expect("serializable")["type"]
             .as_str()
             .expect("tagged")
             .to_string(),
@@ -248,6 +249,10 @@ fn events_hooks_and_keys_are_exhaustively_documented() {
         AgentEvent::RunEnded { turns: 0 },
         AgentEvent::RunAborted,
         AgentEvent::Warned { message: s() },
+        AgentEvent::Subtask {
+            task_id: s(),
+            event: Box::new(AgentEvent::RunStarted),
+        },
     ];
     let modes = read("docs/src/guide/modes.md");
     for sample in &samples {

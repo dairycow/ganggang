@@ -14,6 +14,7 @@ The tool surface the model sees, generated from the registry (advertisement orde
 | `find` | Find files and directories by glob (e.g. "*.rs", "**/*.md"). Respects .gitignore and skips .git, target and node_modules by default (include_ignored: true to include them). Sorted and capped at max_results (default 50). |
 | `ls` | List one directory level: directories (name/) then files with byte size, alphabetical. Not recursive; use find for deeper paths. Hidden entries included; unreadable entries are noted, not fatal. |
 | `outline` | Return a compact structural outline of a file: symbol or heading signatures with 1-based line ranges, so you can jump straight to read(offset, limit). Supports Rust, Python, JS/TS, Go, C/C++/Java/C#, shell, Markdown and TOML. |
+| `task` | Run a subagent: a fresh-context agent with its own session and its own tool registry, in-process. The subagent does the work and the tool returns only its final answer (plus a one-line usage summary). Use it to delegate a bounded piece of work; it is one level deep (subagents cannot spawn subagents) and shares the run's stop request. |
 
 ## `read`
 
@@ -95,3 +96,14 @@ Return a compact structural outline of a file: symbol or heading signatures with
 |---|---|---|---|
 | `max_entries` | integer | no | Maximum entries to return (default 200, max 500) |
 | `path` | string | yes | File path relative to the working directory, absolute, or starting with ~ |
+
+## `task`
+
+Run a subagent: a fresh-context agent with its own session and its own tool registry, in-process. The subagent does the work and the tool returns only its final answer (plus a one-line usage summary). Use it to delegate a bounded piece of work; it is one level deep (subagents cannot spawn subagents) and shares the run's stop request.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `max_turns` | integer | no | Optional turn budget for the subagent; can only lower the run's max_turns, never raise it (default: the run's max_turns) |
+| `model` | string | no | Optional provider/model to run the subagent on (default: the run's model) |
+| `prompt` | string | yes | What the subagent should do, self-contained: it starts with a fresh context |
+| `tools` | array of string | no | Optional tool allowlist for the subagent; a subset of the run's tool set only (default: the run's tool set) |

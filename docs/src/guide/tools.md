@@ -1,10 +1,10 @@
 # Tools
 
-`gg` provides eight built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `outline`. Parameters and descriptions are in the generated [Built-in tools](../reference/tools.md) reference; this page covers behaviour and limits.
+`gg` provides nine built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `outline`, `task`. Parameters and descriptions are in the generated [Built-in tools](../reference/tools.md) reference; this page covers behaviour and limits.
 
 ## Principles
 
-- Mutating tools (`bash`, `edit`, `write`) run **one at a time**, in the order the model called them. Contiguous runs of 2+ read-only tools (`read`, `grep`, `find`, `ls`, `outline`) execute **in parallel** (up to 8 in flight) while preserving call order in events and session history.
+- Mutating and subagent tools (`bash`, `edit`, `write`, `task`) run **one at a time**, in the order the model called them. Contiguous runs of 2+ read-only tools (`read`, `grep`, `find`, `ls`, `outline`) execute **in parallel** (up to 8 in flight) while preserving call order in events and session history.
 - Tool failures are returned to the model as tool results so it can recover. Only transport and session I/O errors abort a run.
 - Truncated outputs include an explicit truncation marker.
 - Every tool `path` resolves the same way: relative to the working directory, absolute, or starting with `~` (expanded against `$HOME`; `~user` stays literal).
@@ -56,3 +56,20 @@ Matches entry names (or relative paths when `pattern` contains `/`) against a `g
 ## `ls`
 
 One directory level: directories first (`name/`), then files with byte sizes, alphabetical, hidden entries included. Not recursive; use `find` to go deeper.
+
+## `task`
+
+Runs a subagent: a fresh-context agent with its own session file and its own tool registry, in the same process. The subagent does the work and the tool returns only its final answer, followed by a one-line usage summary (for example `[subagent: 3 turns, 120 in / 40 out, session 8f3a…c1]`). It is one level deep: a subagent's registry does not include `task`, so it cannot spawn subagents of its own.
+
+Arguments:
+
+- `prompt` (required): what the subagent should do. It starts with a fresh context, so the prompt is self-contained: name the files, the task, and the expected answer.
+- `model` (optional): a `provider/model` specification for the subagent's endpoint. Omitted, the subagent runs on the run's model.
+- `tools` (optional): the subagent's tool allowlist. Omitted, the subagent gets the run's tool set. Names must be a subset of the run's tool set: a subagent cannot gain a tool the run does not have, and an unknown or outside name fails the call. `task` is never granted, so subagents stay one level deep.
+- `max_turns` (optional): the subagent's turn budget. It can only lower the run's `max_turns`, never raise it; a request of `0` fails the call. Omitted, the run's `max_turns` applies.
+
+The subagent shares the run's stop request: `Esc` or `Ctrl+C` stops the parent and the subagent with it. Its events reach the event stream as `subtask` events tagged with the `task` call's id (see [Output modes and export](modes.md)); the TUI does not render nested rows yet.
+
+When the run keeps a session, the subagent writes its own session file, with its header's `parent_id` set to the run's session id. That file is created under the default sessions root (`~/.gg/sessions/<cwd-slug>`), even when the parent run was opened with `--session-file`. When the run is `--no-session`, the subagent keeps no session either.
+
+A subagent's answer is capped at 10 KiB with a `... [truncated]` marker, the same cap as `bash` output.

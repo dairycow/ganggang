@@ -13,7 +13,7 @@ use crate::events::AgentEvent;
 use super::super::Agent;
 use super::super::hooks::PreOutcome;
 use super::super::session::ToolCall;
-use super::super::tools::{Cancel, ToolResult};
+use super::super::tools::{Cancel, ToolCtx, ToolResult};
 
 enum PreparedCall {
     Runnable,
@@ -138,8 +138,15 @@ impl Agent {
                     }
                     // A call the user stopped while it ran is not an
                     // execution a `post_tool` hook should observe — the
-                    // same rule as a call that never executed.
-                    let result = self.tools.dispatch(call, cancel).await;
+                    // same rule as a call that never executed. The ctx
+                    // carries the run's event stream, so a tool that
+                    // observes the run (task) sees it.
+                    let ctx = ToolCtx {
+                        cancel: cancel.clone(),
+                        events: Some(events.clone()),
+                        call_id: call.id.clone(),
+                    };
+                    let result = self.tools.dispatch_with(call, &ctx).await;
                     let executed = call.args_error.is_none() && !self.abort.load(Ordering::Acquire);
                     (result, executed)
                 }
@@ -241,7 +248,17 @@ impl Agent {
                         runnable_calls.push(call.clone());
                     } else {
                         prepared.push(PreparedCall::Immediate {
-                            result: self.tools.dispatch(call, cancel).await,
+                            result: self
+                                .tools
+                                .dispatch_with(
+                                    call,
+                                    &ToolCtx {
+                                        cancel: cancel.clone(),
+                                        events: Some(events.clone()),
+                                        call_id: call.id.clone(),
+                                    },
+                                )
+                                .await,
                             executed: false,
                         });
                     }
@@ -279,7 +296,15 @@ impl Agent {
         let parallel_vec = if runnable_calls.is_empty() {
             Vec::new()
         } else {
-            let fut = self.tools.dispatch_parallel(&runnable_calls, cancel);
+            // One ctx per call (its own id) is built inside the spawned
+            // tasks; this base ctx carries the shared stop request and
+            // event sender.
+            let ctx = ToolCtx {
+                cancel: cancel.clone(),
+                events: Some(events.clone()),
+                call_id: String::new(),
+            };
+            let fut = self.tools.dispatch_parallel_with(&runnable_calls, &ctx);
             tokio::select! {
                 biased;
                 _ = super::wait_for_abort(&self.abort) => {

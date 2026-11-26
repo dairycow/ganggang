@@ -649,3 +649,70 @@ fn list_all_sessions_merges_cwd_subdirectories_newest_first() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_header_with_a_parent_id_round_trips_through_the_file() {
+    let root = tmp_root("parent");
+    let cwd = Path::new("/proj/parent");
+    let mut store = SessionStore::create_under(&root, cwd, "m")
+        .unwrap()
+        .with_parent(Some("parent-uuid-1".to_string()))
+        .unwrap();
+    store
+        .append(&entry_message(Some("hi"), vec![], None, false))
+        .unwrap();
+    let (header, _, warnings) = load(store.path()).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(header.parent_id.as_deref(), Some("parent-uuid-1"));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_header_without_parent_id_still_loads_and_defaults_to_none() {
+    // The field is skipped on write when absent: the on-disk line has no
+    // key at all, and load must still accept it.
+    let line = r#"{"type":"session","version":1,"id":"abcd1234-0000","timestamp":"t","cwd":"/p","model":"m"}"#;
+    let header: SessionHeader = serde_json::from_str(line).unwrap();
+    assert_eq!(header.parent_id, None);
+    let reparsed: SessionHeader =
+        serde_json::from_str(&serde_json::to_string(&header).unwrap()).unwrap();
+    assert_eq!(reparsed.parent_id, None);
+}
+
+#[test]
+fn with_parent_applies_to_the_header_line_that_will_be_written() {
+    let root = tmp_root("parent-fresh");
+    let cwd = Path::new("/proj/parent-fresh");
+    let store = SessionStore::create_under(&root, cwd, "m")
+        .unwrap()
+        .with_parent(Some("p-2".to_string()))
+        .unwrap();
+    let header = serde_json::from_str::<SessionHeader>(&store.header_record().unwrap()).unwrap();
+    assert_eq!(header.parent_id.as_deref(), Some("p-2"));
+    assert_eq!(header.id, store.id());
+    // The id (and everything else) is untouched.
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn with_parent_refuses_a_store_that_has_already_appended() {
+    let root = tmp_root("parent-after-append");
+    let cwd = Path::new("/proj/parent-after-append");
+    let mut store = SessionStore::create_under(&root, cwd, "m").unwrap();
+    store
+        .append(&entry_message(Some("x"), vec![], None, false))
+        .unwrap();
+    let err = match store.with_parent(Some("p-3".to_string())) {
+        Err(e) => e,
+        Ok(_) => panic!("with_parent after an append must fail"),
+    };
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("with_parent must be called before the first append"),
+        "error must name the precondition: {message}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

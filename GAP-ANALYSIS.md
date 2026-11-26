@@ -4,7 +4,7 @@
 Every claim below was read out of the source in this tree; file references
 are the place to look, not a suggestion.
 
-The core is solid: one agent loop, eight tools, sessions with crash-safe
+The core is solid: one agent loop, nine tools, sessions with crash-safe
 JSONL, compaction, streaming, a working TUI, print mode, JSON mode, HTML
 export. What is missing is the stuff you only notice after a week of daily
 use: escapability, auditability, and cost.
@@ -80,7 +80,7 @@ The 2026-11-23 audit's "would bite you in week one" list has shipped:
 These are the ones an everyday driver will feel:
 
 - **MCP/plugins.** Every integration is a code change and a rebuild.
-- **Images, web search/fetch, subagents/plan mode, git tooling, LSP
+- **Images, web search/fetch, plan mode, git tooling, LSP
   diagnostics.**
 - **Background processes.** `bash` is foreground-only with a hard
   timeout (`src/agent/tools/bash.rs`): no way to start a dev server,
