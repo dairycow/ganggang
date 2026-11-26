@@ -470,6 +470,7 @@ async fn model_command_switches_endpoints() {
         Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
     let mut config = crate::config::Config::default();
     config.providers.get_mut("deepseek").unwrap().api_key = Some("test-key".into());
+    config.providers.get_mut("openrouter").unwrap().api_key = Some("test-key".into());
     let mut active_endpoint = config.active_endpoint();
     let skills = Arc::new(Vec::new());
     let abort = Arc::new(AtomicBool::new(false));
@@ -525,6 +526,16 @@ async fn model_command_switches_endpoints() {
         "{lines:?}"
     );
     assert!(input_rx.try_recv().is_err(), "no second switch");
+
+    // An OpenRouter id carries a slash of its own: the command the list
+    // builds for it has two, and the first still names the provider.
+    model!(Some("openrouter/upstage/solar-mini-4-5".into()));
+    assert_eq!(active_endpoint.provider, "openrouter");
+    assert_eq!(active_endpoint.model, "upstage/solar-mini-4-5");
+    assert!(matches!(
+        input_rx.try_recv().unwrap(),
+        super::super::AgentInput::SwitchEndpoint(_)
+    ));
 }
 
 #[tokio::test]

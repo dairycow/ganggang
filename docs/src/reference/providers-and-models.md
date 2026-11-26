@@ -9,6 +9,7 @@ Built-in provider presets, generated from the provider table. `zai-coding-plan` 
 | `deepseek` | `deepseek-flash` | `openai-completions` | `DEEPSEEK_API_KEY` | `https://api.deepseek.com` | 16384 | 1000000 |
 | `glm-coding-plan` | `glm-5.3-flash` | `openai-completions` | `ZHIPU_API_KEY` | `https://api.z.ai/api/coding/paas/v4` | 16384 | 1000000 |
 | `opencode-go` | `deepseek-v4.1-flash` | `openai-completions` | `OPENCODE_API_KEY` | `https://opencode.ai/inference/go/openai/v1` | 16384 | 1000000 |
+| `openrouter` | `upstage/solar-mini-4-5` | `openai-completions` | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` | 16384 | 131072 |
 | `strata` | `qwen3.8-flash-next-iq3_s` | `openai-completions` | none (local) | `http://127.0.0.1:8080/v1` | 16384 | 131072 |
 
 ## deepseek
@@ -47,6 +48,12 @@ Built-in provider presets, generated from the provider table. `zai-coding-plan` 
 | `qwen3.8-flash` | `anthropic-messages` | 1000000 | 16384 | no | `https://opencode.ai/inference/go/anthropic` |
 | `qwen3.7-plus` | `anthropic-messages` | 1000000 | 16384 | no | `https://opencode.ai/inference/go/anthropic` |
 | `minimax-m3` | `anthropic-messages` | 1000000 | 16384 | no | `https://opencode.ai/inference/go/anthropic` |
+
+## openrouter
+
+| Model | Wire API | Context window | Max tokens | Replays reasoning | Base URL |
+|---|---|---|---|---|---|
+| `upstage/solar-mini-4-5` (default) | `openai-completions` | 524288 | 16384 | yes | `https://openrouter.ai/api/v1` |
 
 ## strata
 

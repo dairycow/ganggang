@@ -244,7 +244,13 @@ fn cli_allowlist_overrides_config_and_unknown_names_error() {
 fn builtin_presets_and_alias_resolve() {
     let cfg = Config::default();
     assert_eq!(cfg.provider, "strata");
-    for name in ["strata", "glm-coding-plan", "opencode-go", "deepseek"] {
+    for name in [
+        "strata",
+        "glm-coding-plan",
+        "opencode-go",
+        "deepseek",
+        "openrouter",
+    ] {
         assert!(cfg.providers.contains_key(name), "missing preset {name}");
     }
     let mut cfg_alias = cfg.clone();
@@ -306,6 +312,33 @@ fn presets_keep_their_shipped_values() {
     let ids: Vec<&str> = glm.models.iter().map(|m| m.id.as_str()).collect();
     assert_eq!(ids, ["glm-5.3-flash", "glm-5.4"]);
 
+    // An OpenRouter id carries a vendor prefix of its own. The listed model
+    // has its real window; the provider's is the fallback for any other
+    // OpenRouter id, which the preset cannot know a window for.
+    let openrouter = &providers["openrouter"];
+    assert_eq!(openrouter.base_url, "https://openrouter.ai/api/v1");
+    assert_eq!(openrouter.api, ApiKind::OpenAiCompletions);
+    assert_eq!(openrouter.auth, AuthStyle::Auto);
+    assert_eq!(
+        openrouter.api_key_env.as_deref(),
+        Some("OPENROUTER_API_KEY")
+    );
+    assert_eq!(openrouter.default_model, "upstage/solar-mini-4-5");
+    assert_eq!(openrouter.max_tokens, 16_384);
+    assert_eq!(openrouter.context_window, 131_072);
+    assert_eq!(openrouter.replay_reasoning, ReplayReasoning::All);
+    assert_eq!(openrouter.reasoning_effort, None);
+    let ids: Vec<&str> = openrouter.models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, ["upstage/solar-mini-4-5"]);
+    assert_eq!(
+        openrouter
+            .models
+            .iter()
+            .find(|m| m.id == "upstage/solar-mini-4-5")
+            .and_then(|m| m.context_window),
+        Some(524_288)
+    );
+
     for provider in providers.values() {
         assert!(
             !provider.context_window_explicit && !provider.compact_threshold_explicit,
@@ -329,7 +362,7 @@ fn disabled_removes_a_preset_for_every_later_layer() {
     assert!(!cfg.providers.contains_key("opencode-go"));
     assert_eq!(
         cfg.providers.keys().map(String::as_str).collect::<Vec<_>>(),
-        ["deepseek", "glm-coding-plan", "strata"]
+        ["deepseek", "glm-coding-plan", "openrouter", "strata"]
     );
     // The name no longer resolves, and a spec naming it says why instead
     // of silently becoming a model id on the active provider.
@@ -448,6 +481,89 @@ fn opencode_go_routes_openai_and_anthropic_models() {
     assert_eq!(cfg.api, ApiKind::AnthropicMessages);
     assert_eq!(cfg.base_url, "https://opencode.ai/inference/go/anthropic");
     assert_eq!(cfg.replay_reasoning, ReplayReasoning::Never);
+}
+
+/// An OpenRouter id carries a vendor prefix of its own
+/// (`upstage/solar-mini-4-5`), so its `provider/model` spec has two
+/// slashes. The first segment is the provider and the rest is the model,
+/// however the spec arrives: `-m`, `GG_MODEL`, the `/model` list's own
+/// label, or the bare id of a listed model. `-P` with a bare model works
+/// too, unless the vendor is also a provider name: the first segment of
+/// `-m` is then read as a provider, so such a model takes the full spec.
+#[test]
+fn openrouter_model_ids_keep_their_slash() {
+    const MODEL: &str = "upstage/solar-mini-4-5";
+    const SPEC: &str = "openrouter/upstage/solar-mini-4-5";
+
+    let is_solar = |ep: &Endpoint| {
+        assert_eq!(ep.provider, "openrouter");
+        assert_eq!(ep.model, MODEL);
+        assert_eq!(ep.api, ApiKind::OpenAiCompletions);
+        assert_eq!(ep.base_url, "https://openrouter.ai/api/v1");
+        assert_eq!(ep.context_window, 524_288, "the listed model's window");
+    };
+
+    // `-m provider/model`.
+    let mut cfg = Config::default();
+    cfg.apply_cli(None, Some(SPEC)).unwrap();
+    is_solar(&cfg.active_endpoint());
+    assert!(cfg.model_explicit);
+
+    // `-P openrouter -m <id>`: the provider and the model passed apart.
+    let mut cfg = Config::default();
+    cfg.apply_cli(Some("openrouter"), Some(MODEL)).unwrap();
+    is_solar(&cfg.active_endpoint());
+    assert!(cfg.model_explicit);
+
+    // Apart only works while no vendor is a provider name: the first
+    // segment of `-m` names one, so the pair reads as two providers. The
+    // full spec is unambiguous, and is what a `--watch` restart emits.
+    let mut apart = Config::default();
+    let err = apart
+        .apply_cli(Some("openrouter"), Some("deepseek/other"))
+        .unwrap_err();
+    assert!(err.to_string().contains("conflicts"), "{err}");
+    let mut cfg = Config::default();
+    cfg.apply_cli(None, Some("openrouter/deepseek/other"))
+        .unwrap();
+    assert_eq!(cfg.provider, "openrouter");
+    assert_eq!(cfg.model, "deepseek/other");
+
+    // `GG_MODEL` takes the same spec.
+    let cfg = merge(Config::default(), None, None, &env(&[("GG_MODEL", SPEC)])).unwrap();
+    is_solar(&cfg.active_endpoint());
+    assert!(cfg.model_explicit);
+
+    // The `/model` list's command, and the label the command is built
+    // from: one resolves to what the other shows.
+    let cfg = Config::default();
+    let ep = cfg.resolve_switch(SPEC).unwrap();
+    is_solar(&ep);
+    assert!(ep.model_explicit);
+    assert_eq!(ep.label(), SPEC);
+    assert_eq!(cfg.resolve_switch(&ep.label()).unwrap(), ep);
+
+    // A listed model is found by its id alone.
+    is_solar(&cfg.resolve_switch(MODEL).unwrap());
+
+    // Any other OpenRouter id resolves the same way, whole, and takes the
+    // provider's fallback window.
+    let other = cfg
+        .resolve_switch("openrouter/other-vendor/other-model")
+        .unwrap();
+    assert_eq!(other.provider, "openrouter");
+    assert_eq!(other.model, "other-vendor/other-model");
+    assert_eq!(other.context_window, 131_072);
+
+    // What `/model` and `--list-models` show: the model, its own window.
+    let rows = providers::catalog_with_discovered(&cfg.providers, &BTreeMap::new());
+    let row = rows
+        .iter()
+        .find(|r| r.provider == "openrouter")
+        .expect("an openrouter row");
+    assert_eq!(row.model, MODEL);
+    assert_eq!(row.context_window, 524_288);
+    assert!(row.needs_key);
 }
 
 #[test]

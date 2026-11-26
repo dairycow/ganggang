@@ -77,3 +77,23 @@ replay_reasoning = "all"
 models = [
   "deepseek-flash",
 ]
+
+# OpenRouter speaks the OpenAI Chat Completions API, and its model ids carry
+# a vendor prefix (`upstage/solar-mini-4-5`). The first segment of a gg
+# `provider/model` spec is still the provider, so the rest of the id, slash
+# included, is the model: `openrouter/upstage/solar-mini-4-5`.
+[providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+api = "open-ai-completions"
+auth = "auto"
+api_key_env = "OPENROUTER_API_KEY"
+model = "upstage/solar-mini-4-5"
+max_tokens = 16384
+# The fallback for an OpenRouter model named by id but not listed below. The
+# catalogue's windows vary widely, so it stays at gg's generic default; each
+# listed model carries its own.
+context_window = 131072
+replay_reasoning = "all"
+models = [
+  { id = "upstage/solar-mini-4-5", context_window = 524288 },
+]

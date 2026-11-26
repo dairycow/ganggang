@@ -32,7 +32,7 @@ Options:
       --watch
           Development mode: watch the ganggang sources, rebuild on change, and re-exec the new binary on the same session
   -P, --provider <PROVIDER>
-          Provider preset or configured provider name (e.g. "strata", "glm-coding-plan", "opencode-go", "deepseek")
+          Provider preset or configured provider name (e.g. "strata", "glm-coding-plan", "opencode-go", "deepseek", "openrouter")
   -m, --model <MODEL>
           Model id or `provider/model` (overrides config and provider default)
       --list-models
@@ -66,7 +66,7 @@ Options:
 | `<PROMPT>` | Positional prompt, the `--mode json` spelling: gg --mode json "…" |  |  |
 | `--export <SESSION [OUT_HTML]>` | Export a session to a single self-contained HTML file and exit. SESSION is a file path or the id/8-hex prefix `--resume` takes; OUT_HTML defaults to `&lt;session-stem>.html` in the cwd |  |  |
 | `--watch` | Development mode: watch the ganggang sources, rebuild on change, and re-exec the new binary on the same session |  |  |
-| `-P, --provider <PROVIDER>` | Provider preset or configured provider name (e.g. "strata", "glm-coding-plan", "opencode-go", "deepseek") |  |  |
+| `-P, --provider <PROVIDER>` | Provider preset or configured provider name (e.g. "strata", "glm-coding-plan", "opencode-go", "deepseek", "openrouter") |  |  |
 | `-m, --model <MODEL>` | Model id or `provider/model` (overrides config and provider default) |  |  |
 | `--list-models` | List configured providers and models (probing local servers), then exit |  |  |
 | `--no-hooks` | Skip user hooks for this run, including the hooks file and the project-file warning. Ignored in a nested run, which keeps its parent's hooks |  |  |

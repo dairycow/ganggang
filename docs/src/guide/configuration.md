@@ -50,7 +50,7 @@ Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `a
 
 ## Providers
 
-Built-in providers: `strata` (local default), `glm-coding-plan` (alias `zai-coding-plan`), `opencode-go` (routes OpenAI Completions and Anthropic Messages per model), and `deepseek`. Their models, endpoints and limits are in [Providers and models](../reference/providers-and-models.md); `gg --list-models` probes `GET /v1/models` on `strata` and any local OpenAI-compatible provider (such as `llama-server --models-preset`) to show live models, `loaded`/`unloaded` status, and context windows alongside cloud providers and key status; the TUI's `/model` list is refreshed by the same probe in the background.
+Built-in providers: `strata` (local default), `glm-coding-plan` (alias `zai-coding-plan`), `opencode-go` (routes OpenAI Completions and Anthropic Messages per model), `deepseek`, and `openrouter` (OpenAI Completions). Their models, endpoints and limits are in [Providers and models](../reference/providers-and-models.md); `gg --list-models` probes `GET /v1/models` on `strata` and any local OpenAI-compatible provider (such as `llama-server --models-preset`) to show live models, `loaded`/`unloaded` status, and context windows alongside cloud providers and key status; the TUI's `/model` list is refreshed by the same probe in the background.
 
 Patch a built-in or define your own under `[providers.<name>]`. A custom provider must set `base_url` and `model`:
 
@@ -88,6 +88,17 @@ A disabled provider is removed from `/model`, `--list-models`, `-P`, and `-m`. S
 
 Choose at the command line with `-P deepseek`, `-m deepseek-flash`, or `-m opencode-go/claude-haiku-5-5` (`provider/model`). Naming conflicting providers in `-P` and `-m` is an error.
 
+Only the first segment names the provider. An OpenRouter model id has a vendor prefix of its own, so its spec has two slashes: `-m openrouter/upstage/solar-mini-4-5` selects `upstage/solar-mini-4-5`. Any other OpenRouter model can be named the same way. A vendor that is also a provider name (`deepseek`) needs the full spec: `-P openrouter -m deepseek/deepseek-v4.1-flash` reads `deepseek` as the provider and reports a conflict. A model the preset does not list takes the provider's `context_window` (131072), so give it a `models` entry with its real window. The entry list replaces the preset's, so keep `upstage/solar-mini-4-5` with its window:
+
+```toml
+# ~/.gg/config.toml
+[providers.openrouter]
+models = [
+  { id = "upstage/solar-mini-4-5", context_window = 524288 },
+  { id = "anthropic/claude-haiku-4.5", context_window = 200000 },
+]
+```
+
 ## Environment variables
 
 | Variable | Effect |
@@ -110,6 +121,7 @@ Choose at the command line with `-P deepseek`, `-m deepseek-flash`, or `-m openc
 | `ZHIPU_API_KEY` | Key for `glm-coding-plan` |
 | `OPENCODE_API_KEY` | Key for `opencode-go` |
 | `DEEPSEEK_API_KEY` | Key for `deepseek` |
+| `OPENROUTER_API_KEY` | Key for `openrouter` |
 | `HOME` | Locates `~/.gg` and `~/.agents`; must be an absolute path |
 | `VISUAL`, `EDITOR` | External editor for `Ctrl+G` (`nano` otherwise) |
 

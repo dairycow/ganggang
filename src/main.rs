@@ -83,7 +83,7 @@ struct Cli {
     watch: bool,
 
     /// Provider preset or configured provider name (e.g. "strata",
-    /// "glm-coding-plan", "opencode-go", "deepseek").
+    /// "glm-coding-plan", "opencode-go", "deepseek", "openrouter").
     #[arg(short = 'P', long)]
     provider: Option<String>,
 

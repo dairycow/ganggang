@@ -44,6 +44,7 @@ Export the provider's key and select it:
 export DEEPSEEK_API_KEY=...      # deepseek
 export ZHIPU_API_KEY=...         # glm-coding-plan
 export OPENCODE_API_KEY=...      # opencode-go
+export OPENROUTER_API_KEY=...    # openrouter
 
 gg --list-models                 # what is available, and which keys are set
 gg -P deepseek

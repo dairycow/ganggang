@@ -94,8 +94,13 @@ fn restart_args_with_file(original: &[OsString], session: &Path) -> Vec<OsString
 
 /// Rewrite `--provider`/`-P` and `--model`/`-m` in `args` so a mid-session
 /// `/model` switch survives a `--watch` restart.
+///
+/// The endpoint goes in as one `--model provider/model` spec. Its first
+/// segment is the provider and the rest is the model, however many slashes
+/// the id carries. Passed apart, a vendor prefix that is also a provider
+/// name (`-P openrouter -m deepseek/...`) would name a second provider.
 pub fn apply_endpoint_args(args: Vec<OsString>, provider: &str, model: &str) -> Vec<OsString> {
-    let mut out = Vec::with_capacity(args.len() + 4);
+    let mut out = Vec::with_capacity(args.len() + 2);
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         let text = arg.to_string_lossy();
@@ -107,10 +112,8 @@ pub fn apply_endpoint_args(args: Vec<OsString>, provider: &str, model: &str) -> 
             _ => out.push(arg),
         }
     }
-    out.push(OsString::from("--provider"));
-    out.push(OsString::from(provider));
     out.push(OsString::from("--model"));
-    out.push(OsString::from(model));
+    out.push(OsString::from(format!("{provider}/{model}")));
     out
 }
 
@@ -286,12 +289,33 @@ mod tests {
                 "--watch",
                 "--resume",
                 "abcd1234",
-                "--provider",
-                "deepseek",
                 "--model",
-                "deepseek-flash",
+                "deepseek/deepseek-flash",
             ])
         );
+    }
+
+    #[test]
+    fn apply_endpoint_args_resolve_back_to_the_same_endpoint() {
+        // The new process reads the spec through `apply_cli`, which takes
+        // the first segment as the provider, so a vendor prefix that is
+        // also a provider name has to stay part of the model.
+        let original = argv(&["--watch", "-P", "strata"]);
+        for (provider, model) in [
+            ("deepseek", "deepseek-flash"),
+            ("openrouter", "upstage/solar-mini-4-5"),
+            ("openrouter", "deepseek/deepseek-v4.1-flash"),
+        ] {
+            let spec = apply_endpoint_args(original.clone(), provider, model)
+                .pop()
+                .and_then(|arg| arg.into_string().ok())
+                .unwrap();
+            let mut cfg = crate::config::Config::default();
+            cfg.apply_cli(None, Some(&spec)).unwrap();
+            let ep = cfg.active_endpoint();
+            assert_eq!(ep.provider, provider, "{spec}");
+            assert_eq!(ep.model, model, "{spec}");
+        }
     }
 
     #[test]
