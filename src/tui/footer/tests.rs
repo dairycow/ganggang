@@ -53,7 +53,7 @@ fn the_footer_is_spans_not_a_string() {
     let line = f.spans(&T);
     assert_eq!(
         line.spans[0].content, "gg",
-        "the mark leads, and it is the crest"
+        "the mark leads, and it is the name at rest"
     );
     assert_eq!(line.spans[0].style.fg, Some(T.accent));
     assert!(line.spans[0].style.add_modifier.contains(Modifier::BOLD));
@@ -94,15 +94,15 @@ fn the_context_number_darkens_as_the_window_fills() {
 }
 
 #[test]
-fn the_mark_is_gg_at_rest_and_a_pair_of_wings_while_a_run_works() {
+fn the_mark_is_gg_at_rest_and_a_dot_while_a_run_works() {
     let mut f = footer();
     assert_eq!(f.mark(), "gg", "at rest the mark is the name, not a blank");
     f.set_busy(true);
 
-    // The pair fills the same two cells the name did, so nothing behind
+    // The mark fills the same two cells the name did, so nothing behind
     // the mark moves while the turn turns.
     let mut pairs = Vec::new();
-    for _ in 0..WINGS.len() {
+    for _ in 0..MARK_FRAMES.len() {
         let mark = f.mark();
         assert_eq!(mark.chars().count(), 2, "the name's two cells: {mark:?}");
         assert_ne!(mark, "gg");
@@ -111,47 +111,36 @@ fn the_mark_is_gg_at_rest_and_a_pair_of_wings_while_a_run_works() {
     }
     // A whole turn comes round to the start.
     assert_eq!(f.mark(), pairs[0], "wrapped, not reset by itself");
-    assert_eq!(pairs.len(), WINGS.len());
+    assert_eq!(pairs.len(), MARK_FRAMES.len());
     assert_eq!(
         pairs,
-        vec!["◤◤", "◤◥", "◥◤", "◣◢", "◣◢", "◤◤"]
-            .into_iter()
-            .map(|p| p.to_string())
-            .collect::<Vec<_>>(),
+        vec!["●○", "○○", "●○"],
+        "the dot beats beside a standing ring: {pairs:?}"
     );
     // The mark goes back to the name when the run ends.
     f.set_busy(false);
     assert_eq!(f.mark(), "gg");
     f.set_busy(true);
-    assert_eq!(f.mark(), "◤◤", "a new run starts on the crest");
+    assert_eq!(f.mark(), "●○", "a new run starts on the crest");
 }
 
 #[test]
-fn the_wings_beat_in_the_order_they_draw_in() {
-    // Left wing first in every frame, and the right one trailing it, so
-    // the pair reads as two marks beating rather than one glyph swapping.
-    let wings = ["◤", "◥", "◣", "◢"];
-    for (left, right) in WINGS {
-        assert!(wings.contains(&left), "left wing: {left}");
-        assert!(wings.contains(&right), "right wing: {right}");
-    }
-    // The pair rises together on the first frame, beats over the top,
-    // holds the descent for a frame, and the turn ends where it began.
-    let pairs: Vec<_> = WINGS[0..2].iter().map(|(l, r)| (*l, *r)).collect();
+fn the_dot_beats_in_the_order_they_draw_in() {
+    // The dot beats in the leading cell while the ring holds the trailing
+    // one: the dot's cell goes hollow on the middle beat, and the turn
+    // ends where it began.
+    assert_eq!(MARK_FRAMES[0], ("●", "○"), "frame 0: the dot leads");
     assert_eq!(
-        pairs,
-        [("◤", "◤"), ("◤", "◥")],
-        "the wings rise, then beat over the top"
+        MARK_FRAMES[1],
+        ("○", "○"),
+        "frame 1: the dot's cell goes hollow"
     );
-    let pairs: Vec<_> = WINGS[3..5].iter().map(|(l, r)| (*l, *r)).collect();
     assert_eq!(
-        pairs,
-        [("◣", "◢"), ("◣", "◢")],
-        "the descent is held a frame"
+        MARK_FRAMES[2], MARK_FRAMES[0],
+        "the turn ends where it began"
     );
-    assert_eq!(WINGS[5], WINGS[0], "the turn ends where it began");
     // No glyph is used that this font would draw as nothing.
-    for (left, right) in WINGS {
+    for (left, right) in MARK_FRAMES {
         for glyph in [left, right] {
             assert!(
                 !glyph.is_empty() && !glyph.chars().all(char::is_control),
@@ -161,15 +150,15 @@ fn the_wings_beat_in_the_order_they_draw_in() {
     }
 }
 
-/// On brand: the wings flash scarlet on the crest frame and are the
+/// On brand: the dot flashes scarlet on the crest frame and is the
 /// cheek's orange-red the rest of the turn, so the crest is the one frame
 /// that reads as `gg`'s own mark rather than as a working state.
 #[test]
-fn the_wings_flash_the_crest_once_a_turn() {
+fn the_dot_flashes_the_crest_once_a_turn() {
     use crate::tui::theme::TRUECOLOR as T;
     let mut f = footer();
     f.set_busy(true);
-    for i in 0..WINGS.len() {
+    for i in 0..MARK_FRAMES.len() {
         let line = f.spans(&T);
         assert_eq!(
             line.spans[0].content,
@@ -180,13 +169,13 @@ fn the_wings_flash_the_crest_once_a_turn() {
         assert_eq!(
             line.spans[0].style.fg,
             Some(want),
-            "frame {i} of {WINGS:?} should be {}",
+            "frame {i} of {MARK_FRAMES:?} should be {}",
             if i == 0 { "the crest" } else { "the cheek" }
         );
         f.tick();
     }
     // One flash per turn, not one per frame.
-    assert_eq!(f.frame % WINGS.len(), 0);
+    assert_eq!(f.frame % MARK_FRAMES.len(), 0);
     f.set_busy(false);
 }
 

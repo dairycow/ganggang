@@ -146,12 +146,12 @@ fn an_80_by_24_frame_is_the_theme_not_the_terminal() {
 }
 
 /// `gg` sits at the left edge of the footer, and while a run is live the
-/// cell where the name is gives way to a wing frame of the turn — so the
+/// cell where the name is gives way to the run's dot and ring — so the
 /// start of the row says `working` without a whole extra field appearing.
 /// When it ends, the name is back.
 #[test]
-fn the_mark_is_gg_at_rest_and_a_wing_while_a_run_works() {
-    use crate::tui::footer::WINGS as SPINNER;
+fn the_mark_is_gg_at_rest_and_a_dot_while_a_run_works() {
+    use crate::tui::footer::MARK_FRAMES as FRAMES;
 
     // Idle: the mark is the name, at the left edge of the footer's row.
     let (mut terminal, mut state) = fresh(80, 24);
@@ -163,10 +163,10 @@ fn the_mark_is_gg_at_rest_and_a_wing_while_a_run_works() {
     );
     assert!(footer.contains("○ ready"), "it is not working: {footer:?}");
 
-    // A run is live: the name's two cells become the wings, and the
+    // A run is live: the name's two cells become the mark, and the
     // word `gg` is gone from the row — the only thing the name gave up.
     state.begin_run();
-    for frame in 0..SPINNER.len() as u16 {
+    for frame in 0..FRAMES.len() as u16 {
         state.tick_spinner();
         draw(&mut terminal, &mut state);
         let footer = row(&terminal, 23);
@@ -177,7 +177,7 @@ fn the_mark_is_gg_at_rest_and_a_wing_while_a_run_works() {
         assert_eq!(
             expected.chars().count(),
             2,
-            "the wings take the name's two cells: {expected:?}"
+            "the mark takes the name's two cells: {expected:?}"
         );
         assert!(
             footer.starts_with(expected.as_str()),
@@ -688,7 +688,10 @@ fn an_indexed_session_draws_only_indexed_colours() {
         shows(&terminal, "fn a() {}"),
         "the code band still reads: {text}"
     );
-    assert!(shows(&terminal, "◤◤ working"), "the wing shows: {text}");
+    assert!(
+        shows(&terminal, "working") && shows(&terminal, "●"),
+        "the mark shows: {text}"
+    );
 }
 
 /// Every row of the transcript is the theme's, and a wrapped row keeps the

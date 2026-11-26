@@ -15,8 +15,8 @@ use crate::tool_args::format_tool_args;
 const ARGS_CHARS: usize = 180;
 
 /// Spinner frames for streamed text (§15: progress to stderr only): the
-/// footer's square, so both surfaces spin alike.
-use crate::tui::footer::WINGS as SPIN_FRAMES;
+/// footer's mark, so both surfaces spin alike.
+use crate::tui::footer::MARK_FRAMES;
 
 /// Erases an open spinner line and terminates it. Like the updates it
 /// starts with '\r' (the caller's raw-write marker) but carries its own
@@ -199,10 +199,9 @@ impl Printer {
                 if !self.spin {
                     return Vec::new();
                 }
-                // The mark's own pair of wings, the same two cells the
-                // footer's mark takes, so the two surfaces say the same
-                // thing while a run is working.
-                let (left, right) = SPIN_FRAMES[self.spinner % SPIN_FRAMES.len()];
+                // The same mark the footer draws, so print mode and the
+                // TUI say the same thing while a run works.
+                let (left, right) = MARK_FRAMES[self.spinner % MARK_FRAMES.len()];
                 let frame = format!("{left}{right}");
                 self.spinner = self.spinner.wrapping_add(1);
                 self.spinner_open = true;

@@ -34,7 +34,7 @@ fn plain_answer_progress_to_stderr_answer_at_end() {
     assert_eq!(lines.len(), 4);
     assert_eq!(lines[0], "── turn 1 ──");
     assert!(
-        lines[1].starts_with("\r◤◤ streaming… 5 chars"),
+        lines[1].starts_with("\r●○ streaming… 5 chars"),
         "{}",
         lines[1]
     );
@@ -72,12 +72,12 @@ fn streamed_deltas_overwrite_in_place_and_close_once() {
     assert_eq!(lines.len(), 5);
     assert_eq!(lines[0], "── turn 1 ──");
     assert!(
-        lines[1].starts_with("\r◤◤ streaming… 4 chars"),
+        lines[1].starts_with("\r●○ streaming… 4 chars"),
         "{}",
         lines[1]
     );
     assert!(
-        lines[2].starts_with("\r◤◥ streaming… 7 chars"),
+        lines[2].starts_with("\r○○ streaming… 7 chars"),
         "{}",
         lines[2]
     );
@@ -145,7 +145,7 @@ fn tool_run_shows_call_lines_and_the_final_answer() {
     assert!(err.contains(&"── turn 1 ──".to_string()));
     assert!(err.contains(&"── turn 2 ──".to_string()));
     assert!(
-        err[1].starts_with("\r◤◤ streaming… 8 chars"),
+        err[1].starts_with("\r●○ streaming… 8 chars"),
         "the narration streams a spinner line: {}",
         err[1]
     );
@@ -264,7 +264,7 @@ fn thinking_renders_nothing_and_keeps_the_spinner_alive() {
     assert_eq!(lines.len(), 3);
     assert_eq!(lines[0], "── turn 1 ──");
     assert!(
-        lines[1].starts_with("\r◤◤ streaming… 3 chars"),
+        lines[1].starts_with("\r●○ streaming… 3 chars"),
         "{}",
         lines[1]
     );

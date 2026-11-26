@@ -14,34 +14,22 @@ use ratatui::text::{Line as UiLine, Span};
 
 use super::theme::Palette;
 
-/// The mark's frames, one per [`crate::tui::tick::PERIOD`] tick: the
-/// gang-gang's two wings, each one cell, beating the same two cells the
-/// name takes up at rest. The left wing leads the beat and the right one
-/// follows it by a half beat, so the pair looks like it is turning in the
-/// middle rather than two marks trading places.
+/// The mark's frames, one per [`crate::tui::tick::PERIOD`] tick: a filled
+/// dot `●` leading a ring `○`, in the same two cells the name takes up at
+/// rest. The dot beats while the ring holds the trailing cell: `●○`,
+/// `○○`, `●○` — the dot's cell goes hollow on the middle beat and the dot
+/// is back to close the turn. Two glyphs in two cells keep the name's
+/// width, so nothing behind the mark moves while the turn turns.
 ///
-/// The turn of the mark: one pair of wings per frame, up and over and
-/// down and up again. Left wing first in each entry, so the mark reads
-/// `◤◤ ◤◥ ◥◤ ◣◢ ◣◢ ◤◤` — the two wings rise together, the beat is one
-/// frame, and the descent is held a frame so it reads as a pause rather
-/// than a snap. Six beats, about 600 ms at the period.
-///
-/// The glyphs are black triangles, not the block halves: `▘▝▗▖` draw as
-/// shading in a proportional cell, where `◤◥` is a shape, and a wing that
-/// reads as a wing is the whole point of this mark.
+/// The glyphs are geometric shapes, not the block halves: `▁▂▃` draw as
+/// shading in a proportional cell, where `●○` is a shape, and a dot and a
+/// ring that read as shapes is the whole point of this mark.
 ///
 /// Not the name: `gg` sits in the same two cells when nothing is running,
 /// and the mark is the only thing that moves while the turn does.
-pub const WINGS: [(&str, &str); 6] = [
-    ("◤", "◤"),
-    ("◤", "◥"),
-    ("◥", "◤"),
-    ("◣", "◢"),
-    ("◣", "◢"),
-    ("◤", "◤"),
-];
-/// The frame where the left wing is at its highest: the gang-gang's
-/// crest, raised. Once a turn the mark flashes scarlet.
+pub const MARK_FRAMES: [(&str, &str); 3] = [("●", "○"), ("○", "○"), ("●", "○")];
+/// The frame where the dot is up: the gang-gang's crest, raised. Once a
+/// turn the mark flashes scarlet.
 pub const CREST_FRAME: usize = 0;
 
 /// The context percentage at which the footer's number turns gold, and
@@ -176,7 +164,7 @@ impl Footer {
     }
 
     /// Whether a spinner has anything to show: the loop asks before it
-    /// arms its 100 ms timer, so an idle footer never wakes the frame.
+    /// arms its timer, so an idle footer never wakes the frame.
     pub fn spinning(&self) -> bool {
         self.busy
     }
@@ -184,13 +172,13 @@ impl Footer {
     /// Advance the spinner one frame. Called from the event loop's timer
     /// arm only while [`spinning`](Self::spinning).
     pub fn tick(&mut self) {
-        self.frame = (self.frame + 1) % WINGS.len();
+        self.frame = (self.frame + 1) % MARK_FRAMES.len();
     }
 
-    /// The colour the mark's wings take while a run works: the crest on
+    /// The colour the mark takes while a run works: the crest on
     /// the first frame, the cheek's orange-red the rest of the turn.
     pub fn mark_colour(&self, palette: &Palette) -> ratatui::style::Color {
-        if self.frame % WINGS.len() == CREST_FRAME {
+        if self.frame % MARK_FRAMES.len() == CREST_FRAME {
             palette.accent
         } else {
             palette.accent_soft
@@ -241,16 +229,16 @@ impl Footer {
             .join("")
     }
 
-    /// e.g. `gg …/projects/ganggang qwen3.8 medium ↑305 ↓81 ctx 4% ◤◤ working`,
+    /// e.g. `gg …/projects/ganggang qwen3.8 medium ↑305 ↓81 ctx 4% ●○ working`,
     /// and with the last turn's cache hit rate, `… ctx 4% cache 87% …`;
     /// with the throughput figures the backend reports,
-    /// `… ↑305 ↓81 ctx 4% 62.4 t/s think 45% ◤◤ working`.
+    /// `… ↑305 ↓81 ctx 4% 62.4 t/s think 45% ●○ working`.
     ///
     /// The two cells at the start of the footer: the name when idle, the
-    /// wings of the run's frame while a run works.
+    /// dot and ring of the run's frame while a run works.
     ///
     /// The same width both ways, so nothing behind the mark moves while
-    /// the turn turns — the name gives way to the wings and the fields
+    /// the turn turns — the name gives way to the dot and the fields
     /// after them stay put.
     pub fn mark(&self) -> String {
         if self.spinning() {
@@ -260,10 +248,9 @@ impl Footer {
         }
     }
 
-    /// The two cells of the frame the run is on: the wing pair, and the
-    /// first frame is the crest.
+    /// The two cells of the frame the run is on, crest first.
     fn mark_cells(frame: usize) -> String {
-        let (left, right) = WINGS[frame % WINGS.len()];
+        let (left, right) = MARK_FRAMES[frame % MARK_FRAMES.len()];
         format!("{left}{right}")
     }
 
@@ -278,9 +265,8 @@ impl Footer {
     /// — ready, a turning spinner and `working`, or `stopping…`.
     pub fn spans(&self, palette: &Palette) -> UiLine<'static> {
         let muted = Style::new().fg(palette.muted);
-        // The mark: the name at rest, one wing cell of the run's frame
-        // while it works. Two cells either way, so nothing behind it moves
-        // while a turn turns.
+        // The mark is its own two cells, the same two the name takes up
+        // at rest, so nothing behind it moves while a turn turns.
         let mut spans: Vec<Span<'static>> = vec![
             Span::styled(
                 self.mark(),

@@ -14,8 +14,10 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-/// One frame every 100 ms: ten frames a second.
-pub const PERIOD: Duration = Duration::from_millis(100);
+/// One frame every 600 ms: three beats per turn, long enough that a
+/// reader can follow each one. The old 100 ms turn ran ten frames a
+/// second, so the mark flipped faster than the eye could track.
+pub const PERIOD: Duration = Duration::from_millis(600);
 
 /// The spinner's next frame: armed while something is spinning, never
 /// otherwise — an idle view does not wake on a timer.
@@ -72,9 +74,10 @@ mod tests {
         }
 
         // Late by however long the loop was busy: the next frame is still
-        // a full period from now, so the spin never runs fast to catch up.
+        // a full period from the last frame's due instant, so the spin
+        // never runs fast to catch up.
         tick.fired(start + 140 * MS);
-        assert_eq!(tick.deadline(), Some(start + 240 * MS));
+        assert_eq!(tick.deadline(), Some(start + PERIOD + 140 * MS));
     }
 
     #[test]
