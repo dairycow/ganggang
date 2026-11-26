@@ -99,35 +99,104 @@ fn opencode_url_detection() {
     assert!(!is_opencode_url("https://notopencode.ai/v1"));
 }
 
-#[tokio::test]
-async fn session_header_is_sent_when_configured() {
+/// Build a client for `endpoint`, point it at the loopback server bound here,
+/// and return the raw request head. Nothing leaves the loopback: the only
+/// address the client is ever told to call is the server this function made.
+pub(super) async fn capture_head(endpoint: &crate::config::Endpoint) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let seen = Arc::new(Mutex::new(String::new()));
     let seen_clone = seen.clone();
-
     std::thread::spawn(move || {
         let (mut s, _) = listener.accept().unwrap();
         let mut buf = [0u8; 4096];
         let n = s.read(&mut buf).unwrap();
         *seen_clone.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).to_string();
-        let body = r#"{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#;
+        let body = ok_body("gg");
         let resp = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
         s.write_all(resp.as_bytes()).unwrap();
     });
-
-    let client = LlmClient::new(&format!("http://{addr}"))
+    // The endpoint's own URL is what decides attribution: `from_base_url`
+    // runs on the endpoint's URL, and the base URL is then re-pointed at the
+    // test server without changing the decision.
+    let client = LlmClient::from_endpoint(endpoint)
         .unwrap()
-        .with_session_header(Some("x-opencode-session".into()))
-        .with_session_id("sess-123".into());
-    let _ = client.send("m", &[], 16, &[]).await.unwrap();
-    let raw = seen.lock().unwrap().to_ascii_lowercase();
-    assert!(raw.contains("x-opencode-session: sess-123"), "{raw}");
-    assert!(raw.contains("x-opencode-client: ganggang"), "{raw}");
+        .with_base_url(format!("http://{addr}"));
+    let result = client.send("m", &[], 16, &[]).await;
+    let raw = seen.lock().unwrap().to_string();
+    if let Err(err) = result {
+        panic!("the request failed, so the headers could not be read: {err:#}\nraw head: {raw}");
+    }
+    raw
+}
+
+/// The attribution headers reach the wire, on the path the agent loop takes.
+#[tokio::test]
+async fn openrouter_attribution_headers_are_sent() {
+    let raw = capture_head(&openrouter_endpoint()).await;
+    assert!(raw.contains("http-referer"), "no referer: {raw}");
+    assert!(raw.contains("x-title: ganggang"), "{raw}");
     assert!(raw.contains("user-agent: ganggang/"), "{raw}");
+}
+
+/// The host gate is the same check production runs, and it is what keeps the
+/// headers off every other OpenAI-compatible endpoint.
+#[test]
+fn openrouter_attribution_greys_to_openrouter_hosts_only() {
+    assert!(is_openrouter_url("https://openrouter.ai/api/v1"));
+    assert!(!is_openrouter_url("http://127.0.0.1:1/v1"));
+    assert!(!is_openrouter_url("https://api.deepseek.com"));
+    assert!(!is_openrouter_url(
+        "https://opencode.ai/inference/go/openai/v1"
+    ));
+    assert!(!is_openrouter_url("https://notopenrouter.ai/v1"));
+}
+
+/// A client built for a local endpoint sends no attribution, even though it is
+/// the same client type: the headers come from the host check alone. Built the
+/// same way production builds one, only with a deepseek URL.
+#[tokio::test]
+async fn openrouter_attribution_is_omitted_for_other_hosts() {
+    let raw = capture_head(&deepseek_endpoint()).await;
+    assert!(!raw.contains("http-referer"), "{raw}");
+    assert!(!raw.contains("x-title"), "{raw}");
+}
+
+/// A minimally-built OpenRouter endpoint: enough for `from_endpoint` and one
+/// send. Its URL is never contacted — `capture_head` re-points the client at
+/// the loopback test server for the one send.
+fn openrouter_endpoint() -> crate::config::Endpoint {
+    crate::config::Endpoint {
+        provider: "openrouter".to_string(),
+        model: "upstage/solar-mini-4-5".to_string(),
+        model_explicit: true,
+        base_url: "https://openrouter.ai/api/v1".to_string(),
+        api: super::ApiKind::OpenAiCompletions,
+        auth: super::AuthStyle::Auto,
+        api_key: Some("test-key".to_string()),
+        api_key_env: None,
+        max_tokens: 16,
+        context_window: 131_072,
+        context_window_explicit: true,
+        replay_reasoning: crate::agent::session::ReplayReasoning::Never,
+        reasoning_effort: None,
+        reasoning_budget_tokens: None,
+        compact_threshold_tokens: None,
+        compact_threshold_explicit: true,
+    }
+}
+
+/// A minimally-built deepseek endpoint, the same shape with a non-OpenRouter
+/// host so the gate has something to reject.
+fn deepseek_endpoint() -> crate::config::Endpoint {
+    let mut endpoint = openrouter_endpoint();
+    endpoint.provider = "deepseek".to_string();
+    endpoint.base_url = "https://api.deepseek.com".to_string();
+    endpoint.model = "deepseek-flash".to_string();
+    endpoint
 }
 
 /// A provider having a bad minute (500) is retried, and the retry

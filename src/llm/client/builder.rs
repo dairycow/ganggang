@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use super::LlmClient;
+use super::OpenRouterAttribution;
 use crate::llm::ApiKind;
 use crate::llm::AuthStyle;
 
@@ -37,6 +38,26 @@ impl LlmClient {
 
     pub fn with_session_id(mut self, session_id: String) -> Self {
         self.session_id = session_id;
+        self
+    }
+
+    /// Set the OpenRouter attribution headers (`HTTP-Referer`, `X-Title`) on
+    /// every request. `None`, the default, sends no attribution; the client
+    /// populated this from the endpoint, so an explicit `None` opts out.
+    pub(crate) fn with_openrouter_attribution(
+        mut self,
+        attribution: Option<OpenRouterAttribution>,
+    ) -> Self {
+        self.openrouter_attribution = attribution;
+        self
+    }
+
+    /// Point the client at another base URL while keeping the attribution
+    /// decision it was built with. Test seam: the gate is decided at build
+    /// time, so pointing elsewhere does not change which headers are sent.
+    #[cfg(test)]
+    pub fn with_base_url(mut self, base_url: String) -> Self {
+        self.base_url = base_url;
         self
     }
 
@@ -79,12 +100,6 @@ impl LlmClient {
     #[cfg(test)]
     pub(in crate::llm) fn with_retry_delay(mut self, base: Duration) -> Self {
         self.retry.base_delay = base;
-        self
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_session_header(mut self, header: Option<String>) -> Self {
-        self.session_header = header;
         self
     }
 }

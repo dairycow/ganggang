@@ -12,6 +12,38 @@ use super::stream::{self, StreamOutcome};
 use super::types::{ChatMessage, ChatRequest, ChatResponse, StreamOptions};
 use super::{ApiKind, AuthStyle};
 
+/// The calling app's identity for OpenRouter: the site it lives at and
+/// the name its analytics shows. Built by the client from an endpoint's URL;
+/// no caller constructs one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenRouterAttribution {
+    /// The site the app is credited to.
+    pub referer: String,
+    /// The name the app is shown under.
+    pub title: String,
+}
+
+impl OpenRouterAttribution {
+    /// The calling app's identity for `base_url`, or `None` when the endpoint
+    /// is not OpenRouter and no attribution headers are sent. Values default
+    /// to the app's own site and name; `GG_OPENROUTER_REFERER` and
+    /// `GG_OPENROUTER_TITLE` override them for a private deployment.
+    fn from_base_url(base_url: &str) -> Option<Self> {
+        if !is_openrouter_url(base_url) {
+            return None;
+        }
+        let referer = std::env::var("GG_OPENROUTER_REFERER")
+            .ok()
+            .filter(|r| !r.trim().is_empty())
+            .unwrap_or_else(|| "https://ganggang.io".to_string());
+        let title = std::env::var("GG_OPENROUTER_TITLE")
+            .ok()
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| "ganggang".to_string());
+        Some(Self { referer, title })
+    }
+}
+
 /// One client per process, reused across every turn of the agent loop.
 /// reqwest::Client owns a connection pool; building it per request throws that
 /// pooling away, so M2's loop calls .send() on this same value repeatedly.
@@ -25,6 +57,10 @@ pub struct LlmClient {
     reasoning_budget_tokens: Option<u32>,
     session_id: String,
     session_header: Option<String>,
+    /// OpenRouter attribution, applied to requests for OpenRouter only. The
+    /// decision is taken when the client is built, from the endpoint's URL, so
+    /// the attribution identity does not follow a later base-URL change.
+    openrouter_attribution: Option<OpenRouterAttribution>,
     /// The retry budget for transient transport failures (§ client docs).
     retry: Backoff,
     /// The whole-response timeout carried on every request — response head
@@ -60,6 +96,7 @@ impl LlmClient {
             reasoning_budget_tokens: None,
             session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
             session_header,
+            openrouter_attribution: None,
             retry: Backoff::default(),
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             notices: std::sync::Mutex::new(Vec::new()),
@@ -72,10 +109,15 @@ impl LlmClient {
             .with_auth(endpoint.auth)
             .with_api_key(endpoint.api_key.clone())
             .with_reasoning_effort(endpoint.reasoning_effort.clone())
-            .with_reasoning_budget_tokens(endpoint.reasoning_budget_tokens))
+            .with_reasoning_budget_tokens(endpoint.reasoning_budget_tokens)
+            .with_openrouter_attribution(OpenRouterAttribution::from_base_url(&endpoint.base_url)))
     }
 
     fn apply_auth(&self, mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(attribution) = &self.openrouter_attribution {
+            request = request.header("HTTP-Referer", &attribution.referer);
+            request = request.header("X-Title", &attribution.title);
+        }
         if let Some(header) = &self.session_header {
             request = request.header(header, &self.session_id);
             if header == "x-opencode-session" {
@@ -463,6 +505,19 @@ fn is_opencode_url(base_url: &str) -> bool {
         .unwrap_or("")
         .to_ascii_lowercase();
     host == "opencode.ai" || host.ends_with(".opencode.ai")
+}
+/// Whether `base_url` points at OpenRouter, the only host that reads the
+/// attribution headers.
+fn is_openrouter_url(base_url: &str) -> bool {
+    let Some((_, rest)) = base_url.split_once("://") else {
+        return false;
+    };
+    let host = rest
+        .split(['/', ':', '?'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    host == "openrouter.ai" || host.ends_with(".openrouter.ai")
 }
 
 /// Streaming retry tests: the request half retries like any other, and

@@ -89,7 +89,7 @@ A disabled provider is removed from `/model`, `--list-models`, `-P`, and `-m`. S
 
 Choose at the command line with `-P deepseek`, `-m deepseek-flash`, or `-m opencode-go/claude-haiku-5-5` (`provider/model`). Naming conflicting providers in `-P` and `-m` is an error.
 
-Only the first segment names the provider. An OpenRouter model id has a vendor prefix of its own, so its spec has two slashes: `-m openrouter/upstage/solar-mini-4-5` selects `upstage/solar-mini-4-5`. Any other OpenRouter model can be named the same way. A vendor that is also a provider name (`deepseek`) needs the full spec: `-P openrouter -m deepseek/deepseek-v4.1-flash` reads `deepseek` as the provider and reports a conflict. A model the preset does not list takes the provider's `context_window` (131072), so give it a `models` entry with its real window. The entry list replaces the preset's, so keep `upstage/solar-mini-4-5` with its window:
+Only the first segment names the provider. An OpenRouter model id has a vendor prefix of its own, so its spec has two slashes: `-m openrouter/upstage/solar-mini-4-5` selects `upstage/solar-mini-4-5`. Any other OpenRouter model can be named the same way. A vendor that is also a provider name (`deepseek`) needs the full spec: `-P openrouter -m deepseek/deepseek-v4.1-flash` reads `deepseek` as the provider and reports a conflict. A model the preset does not list takes the provider's `context_window` (131072), so give it a `models` entry with its real window. The `openrouter` provider sends OpenRouter its attribution headers on every call — the site `https://ganggang.io` and the name `ganggang` — so the app shows up in OpenRouter's app page and rankings. Both can be overridden for a private deployment with `GG_OPENROUTER_REFERER` and `GG_OPENROUTER_TITLE`; see [Environment variables](#environment-variables).
 
 ```toml
 # ~/.gg/config.toml
@@ -125,6 +125,8 @@ models = [
 | `OPENCODE_API_KEY` | Key for `opencode-go` |
 | `DEEPSEEK_API_KEY` | Key for `deepseek` |
 | `OPENROUTER_API_KEY` | Key for `openrouter` |
+| `GG_OPENROUTER_REFERER` | Site name the `openrouter` provider sends as its OpenRouter attribution header; defaults to `https://ganggang.io` |
+| `GG_OPENROUTER_TITLE` | App name the `openrouter` provider sends as its OpenRouter attribution header; defaults to `ganggang` |
 | `HOME` | Locates `~/.gg` and `~/.agents`; must be an absolute path |
 | `VISUAL`, `EDITOR` | External editor for `Ctrl+G` (`nano` otherwise) |
 
