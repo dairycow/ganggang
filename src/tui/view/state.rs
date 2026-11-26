@@ -10,11 +10,14 @@
 //! what it is about: [`log`] is the conversation (what is pushed, seeded,
 //! and measured), [`turn`] the live run (starting, stopping, recalling,
 //! scrolling), [`popup`] the suggestion list's selection and which popup
-//! has the arrows, and [`picker`] the `/session` list.
+//! has the arrows, [`picker`] a list (what is open, its highlight, its
+//! keys), and [`sessions`] the session listing a `/session` list is built
+//! from.
 
 mod log;
 mod picker;
 mod popup;
+mod sessions;
 mod turn;
 
 pub use turn::Cancel;
@@ -76,7 +79,7 @@ pub struct State {
     /// The model rows the `/model` popup lists from, and the active
     /// model's `provider/model` label, so its row reads `· active`.
     /// Shared read-only with the command handler, like `skills`.
-    models: Arc<Vec<crate::tui::suggest::ModelChoice>>,
+    models: Arc<Vec<crate::tui::models::ModelChoice>>,
     active_model: String,
     /// Highlighted row of the suggestion popup. Resets to the top
     /// whenever the composer text changes (render syncs it); ↑/↓ move
@@ -158,7 +161,7 @@ impl State {
 
     /// The model rows the `/model` list is built from, as an `Arc`: the
     /// command handler reads the set while a `/reload` cannot swap it out.
-    pub fn models_arc(&self) -> Arc<Vec<crate::tui::suggest::ModelChoice>> {
+    pub fn models_arc(&self) -> Arc<Vec<crate::tui::models::ModelChoice>> {
         self.models.clone()
     }
     /// Test seam: the active model's label, what `set_model` would set
@@ -217,7 +220,7 @@ impl State {
     /// returns to the list's default when that model is gone. The
     /// suggestion popup lists built-ins only, so nothing of its is
     /// touched.
-    pub fn set_models(&mut self, models: Arc<Vec<crate::tui::suggest::ModelChoice>>) {
+    pub fn set_models(&mut self, models: Arc<Vec<crate::tui::models::ModelChoice>>) {
         self.models = models;
         if self
             .picker

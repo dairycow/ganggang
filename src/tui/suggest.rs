@@ -1,43 +1,16 @@
 //! Slash-command suggestions (§15 amendment): while the composer holds
 //! a bare command word — first char `/`, no whitespace yet — a filtered
-//! list of everything that word could become floats above the editor:
-//! the built-ins. Pure,
-//! like [`classify_submission`](super::commands::classify_submission): the
+//! list of every built-in command the word could become floats above the
+//! editor. Pure, like
+//! [`classify_submission`](super::commands::classify_submission): the
 //! same catalog the submit path matches against, so the list can never
 //! advertise a command that does not run. The row-to-`UiLine` builders
-//! live here too — the popup's whole look, in the popup's module.
+//! live here too, and [`picker`](super::picker) draws its rows with them.
 
-use crate::config::providers::CatalogRow;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line as UiLine, Span};
 
 use super::theme::Palette;
-
-/// One model row the `/model` list and popup list from: the catalog's
-/// row, minus what they do not show (`api`), so the TUI never names the
-/// transport directly.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModelChoice {
-    pub provider: String,
-    pub model: String,
-    pub context_window: u32,
-    pub status: Option<String>,
-    pub needs_key: bool,
-    pub has_key: bool,
-}
-
-impl From<&CatalogRow> for ModelChoice {
-    fn from(row: &CatalogRow) -> Self {
-        Self {
-            provider: row.provider.clone(),
-            model: row.model.clone(),
-            context_window: row.context_window,
-            status: row.status.clone(),
-            needs_key: row.needs_key,
-            has_key: row.has_key,
-        }
-    }
-}
 
 /// One popup row.
 #[derive(Debug, Clone, PartialEq, Eq)]

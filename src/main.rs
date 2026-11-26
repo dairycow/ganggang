@@ -504,7 +504,7 @@ async fn open_agent(cli: &Cli, abort: Arc<AtomicBool>) -> anyhow::Result<Agent> 
 }
 
 /// The TUI's starting boot plus the factory that rebuilds agents for
-/// `/new` and `/resume`. One construction path for both interfaces.
+/// `/new` and `/session`. One construction path for both interfaces.
 fn boot_and_factory(
     cli: &Cli,
     cfg: &config::Config,

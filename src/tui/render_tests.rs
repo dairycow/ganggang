@@ -359,7 +359,7 @@ fn open_list(
 /// says why on its own row; a failed open says its error on the panel's
 /// last row, in the hint row's place.
 #[test]
-fn the_resume_list_is_a_window_that_follows_the_highlight() {
+fn the_list_is_a_window_that_follows_the_highlight() {
     let (mut terminal, mut state) = fresh(80, 24);
     open_list(
         &mut terminal,

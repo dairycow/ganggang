@@ -1248,7 +1248,7 @@ mod state_tests {
     /// context window, status, key state and active mark.
     #[test]
     fn the_model_row_says_what_the_popup_s_row_said() {
-        use crate::tui::suggest::ModelChoice;
+        use crate::tui::models::ModelChoice;
         let mut m = ModelChoice {
             provider: "openai".into(),
             model: "gpt-5".into(),
@@ -1266,8 +1266,8 @@ mod state_tests {
         assert_eq!(s.description, "ctx 400k · ok · active");
     }
 
-    fn model_row(provider: &str, model: &str) -> crate::tui::suggest::ModelChoice {
-        crate::tui::suggest::ModelChoice {
+    fn model_row(provider: &str, model: &str) -> crate::tui::models::ModelChoice {
+        crate::tui::models::ModelChoice {
             provider: provider.into(),
             model: model.into(),
             context_window: 100_000,

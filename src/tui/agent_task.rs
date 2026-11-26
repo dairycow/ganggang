@@ -59,13 +59,13 @@ pub enum UiEvent {
         warnings: Vec<String>,
     },
     /// A background local-models probe finished: the refreshed rows for
-    /// the `/model` popup, replacing the catalog seed (and any earlier
+    /// the `/model` list, replacing the catalog seed (and any earlier
     /// discovery result).
-    ModelsDiscovered(Vec<super::suggest::ModelChoice>),
-    /// A bare `/session`'s session-store scan finished, off the loop:
-    /// the picker's rows and the scan's warnings. The event loop takes
-    /// this before [`apply`] sees it (it opens the picker from it), so
-    /// [`apply`] only names it to stay exhaustive.
+    ModelsDiscovered(Vec<super::models::ModelChoice>),
+    /// A session-store scan finished, off the loop: the listing and the
+    /// scan's warnings. The event loop takes this before [`apply`] sees
+    /// it (it stores the listing on the state's cache), so [`apply`] only
+    /// names it to stay exhaustive.
     SessionsListed {
         sessions: Vec<crate::agent::session::io::SessionFile>,
         warnings: Vec<String>,
@@ -286,8 +286,8 @@ pub(super) async fn apply(
         UiEvent::ModelsDiscovered(models) => {
             state.set_models(std::sync::Arc::new(models));
         }
-        // The loop takes this one before apply sees it: it opens the
-        // picker from it itself (commands::sessions_listed).
+        // The loop takes this one before apply sees it: it stores the
+        // listing itself (commands::sessions_listed).
         UiEvent::SessionsListed { .. } => {}
         UiEvent::ShellDone {
             command,

@@ -215,7 +215,7 @@ fn list_dir(dir: &Path) -> (Vec<(SessionFile, bool)>, Vec<String>) {
 
 /// The listing order: conversations before header-only files (a `--watch`
 /// run materializes its file before the first message; such a file must not
-/// outrank a real conversation in `-c` or `/resume`, yet stays resolvable
+/// outrank a real conversation in `-c` or the TUI's `/session` list, yet stays resolvable
 /// by `--resume <id>`), then filename stamp descending, mtime, name.
 fn sort_newest_first(found: &mut [(SessionFile, bool)]) {
     let stamp_of = |p: &Path| -> String {
@@ -270,8 +270,9 @@ pub fn latest_in(dir: &Path) -> Option<SessionFile> {
     sessions.into_iter().next()
 }
 
-/// The 8-hex id in a session file's name: the handle users see, and the
-/// one [`resolve_prefix`] and the `/resume` picker match a prefix against.
+/// The 8-hex id in a session file's name: the handle users see, the one
+/// [`resolve_prefix`] matches a prefix against, and a word the TUI's
+/// `/session` list filters on.
 /// Empty for a file not named `<stamp>-<8hex>.jsonl`.
 pub fn short_id(session: &SessionFile) -> &str {
     session

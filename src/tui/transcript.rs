@@ -87,8 +87,8 @@ impl Transcript {
         self.thinking_open = false;
     }
 
-    /// Multi-line command feedback (picker lists, session info). Blank
-    /// lines are kept — they group the listing.
+    /// Multi-line command feedback (the hooks listing, session info).
+    /// Blank lines are kept — they group the listing.
     pub fn push_info(&mut self, text: &str) {
         self.blocks.push(Block::Info {
             text: text.to_string(),

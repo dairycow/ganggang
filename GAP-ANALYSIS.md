@@ -59,11 +59,11 @@ The 2026-11-23 audit's "would bite you in week one" list has shipped:
    transcript search; `--export` or the session JSONL is still the
    full-output path.
 
-3. **No session titles; no cross-directory `/resume` picker.** `/resume`
-   lists `timestamp model 8-hex`, cwd-scoped (`src/tui/commands.rs`;
-   `SessionFile` in `src/agent/session/io.rs` carries no title).
-   `--session-file` reaches another directory's session, but only by
-   exact path.
+3. **No session titles.** The `/session` list names a session by its
+   first message: `SessionFile` in `src/agent/session/io/list.rs` reads a
+   `"type":"title"` line when a file has one, and nothing in gg writes
+   one. A session cannot be renamed from the TUI. (The cross-directory
+   picker itself shipped in `ebb5e20`.)
 
 4. **No cost tracking.** The footer shows tokens and throughput; Strata
    `timings` are parsed permissively and ignored

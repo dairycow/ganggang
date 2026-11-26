@@ -431,8 +431,8 @@ fn model_choice(
     provider: &str,
     model: &str,
     context_window: u32,
-) -> crate::tui::suggest::ModelChoice {
-    crate::tui::suggest::ModelChoice {
+) -> crate::tui::models::ModelChoice {
+    crate::tui::models::ModelChoice {
         provider: provider.into(),
         model: model.into(),
         context_window,

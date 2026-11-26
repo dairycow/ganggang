@@ -1,16 +1,42 @@
-//! Background local model discovery for the `/model` popup: probes the
-//! `/v1/models` endpoints of local OpenAI-compatible servers and reports
-//! the refreshed rows to the UI, so the popup and the `/model` listing
-//! never wait on a slow or down server.
+//! The `/model` list's rows ([`ModelChoice`]) and their background
+//! refresh: probes of the local servers' `/v1/models` endpoints, reported
+//! to the UI as they finish, so the list never waits on a slow or down
+//! server.
 
 use std::collections::BTreeMap;
 
 use tokio::sync::mpsc;
 
 use crate::config::ProviderConfig;
+use crate::config::providers::CatalogRow;
 
 use super::agent_task::UiEvent;
-use super::suggest::ModelChoice;
+
+/// One model row the `/model` list and popup list from: the catalog's
+/// row, minus what they do not show (`api`), so the TUI never names the
+/// transport directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelChoice {
+    pub provider: String,
+    pub model: String,
+    pub context_window: u32,
+    pub status: Option<String>,
+    pub needs_key: bool,
+    pub has_key: bool,
+}
+
+impl From<&CatalogRow> for ModelChoice {
+    fn from(row: &CatalogRow) -> Self {
+        Self {
+            provider: row.provider.clone(),
+            model: row.model.clone(),
+            context_window: row.context_window,
+            status: row.status.clone(),
+            needs_key: row.needs_key,
+            has_key: row.has_key,
+        }
+    }
+}
 
 /// Spawns a task that probes the local providers' `/v1/models` endpoints
 /// and sends the refreshed rows as [`UiEvent::ModelsDiscovered`]. It runs
