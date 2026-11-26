@@ -10,12 +10,10 @@ use serde_json::json;
 
 use super::super::fake::{FakeServer, text_response, tool_call_response};
 use super::super::{drive_full, event_values, messages_of};
-use crate::agent::Agent;
 use crate::agent::hooks::{Hook, HookEvent, Hooks};
 use crate::agent::session::Role;
 use crate::agent::tools::Registry;
 use crate::agent::tools::bash::BashTool;
-use crate::llm::client::LlmClient;
 
 /// One `bash` call, and a second turn the aborted run must never ask for.
 fn one_bash_call(command: &str) -> (FakeServer, Registry) {
@@ -183,69 +181,4 @@ async fn a_post_hook_does_not_fire_for_a_cancelled_call() {
             .any(|e| e["type"] == "tool_call_finished")
     );
     assert!(!posted.exists(), "a cancelled call is not an execution");
-}
-
-/// A nested run (the `task` subagent) shares the parent's stop flag: the
-/// flag is owned by the top-level run, so a stop latched before the child
-/// started must be honored at the child's first check, not erased by a
-/// `run`-style reset. The child ends with the abort shape without ever
-/// reaching the model, and the parent's latch stays up.
-#[tokio::test]
-async fn a_nested_run_shares_the_parent_stop_flag_and_keeps_it_latched() {
-    // Nothing listens on this port: any attempted request would fail at
-    // connect, so an `Ok` result is proof the flag short-circuited before
-    // HTTP. The dead URL is fine because no request may happen at all.
-    let client = LlmClient::new("http://127.0.0.1:1").unwrap();
-    let abort = Arc::new(AtomicBool::new(true));
-    let mut agent = Agent::new(
-        client,
-        Registry::new(),
-        "fake-model".into(),
-        512,
-        abort.clone(),
-        std::env::temp_dir(),
-        None,
-        false,
-        131_072,
-        Hooks::default(),
-    );
-    let (mut tx, mut rx) = tokio::sync::mpsc::channel(128);
-    let result: anyhow::Result<()> = tokio::time::timeout(
-        Duration::from_secs(5),
-        agent.run_nested("hi".into(), &mut tx),
-    )
-    .await
-    .expect("a latched stop must not wait on a request");
-    let mut events = Vec::new();
-    drop(tx);
-    while let Some(event) = rx.recv().await {
-        events.push(event);
-    }
-
-    assert!(
-        result.is_ok(),
-        "a pre-latched stop is a clean abort, not an error"
-    );
-    let values = event_values(&events);
-    assert!(
-        values.iter().any(|e| e["type"] == "run_aborted"),
-        "the nested run ends with the abort shape: {values:?}"
-    );
-    assert!(
-        !values.iter().any(|e| e["type"] == "run_ended"),
-        "an aborted nested run has no RunEnded"
-    );
-    // No request may have been attempted: the flag short-circuits before
-    // any HTTP, and `Ok` above is the proof — a connect to the dead port
-    // would surface as `Err` instead.
-    assert!(
-        abort.load(Ordering::Acquire),
-        "the nested run must not clear the parent's stop flag"
-    );
-
-    // The session shape stays replay-safe: the run closes with the
-    // user-visible marker.
-    let last = messages_of(agent.entries().last().unwrap());
-    assert_eq!(last.role, Role::User);
-    assert_eq!(last.content.as_deref(), Some("[aborted by user]"));
 }

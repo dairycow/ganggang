@@ -5,7 +5,6 @@ mod compact;
 mod edge;
 mod fake;
 mod hooks;
-mod task_runner;
 mod wave23;
 
 use std::path::PathBuf;

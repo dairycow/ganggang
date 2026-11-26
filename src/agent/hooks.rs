@@ -212,7 +212,7 @@ fn validate(hooks: &[Hook]) -> anyhow::Result<()> {
                         );
                     }
                     for tool in tools {
-                        if tool != "*" && !crate::agent::tools::is_known_name(tool) {
+                        if tool != "*" && !crate::agent::tools::NAMES.contains(&tool.as_str()) {
                             anyhow::bail!("{at}.tools: unknown tool {tool:?}");
                         }
                     }

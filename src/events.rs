@@ -61,13 +61,6 @@ pub enum AgentEvent {
     Warned {
         message: String,
     },
-    /// A nested run's event, tagged with the id of the `task` tool call that
-    /// started it. Interfaces that group by call id render it under that
-    /// call; others ignore it.
-    Subtask {
-        task_id: String,
-        event: Box<AgentEvent>,
-    },
 }
 
 #[cfg(test)]
@@ -114,21 +107,6 @@ mod tests {
             r#"{"type":"warned","message":"truncated"}"#
         );
         assert_eq!(json(AgentEvent::RunAborted), r#"{"type":"run_aborted"}"#);
-    }
-
-    #[test]
-    fn subtask_events_wrap_a_nested_event_tagged_with_the_call_id() {
-        assert_eq!(
-            json(AgentEvent::Subtask {
-                task_id: "call_1".into(),
-                event: Box::new(AgentEvent::ToolCallStarted {
-                    name: "read".into(),
-                    id: "inner_1".into(),
-                    args: serde_json::json!({"path": "a"}),
-                }),
-            }),
-            r#"{"type":"subtask","task_id":"call_1","event":{"type":"tool_call_started","name":"read","id":"inner_1","args":{"path":"a"}}}"#
-        );
     }
 
     #[test]
