@@ -11,7 +11,7 @@ use crate::tui::history::History;
 /// A `/session` rig: a state, the channels the handler writes to, and a
 /// factory that records what it is asked for, and the directory, and then
 /// refuses (no agent is built in these tests).
-struct ResumeRig {
+struct SessionRig {
     state: super::super::super::view::State,
     input_tx: tokio::sync::mpsc::Sender<super::super::super::AgentInput>,
     ui_tx: tokio::sync::mpsc::Sender<super::super::super::agent_task::UiEvent>,
@@ -26,7 +26,7 @@ struct ResumeRig {
     abort: Arc<AtomicBool>,
 }
 
-impl ResumeRig {
+impl SessionRig {
     fn new() -> Self {
         let asked = Arc::new(Mutex::new(Vec::new()));
         let recorder = asked.clone();
@@ -138,7 +138,7 @@ fn filed_elsewhere(id: &str, title: &str) -> crate::agent::session::io::SessionF
 /// transcript's.
 #[test]
 fn the_listed_sessions_are_stored_on_the_cache_and_the_session_in_use_is_kept_out() {
-    let mut rig = ResumeRig::new();
+    let mut rig = SessionRig::new();
     let in_use = filed("b2c3d4e5", "older");
     rig.state.session_path = Some(in_use.path.clone());
 
@@ -167,7 +167,7 @@ fn the_listed_sessions_are_stored_on_the_cache_and_the_session_in_use_is_kept_ou
 
     // A solo session in use, and a store with nothing in it: the cache
     // holds what was read, and the panel is where the row is said.
-    let mut solo = ResumeRig::new();
+    let mut solo = SessionRig::new();
     solo.state.session_path = Some(in_use.path.clone());
     solo.state.sessions_listed(vec![in_use.clone()], Vec::new());
     let (ids, loaded, scanning) = solo.listing();
@@ -183,7 +183,7 @@ fn the_listed_sessions_are_stored_on_the_cache_and_the_session_in_use_is_kept_ou
 #[test]
 fn the_listed_sessions_are_stored_whatever_the_loop_is_doing() {
     let warnings = vec!["skipping session file: read failed".to_string()];
-    let mut rig = ResumeRig::new();
+    let mut rig = SessionRig::new();
     sessions_listed(&mut rig.state, vec![filed("a1b2c3d4", "newest")], warnings);
     let (ids, loaded, scanning) = rig.listing();
     assert_eq!(ids, ["/s/20261125-120000-a1b2c3d4.jsonl"]);
@@ -196,7 +196,7 @@ fn the_listed_sessions_are_stored_whatever_the_loop_is_doing() {
         "the scan's warnings reach the transcript: {lines:?}"
     );
 
-    let mut busy = ResumeRig::new();
+    let mut busy = SessionRig::new();
     busy.state.busy = true;
     sessions_listed(
         &mut busy.state,
@@ -209,7 +209,7 @@ fn the_listed_sessions_are_stored_whatever_the_loop_is_doing() {
         "a run in flight does not hold the listing back"
     );
 
-    let mut draft = ResumeRig::new();
+    let mut draft = SessionRig::new();
     draft.state.editor.set_text("/session other");
     sessions_listed(
         &mut draft.state,
@@ -234,7 +234,7 @@ fn the_listed_sessions_are_stored_whatever_the_loop_is_doing() {
 #[test]
 fn the_scan_says_its_warnings_only_when_they_change() {
     let warnings = vec!["skipping session file: read failed".to_string()];
-    let mut rig = ResumeRig::new();
+    let mut rig = SessionRig::new();
     rig.state.sessions_listed(Vec::new(), warnings.clone());
     let first = rig.state.line_texts_for_test();
     assert!(
@@ -267,7 +267,7 @@ fn the_scan_says_its_warnings_only_when_they_change() {
 /// the transcript beyond the error the caller reports.
 #[test]
 fn the_picked_row_opens_through_the_factory_by_its_file_in_its_own_directory() {
-    let mut rig = ResumeRig::new();
+    let mut rig = SessionRig::new();
     let own = std::env::temp_dir().join(format!("gg-resume-own-{}", std::process::id()));
     std::fs::create_dir_all(&own).unwrap();
     let mut session = filed_elsewhere("c3d4e5f6", "other repo");
@@ -325,7 +325,7 @@ fn the_picked_row_opens_through_the_factory_by_its_file_in_its_own_directory() {
 /// entries, the token totals.
 #[test]
 fn session_info_says_the_path_the_model_the_entries_and_the_tokens() {
-    let mut rig = ResumeRig::new();
+    let mut rig = SessionRig::new();
     let file = std::env::temp_dir().join(format!("gg-session-info-{}.jsonl", std::process::id()));
     std::fs::write(&file, "{}\n").unwrap();
     rig.state.session_path = Some(file.clone());
@@ -339,7 +339,7 @@ fn session_info_says_the_path_the_model_the_entries_and_the_tokens() {
             format!("session: {}", file.display()),
             "model: strata/qwen3.8".to_string(),
             "entries: 12".to_string(),
-            "tokens: 1000 in / 50 out".to_string(),
+            "tokens: 1000 in / 50 out / 0 cache".to_string(),
         ]
     );
     let _ = std::fs::remove_file(&file);
@@ -350,7 +350,7 @@ fn session_info_says_the_path_the_model_the_entries_and_the_tokens() {
 /// path at all, and the block says so.
 #[test]
 fn session_info_says_when_the_file_is_written_and_when_it_is_not_persisted() {
-    let mut rig = ResumeRig::new();
+    let mut rig = SessionRig::new();
     let missing =
         std::env::temp_dir().join(format!("gg-session-info-{}.jsonl", std::process::id()));
     let _ = std::fs::remove_file(&missing);
@@ -370,7 +370,7 @@ fn session_info_says_when_the_file_is_written_and_when_it_is_not_persisted() {
     );
     let _ = std::fs::remove_file(&missing);
 
-    let mut no_session = ResumeRig::new();
+    let mut no_session = SessionRig::new();
     no_session.state.sessions_disabled = true;
     session_info(&mut no_session.state, "m");
     assert!(
@@ -388,7 +388,7 @@ fn session_info_says_when_the_file_is_written_and_when_it_is_not_persisted() {
 /// the transcript says where it went.
 #[test]
 fn copy_session_path_copies_the_session_file_path() {
-    let mut rig = ResumeRig::new();
+    let mut rig = SessionRig::new();
     rig.state.session_path = Some(std::path::PathBuf::from("/s/a1b2c3d4.jsonl"));
     let copied = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let recorded = copied.clone();
@@ -416,10 +416,10 @@ fn copy_session_path_copies_the_session_file_path() {
 }
 
 /// `copy path` with no session file says the run is `--no-session`, and
-/// a write that fails says the write failed.
+/// a copy that fails says so.
 #[test]
 fn copy_session_path_says_no_session_and_says_when_the_write_fails() {
-    let mut no_session = ResumeRig::new();
+    let mut no_session = SessionRig::new();
     no_session.state.sessions_disabled = true;
     let error = copy_session_path(&mut no_session.state, |text| {
         panic!("nothing to write: {text:?}")
@@ -431,14 +431,14 @@ fn copy_session_path_says_no_session_and_says_when_the_write_fails() {
         "nothing is copied, nothing is said"
     );
 
-    let mut failing = ResumeRig::new();
+    let mut failing = SessionRig::new();
     failing.state.session_path = Some(std::path::PathBuf::from("/s/a1b2c3d4.jsonl"));
     let error = copy_session_path(&mut failing.state, |_text| {
         Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no tty"))
     })
     .unwrap_err();
     assert!(
-        error.starts_with("cannot write to /dev/tty"),
+        error.starts_with("cannot copy"),
         "the failed write is the error: {error:?}"
     );
 }

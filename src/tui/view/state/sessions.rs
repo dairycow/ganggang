@@ -49,7 +49,7 @@ impl crate::tui::view::State {
             if pick.list == List::Sessions {
                 pick.rows().is_empty()
             } else {
-                pick.model_rows().is_empty()
+                pick.stored_rows().is_empty()
             }
         })
     }

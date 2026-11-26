@@ -32,8 +32,7 @@ impl crate::tui::view::State {
     /// testable without a terminal: cancel a live run, close the `/session`
     /// list, clear a draft, or, when there is nothing left to cancel, end
     /// the TUI. The caller (the event loop) sets the abort flag and quits,
-    /// event loop) sets the abort flag and quits, because those are the two
-    /// things the view cannot do.
+    /// because those are the two things the view cannot do.
     pub fn interrupt(&mut self) -> Cancel {
         if self.busy {
             // A run Ctrl+C has already asked to stop: this press is the

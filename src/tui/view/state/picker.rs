@@ -8,14 +8,18 @@ use crate::tui::picker::{Action, List, Pick, Picker, Row, matching, trigger};
 
 impl crate::tui::view::State {
     /// The `/model` list's rows, built from the state's model rows:
-    /// one row per model, in the state's order.
+    /// one row per model, in the state's order, its search text the
+    /// `provider/model` and the description (so `active`, a status word
+    /// or `no key` finds a row, as a skill's description does).
     pub(crate) fn model_list(&self) -> Picker {
         let rows = self
             .models
             .iter()
-            .map(|m| crate::tui::picker::Row::Model {
-                suggestion: crate::tui::picker::model_row(m, &self.active_model),
-                search: format!("{}/{}", m.provider, m.model).to_lowercase(),
+            .map(|m| {
+                let suggestion = crate::tui::picker::model_row(m, &self.active_model);
+                let search =
+                    format!("{} {}", suggestion.label, suggestion.description).to_lowercase();
+                crate::tui::picker::Row::Model { suggestion, search }
             })
             .collect();
         crate::tui::picker::Picker::for_models(rows)
@@ -62,7 +66,7 @@ impl crate::tui::view::State {
     /// `/model` list's filter is empty, the first row otherwise.
     fn default_row(&self, trigger: &crate::tui::picker::Trigger, pick: &Picker) -> usize {
         if trigger.filter.is_empty() && trigger.list == crate::tui::picker::List::Models {
-            pick.model_rows()
+            pick.stored_rows()
                 .iter()
                 .position(|row| row.label() == Some(self.active_model.as_str()))
                 .unwrap_or(0)
@@ -99,7 +103,7 @@ impl crate::tui::view::State {
         } else {
             // The `/model` and `/skill` lists have no matching action
             // rows: their rows stand as they were built.
-            rows.extend(pick.model_rows().iter().cloned());
+            rows.extend(pick.stored_rows().iter().cloned());
         }
         matching(&rows, &pick.filter).into_iter().cloned().collect()
     }
@@ -157,6 +161,13 @@ impl crate::tui::view::State {
     /// ↓: the highlight descends, stopping at the last matching row.
     pub fn picker_next(&mut self) {
         self.move_highlight(false, 1);
+    }
+
+    /// The mouse wheel: the highlight moves `by` rows, up or down, and
+    /// the panel's window follows it, so the highlighted row stays on
+    /// screen.
+    pub fn picker_scroll(&mut self, up: bool, by: u16) {
+        self.move_highlight(up, usize::from(by));
     }
 
     fn move_highlight(&mut self, up: bool, by: usize) {

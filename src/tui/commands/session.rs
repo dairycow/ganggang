@@ -125,9 +125,9 @@ fn continuation(
 }
 
 /// The current session's one-line block: where its file is, which model
-/// it runs, and the run's totals. `--no-session` runs have no file to
-/// point at, and a fresh session's file is written only on its first
-/// message, which the path line says.
+/// it runs, and the run's totals, cache reads included. `--no-session`
+/// runs have no file to point at, and a fresh session's file is written
+/// only on its first message, which the path line says.
 pub(in crate::tui) fn session_info(state: &mut State, model_label: &str) {
     let path = match state.session_path.as_ref() {
         Some(path) => {
@@ -140,16 +140,21 @@ pub(in crate::tui) fn session_info(state: &mut State, model_label: &str) {
         None => "not persisted (--no-session)".to_string(),
     };
     state.push_info(&format!(
-        "session: {path}\nmodel: {model_label}\nentries: {}\ntokens: {} in / {} out",
-        state.entries, state.tokens_in, state.tokens_out,
+        "session: {path}\nmodel: {model_label}\nentries: {}\ntokens: {} in / {} out / {} cache",
+        state.entries,
+        state.tokens_in,
+        state.tokens_out,
+        state.footer.cache_read_tokens(),
     ));
 }
 
 /// The list's `copy path` row on the current session: its `.jsonl`
 /// file's path, copied through `write` (the loop passes
-/// [`clipboard::copy`](super::super::clipboard::copy), a test passes a
-/// recorder). A run without a session file has nothing to copy, and a
-/// write that fails is the terminal's problem, reported as an error.
+/// [`clipboard::copy`](super::super::clipboard::copy), which uses the
+/// desktop's clipboard tool or the terminal's OSC 52 sequence; a test
+/// passes a recorder). A run without a session file has nothing to copy,
+/// and a copy that fails is the clipboard's problem, reported as an
+/// error.
 pub(in crate::tui) fn copy_session_path(
     state: &mut State,
     write: impl Fn(&str) -> std::io::Result<()>,
@@ -160,7 +165,7 @@ pub(in crate::tui) fn copy_session_path(
         .ok_or_else(|| "no session file to copy: this run is --no-session".to_string())?;
     let path_text = path.display().to_string();
     if let Err(e) = write(&path_text) {
-        return Err(format!("cannot write to /dev/tty: {e}"));
+        return Err(format!("cannot copy: {e}"));
     }
     state.push_info(&format!("copied {path_text}"));
     Ok(())

@@ -606,8 +606,14 @@ pub async fn run(
                     // [`classify_wheel`]), so a stray click can never move a
                     // cursor or a selection.
                     crossterm::event::Event::Mouse(mouse) => match classify_wheel(mouse) {
-                        // The wheel is for the transcript only: the list's
-                        // highlight is moved by the arrows.
+                        // The wheel drives an open list's highlight; with no
+                        // list open it scrolls the transcript.
+                        Some(Wheel::Up) if state.picker_open() => {
+                            state.picker_scroll(true, WHEEL_ROWS)
+                        }
+                        Some(Wheel::Down) if state.picker_open() => {
+                            state.picker_scroll(false, WHEEL_ROWS)
+                        }
                         Some(Wheel::Up) => state.scroll_up(WHEEL_ROWS),
                         Some(Wheel::Down) => state.scroll_down(WHEEL_ROWS),
                         None => {}
@@ -775,9 +781,10 @@ async fn next_watch_event(rx: &mut Option<mpsc::Receiver<watch::Event>>) -> Opti
 }
 
 /// Ctrl+X: copy the last assistant answer to the clipboard (the same
-/// OSC 52 copy the `/session` list's `copy path` row uses). Feedback
-/// lands in the transcript either way — silent clipboards are
-/// indistinguishable from broken ones.
+/// copy the `/session` list's `copy path` row uses: the desktop's
+/// clipboard tool when one is installed, else the terminal's OSC 52
+/// sequence). Feedback lands in the transcript either way — silent
+/// clipboards are indistinguishable from broken ones.
 fn copy_last_answer(state: &mut State) {
     let Some(answer) = state.last_answer() else {
         state.push_warning("nothing to copy yet");
@@ -785,7 +792,7 @@ fn copy_last_answer(state: &mut State) {
     };
     match clipboard::copy(&answer) {
         Ok(()) => state.push_info(&format!("copied {} chars", answer.chars().count())),
-        Err(e) => state.push_warning(&format!("cannot write to /dev/tty: {e}")),
+        Err(e) => state.push_warning(&format!("cannot copy: {e}")),
     }
 }
 

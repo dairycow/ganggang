@@ -141,9 +141,10 @@ pub struct Picker {
     everywhere: Vec<SessionRow>,
     /// Whether the list shows every directory's sessions.
     all_directories: bool,
-    /// The `/model` list's rows, in the state's order, as its rows are
-    /// built: `Row::Model`s. Empty for the session list.
-    model_rows: Vec<Row>,
+    /// The rows of the `/model` or `/skill` list, in the state's order,
+    /// as they are built: `Row::Model`s or `Row::Skill`s. Empty for the
+    /// session list.
+    stored_rows: Vec<Row>,
 }
 
 impl Picker {
@@ -168,7 +169,7 @@ impl Picker {
             filter: String::new(),
             error: None,
             list: List::Sessions,
-            model_rows: Vec::new(),
+            stored_rows: Vec::new(),
         }
     }
 
@@ -193,7 +194,7 @@ impl Picker {
             filter: String::new(),
             error: None,
             list,
-            model_rows: rows,
+            stored_rows: rows,
         }
     }
 
@@ -207,14 +208,14 @@ impl Picker {
             filter: String::new(),
             error: None,
             list: List::Sessions,
-            model_rows: Vec::new(),
+            stored_rows: Vec::new(),
         }
     }
 
-    /// The `/model` list's rows in view, in the state's order; the
-    /// `/skill` list's the same. Empty for the session list.
-    pub fn model_rows(&self) -> &[Row] {
-        &self.model_rows
+    /// The `/model` and `/skill` lists' rows, in the state's order.
+    /// Empty for the session list.
+    pub fn stored_rows(&self) -> &[Row] {
+        &self.stored_rows
     }
 
     /// The session rows in view, in listing order. Empty for the

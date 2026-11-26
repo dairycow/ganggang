@@ -141,6 +141,109 @@ async fn skills_command_is_removed_with_a_hint() {
     );
 }
 
+/// The submit path's own `/session` answer is the list's `info` block:
+/// one implementation, so the two cannot say different things.
+#[tokio::test]
+async fn the_session_command_prints_the_same_block_as_the_info_row() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    let mut state = super::super::view::State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        Arc::new(vec![]),
+        History::default(),
+    );
+    let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
+    let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
+    let factory: super::super::Factory =
+        Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
+    let config = crate::config::Config::default();
+    let mut active_endpoint = config.active_endpoint();
+    let label = active_endpoint.label();
+    let abort = Arc::new(AtomicBool::new(false));
+    let mut cwd = std::path::PathBuf::from("/tmp/x");
+
+    handle_command(
+        Command::Session,
+        CmdCtx {
+            state: &mut state,
+            factory: &factory,
+            input_tx: &mut input_tx,
+            ui_tx: &ui_tx,
+            skills: Arc::new(Vec::new()),
+            hooks: &crate::agent::hooks::Hooks::default(),
+            cwd: &mut cwd,
+            abort: &abort,
+            config: &config,
+            active_endpoint: &mut active_endpoint,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        state.line_texts_for_test(),
+        [
+            "session: not persisted (--no-session)".to_string(),
+            format!("model: {label}"),
+            "entries: 0".to_string(),
+            "tokens: 0 in / 0 out / 0 cache".to_string(),
+        ]
+    );
+}
+
+/// A bare `/model` that reaches the submit path points at the list: the
+/// list has the composer while the word is typed, so this is its answer
+/// for a submit that got past it.
+#[tokio::test]
+async fn the_bare_model_command_points_at_the_list() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    let mut state = super::super::view::State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        Arc::new(vec![]),
+        History::default(),
+    );
+    let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
+    let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
+    let factory: super::super::Factory =
+        Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
+    let config = crate::config::Config::default();
+    let mut active_endpoint = config.active_endpoint();
+    let abort = Arc::new(AtomicBool::new(false));
+    let mut cwd = std::path::PathBuf::from("/tmp/x");
+
+    handle_command(
+        Command::Model(None),
+        CmdCtx {
+            state: &mut state,
+            factory: &factory,
+            input_tx: &mut input_tx,
+            ui_tx: &ui_tx,
+            skills: Arc::new(Vec::new()),
+            hooks: &crate::agent::hooks::Hooks::default(),
+            cwd: &mut cwd,
+            abort: &abort,
+            config: &config,
+            active_endpoint: &mut active_endpoint,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        state
+            .line_texts_for_test()
+            .iter()
+            .any(|line| line.contains("pick a model from the list above the composer")),
+        "{:?}",
+        state.line_texts_for_test()
+    );
+}
+
 #[test]
 fn resume_is_not_a_command_and_session_takes_any_argument() {
     assert_eq!(

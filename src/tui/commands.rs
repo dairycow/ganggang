@@ -40,8 +40,11 @@ pub enum Command {
     /// Compact the context now; an argument becomes focus instructions
     /// for the summarize call (§14's manual path).
     Compact(Option<String>),
-    /// Show the session's path, model, entries and tokens; an argument
-    /// is ignored, as the list's `info` row's is.
+    /// Show the session's path, model, entries and tokens, as the list's
+    /// `info` row does; an argument is ignored. The list has the composer
+    /// while `/session` is open, so this arm is the submit path's own
+    /// answer, and it shares [`session_info`]'s block rather than
+    /// repeating it.
     Session,
     /// Dump the assembled system prompt (§12's debugging affordance).
     Context,
@@ -213,19 +216,7 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
             }
         }
         Command::Session => {
-            let path = state
-                .session_path
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "not persisted (--no-session)".into());
-            state.push_info(&format!(
-                "session: {path}\nmodel: {}\nentries: {}\ntokens: {} in / {} out / {} cache",
-                active_endpoint.label(),
-                state.entries,
-                state.tokens_in,
-                state.tokens_out,
-                state.footer.cache_read_tokens(),
-            ));
+            session_info(state, &active_endpoint.label());
         }
         Command::Context => {
             // The agent task answers with UiEvent::SystemPrompt — the
