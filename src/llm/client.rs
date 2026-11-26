@@ -414,7 +414,7 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// The summarize call's output cap: a continuation summary is short, and a
 /// large `max_tokens` is what makes a small request slow.
-const SUMMARY_MAX_TOKENS: u32 = 4096;
+pub(crate) const SUMMARY_MAX_TOKENS: u32 = 4096;
 /// The summarize call's thinking cap, for endpoints that budget it in tokens.
 const SUMMARY_REASONING_BUDGET_TOKENS: u32 = 512;
 /// Configured reasoning efforts worth pulling down for a summarize call.

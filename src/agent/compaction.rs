@@ -84,7 +84,7 @@ fn measured_usage(entries: &[Entry]) -> Option<(usize, u64)> {
 }
 
 /// Upper bound on how much recent history compaction tries to keep, in
-/// tokens. Small windows keep half the compaction line instead.
+/// tokens. Small windows keep a third of the compaction line instead.
 pub const KEEP_RECENT: u32 = 20_000;
 
 /// The chars/4 fallback, for servers that report no usage: the wire
@@ -121,10 +121,11 @@ pub fn compact_line(context_window: u32, threshold: Option<u32>, max_tokens: u32
 }
 
 /// How much recent history compaction keeps: at most `KEEP_RECENT`, and
-/// never more than half the compaction line, so a small window still
-/// leaves room for the summary and the next request.
+/// never more than a third of the compaction line, so a small window
+/// still leaves room for the summary and a run of turns after it. A line
+/// of 60,000 tokens or more keeps the full `KEEP_RECENT`.
 pub fn effective_keep_recent(context_window: u32, threshold: Option<u32>, max_tokens: u32) -> u32 {
-    KEEP_RECENT.min(compact_line(context_window, threshold, max_tokens) / 2)
+    KEEP_RECENT.min(compact_line(context_window, threshold, max_tokens) / 3)
 }
 
 /// The trigger (§14): checked after a tool batch, before the next
@@ -415,6 +416,7 @@ impl super::Agent {
             &self.client,
             &self.model,
             self.max_tokens,
+            self.context_window,
             &self.cwd,
             &dropped_wire,
             instructions,

@@ -23,14 +23,18 @@
 //! A continuation is a turn like any other, so the run's turn budget
 //! (`--max-turns`) is spent on it too, and a short answer at the budget's
 //! end is not continued: the cap would be exceeded by the very request
-//! that asks for the rest.
+//! that asks for the rest. The budget has two bounds: [`MAX_CONTINUATIONS`]
+//! for cuts back to back, a chain a complete tool turn ends, and
+//! [`MAX_RUN_CONTINUATIONS`] for the run as a whole.
 //!
 //! A `max_tokens` cut that leaves nothing but reasoning has no partial to
 //! carry forward, and the same request would think its way to the same
 //! cut. While reasoning was on for the request, the loop asks for the turn
-//! once more with it off, keeps nothing of the thought-only turn, and sends
-//! the rest of the run without reasoning too. A server that refuses the
-//! request ends the run the way the truncation alone would have.
+//! once more with it off and keeps nothing of the thought-only turn. The
+//! first such turn in a row is retried on its own; the turn after it goes
+//! out as configured again. A second, back to back with it, switches
+//! reasoning off for the rest of the run. A server that refuses the retry
+//! ends the run the way the truncation alone would have.
 
 use std::sync::atomic::Ordering;
 
@@ -65,18 +69,68 @@ pub(super) struct ShortTurn<'a> {
     /// ask the turn again without it: reasoning was on for the request, and
     /// the run's turn budget is not spent.
     pub thought_only: bool,
+    /// [`Self::thought_only`], and the turn before it needed the same
+    /// retry: reasoning goes off for the rest of the run.
+    pub thought_only_again: bool,
 }
 
-/// How many times one run may ask the model to continue a short answer.
-/// Bounded deliberately: a server that hands back one token per turn
-/// would otherwise loop until the user kills it.
+/// How many times one run may ask the model to continue a short answer
+/// back to back. Bounded deliberately: a server that hands back one token
+/// per turn would otherwise loop until the user kills it. A complete tool
+/// turn ends the chain, so the next cut starts with the full budget again.
 pub(super) const MAX_CONTINUATIONS: u32 = 3;
+
+/// How many continuations one run may spend in total, however many
+/// complete turns sit between them: a long run keeps its budget for each
+/// scattered truncation, and a server that truncates on and off all run
+/// still stops here.
+pub(super) const MAX_RUN_CONTINUATIONS: u32 = 12;
+
+/// The continuation budget of one run, in its two parts.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct Continuations {
+    /// Continuations spent on cuts back to back, since the last complete
+    /// tool turn.
+    pub(super) chain: u32,
+    /// Every continuation spent in this run.
+    pub(super) run: u32,
+}
+
+impl Continuations {
+    /// Spend one continuation: both counts move together.
+    fn spend(&mut self) {
+        self.chain += 1;
+        self.run += 1;
+    }
+
+    /// A complete turn finished its tool batch: the chain of cuts is over.
+    pub(super) fn complete_turn(&mut self) {
+        self.chain = 0;
+    }
+
+    /// The count and scope of the budget that refuses another
+    /// continuation, when one does.
+    fn exhausted_by(&self) -> Option<(u32, &'static str)> {
+        if self.chain >= MAX_CONTINUATIONS {
+            Some((self.chain, "in a row"))
+        } else if self.run >= MAX_RUN_CONTINUATIONS {
+            Some((self.run, "this run"))
+        } else {
+            None
+        }
+    }
+}
 
 /// The user-role instruction that carries a partial answer forward. It is
 /// explicit about not repeating, because the usual failure mode of a bare
 /// "continue" is the model restating what it already wrote.
 pub(super) const CONTINUE_INSTRUCTION: &str =
     "[continue exactly where you stopped; do not repeat text you already wrote]";
+
+/// The instruction for a cut answer that carried tool calls. Their
+/// arguments can be cut mid-JSON, so none of them ran: the model is told
+/// to make the call again in pieces it can finish.
+pub(super) const CONTINUE_TOOL_INSTRUCTION: &str = "[your previous tool call was cut off by max_tokens and was not executed; retry it in smaller pieces or continue]";
 
 /// Why this turn fell short.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,20 +176,21 @@ pub(super) struct Plan {
     pub(super) without_reasoning: bool,
 }
 
-/// `used` is how many continuations this run has already spent;
-/// `at_turn_limit` says the run's turn budget is spent, in which case
-/// nothing is continued whatever the continuation budget says. A short
-/// turn that produced no visible output is not continued either: there is
-/// nothing to carry forward, and asking again would repeat the same cut.
-/// The exception is `thought_only` (see [`ShortTurn`]): the same question
-/// asked without reasoning has not been tried yet.
+/// `budget` is the run's continuation budget; `at_turn_limit` says the
+/// run's turn budget is spent, in which case nothing is continued whatever
+/// the continuation budget says. A short turn that produced no visible
+/// output is not continued either: there is nothing to carry forward, and
+/// asking again would repeat the same cut. The exception is `thought_only`
+/// (see [`ShortTurn`]): the same question asked without reasoning has not
+/// been tried yet. `again` says the turn before needed that retry too.
 fn plan(
     cut: Cut,
-    used: u32,
+    budget: &Continuations,
     max_tokens: u32,
     at_turn_limit: bool,
     has_visible_output: bool,
     thought_only: bool,
+    again: bool,
 ) -> Plan {
     let head = match cut {
         Cut::StreamEnded => "stream ended early".to_string(),
@@ -154,10 +209,17 @@ fn plan(
     if !has_visible_output {
         if thought_only && !at_turn_limit {
             return Plan {
-                warning: format!(
-                    "{head} with nothing but reasoning; asking again with reasoning off, \
-                     which stays off for the rest of this run"
-                ),
+                warning: if again {
+                    format!(
+                        "{head} with nothing but reasoning again; asking again with \
+                         reasoning off, which stays off for the rest of this run"
+                    )
+                } else {
+                    format!(
+                        "{head} with nothing but reasoning; asking again with \
+                         reasoning off for this turn"
+                    )
+                },
                 continue_turn: true,
                 without_reasoning: true,
             };
@@ -176,21 +238,21 @@ fn plan(
             continue_turn: false,
             without_reasoning: false,
         }
-    } else if used < MAX_CONTINUATIONS {
+    } else if let Some((spent, scope)) = budget.exhausted_by() {
         Plan {
             warning: format!(
-                "{head}; continuing from the partial answer ({}/{MAX_CONTINUATIONS})",
-                used + 1
+                "{head}; stopping after {spent} continuation(s) {scope} — the partial answer stands"
             ),
-            continue_turn: true,
+            continue_turn: false,
             without_reasoning: false,
         }
     } else {
         Plan {
             warning: format!(
-                "{head}; stopping after {used} continuation(s) — the partial answer stands"
+                "{head}; continuing from the partial answer ({}/{MAX_CONTINUATIONS})",
+                budget.chain + 1
             ),
-            continue_turn: false,
+            continue_turn: true,
             without_reasoning: false,
         }
     }
@@ -201,7 +263,8 @@ pub(super) enum After {
     /// The continuation message is appended; ask again.
     Continue,
     /// Nothing was appended: ask for the same turn again, with reasoning
-    /// off for that request and the rest of the run.
+    /// off for that request, and for the rest of the run when it is the
+    /// second thought-only turn back to back.
     RetryWithoutReasoning,
     /// Budget spent: end the run with the partial answer standing.
     EndRun,
@@ -242,7 +305,7 @@ impl Agent {
     /// stays valid (§8: a call is never dropped, so its answer must exist
     /// too).
     ///
-    /// `used` counts the continuations this run has already spent, and
+    /// `budget` counts the continuations this run has already spent, and
     /// `turn` says which turn this is and what its `TurnEnded` carries.
     /// `has_visible_output` says whether the short turn left text or a tool
     /// call behind; a blank truncation stops instead of continuing. A
@@ -252,13 +315,14 @@ impl Agent {
     /// finishes the run. A thought-only truncation the loop can retry
     /// (`turn.thought_only`) is neither continued nor ended: the caller
     /// kept no entry for it, and asks for the same turn again with
-    /// reasoning off.
+    /// reasoning off. A cut `max_tokens` answer that carried tool calls is
+    /// continued with [`CONTINUE_TOOL_INSTRUCTION`] instead.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn handle_cut(
         &mut self,
         cut: Cut,
         tool_call_ids: &[String],
-        used: &mut u32,
+        budget: &mut Continuations,
         turn: ShortTurn<'_>,
         has_visible_output: bool,
         events: &mut Sender<AgentEvent>,
@@ -280,11 +344,12 @@ impl Agent {
         // continues. Empty warning means nothing to say.
         let decision = plan(
             cut,
-            *used,
+            budget,
             self.max_tokens,
             at_turn_limit,
             has_visible_output,
             turn.thought_only,
+            turn.thought_only_again,
         );
         // A continuation is another request, so it falls under the loop's
         // one guard: the user's stop request — checked before the warning,
@@ -329,8 +394,13 @@ impl Agent {
         if decision.without_reasoning {
             return Ok(After::RetryWithoutReasoning);
         }
-        *used += 1;
-        self.push_message(Role::User, Some(CONTINUE_INSTRUCTION.into()))?;
+        budget.spend();
+        let instruction = if cut == Cut::MaxTokens && !tool_call_ids.is_empty() {
+            CONTINUE_TOOL_INSTRUCTION
+        } else {
+            CONTINUE_INSTRUCTION
+        };
+        self.push_message(Role::User, Some(instruction.into()))?;
         // §14: the same check a tool batch earns — the continuation request
         // is about to build on top of the entries just appended.
         let context_tokens = compaction::context_tokens_of(&self.entries)

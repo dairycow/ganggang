@@ -118,13 +118,18 @@ impl Agent {
         // 80% line and the provider's KV prefix cache survives the nudges.
         // Nothing here is persisted — the session file never sees a notice.
         let mut notices: HashMap<String, String> = HashMap::new();
-        // Continuations this run has spent on a short answer (§ cut).
-        let mut continuations = 0u32;
-        // Set when a turn spends the whole `max_tokens` on reasoning: every
-        // request after it in this run goes out with reasoning off.
-        let mut reasoning_off = false;
-        // Set for the one request that asks such a turn again.
-        let mut retrying_without_reasoning = false;
+        // The continuations this run has spent on short answers: back to
+        // back, and in total (§ cut).
+        let mut continuations = cut::Continuations::default();
+        // Thought-only `max_tokens` cuts back to back, each retried with
+        // reasoning off. A turn that needed no retry starts the count again.
+        let mut consecutive_thought_only = 0u32;
+        // Set when a second turn in a row spends the whole `max_tokens` on
+        // reasoning: every request after it in this run goes out with
+        // reasoning off.
+        let mut reasoning_off_for_run = false;
+        // Set for the one request that asks a thought-only turn again.
+        let mut without_reasoning = false;
         loop {
             if self.abort.load(Ordering::Acquire) {
                 self.emit_abort(events).await?;
@@ -192,6 +197,11 @@ impl Agent {
             // The request, with the stop request wired in: a stream stops
             // when the user asks and comes back with what arrived, and a
             // non-streaming wait is raced against the same flag.
+            // `without_reasoning` covers one request: the retry of a
+            // thought-only turn. Once the fallback has latched, every
+            // request goes out with reasoning off instead.
+            let retrying = std::mem::take(&mut without_reasoning);
+            let reasoning_off = reasoning_off_for_run || retrying;
             let outcome = match self.ask(&messages, events, reasoning_off).await {
                 Ok(outcome) => outcome,
                 // The server refused the request without reasoning (it takes
@@ -201,7 +211,7 @@ impl Agent {
                 // failure is the request's own, and fails the run: the
                 // error is written into the session first, so the file
                 // says why the history stops where it does.
-                Err(err) if retrying_without_reasoning && crate::llm::client::is_refusal(&err) => {
+                Err(err) if retrying && crate::llm::client::is_refusal(&err) => {
                     events
                         .send(AgentEvent::Warned {
                             message: format!(
@@ -217,7 +227,6 @@ impl Agent {
                     return Err(err);
                 }
             };
-            retrying_without_reasoning = false;
             // Read before `from_response` consumes the response: the wire
             // type stays the single place finish reasons and timings exist.
             let timings = outcome.response.timings.clone();
@@ -253,13 +262,19 @@ impl Agent {
             // partial to continue, and the same request would think its
             // way to the same cut. While reasoning was on for this request
             // and the turn budget is not spent, the turn is asked once more
-            // without it; the next run starts with the configured effort.
-            let retry_without_reasoning = truncated
-                && !has_visible_output
-                && !cut::is_blank(&message)
+            // without it: on its own the first time in a row, and for the
+            // rest of the run the second time back to back.
+            let thought_only = truncated && !has_visible_output && !cut::is_blank(&message);
+            let retry_without_reasoning = thought_only
                 && !reasoning_off
                 && !self.client.reasoning_is_off()
                 && !self.at_turn_limit(turns);
+            // The retry of a thought-only turn is no recovery yet: only a
+            // turn that needed no retry ends the run of thought-only cuts.
+            if !thought_only && !reasoning_off {
+                consecutive_thought_only = 0;
+            }
+            let thought_only_again = retry_without_reasoning && consecutive_thought_only >= 1;
             // A blank turn is no news: skip it on abort, and skip a blank
             // truncated turn too, so a provider that cuts before the first
             // token leaves no empty assistant entry behind. A turn asked
@@ -307,6 +322,7 @@ impl Agent {
                         thinking_pct,
                     },
                     thought_only: retry_without_reasoning,
+                    thought_only_again,
                 };
                 let tool_call_ids = message
                     .tool_calls
@@ -331,8 +347,9 @@ impl Agent {
                     // Nothing of the thought-only turn was kept, so the next
                     // request is this one again, now with reasoning off.
                     cut::After::RetryWithoutReasoning => {
-                        reasoning_off = true;
-                        retrying_without_reasoning = true;
+                        consecutive_thought_only += 1;
+                        reasoning_off_for_run |= thought_only_again;
+                        without_reasoning = true;
                         continue;
                     }
                     cut::After::EndRun => break,
@@ -373,6 +390,9 @@ impl Agent {
             {
                 return Ok(());
             }
+            // A complete tool turn ends any chain of cuts before it: the
+            // next truncation starts a new chain with a fresh budget.
+            continuations.complete_turn();
 
             // The batch finished with the user asking to stop: every call
             // already has its result, so the session is replay-safe — but

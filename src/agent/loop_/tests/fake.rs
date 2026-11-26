@@ -314,3 +314,24 @@ pub(super) fn sse_tool_call_response(calls: &[(&str, &str, &str)]) -> String {
     );
     sse_stream(events)
 }
+
+/// A tool-call stream cut off before any finish chunk: the call fragments
+/// arrive, then the connection ends (no usage, no `[DONE]`).
+pub(super) fn sse_tool_call_response_cut(calls: &[(&str, &str, &str)]) -> String {
+    // The full stream minus its keep-alive, finish chunk, usage chunk and
+    // sentinel.
+    let full = sse_tool_call_response(calls);
+    let mut chunks: Vec<&str> = full
+        .trim_start_matches(": keep-alive\n\n")
+        .trim_end_matches("data: [DONE]\n\n")
+        .split("data: ")
+        .filter(|chunk| !chunk.is_empty())
+        .collect();
+    chunks.truncate(chunks.len() - 2);
+    chunks
+        .iter()
+        .map(|chunk| format!("data: {chunk}"))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+        + "\n\n"
+}
