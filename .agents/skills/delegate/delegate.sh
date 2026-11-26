@@ -18,6 +18,10 @@
 # Exit status: 0 with an answer, 124 on a timeout, 1 with no answer, and
 # otherwise the job's own. See scripts/test-delegate.py.
 #
+# Runs from inside a gg session as well as from a plain shell: a top-level
+# run's bash tool sets GG_NEST_DEPTH=1 on its commands, and only a value past
+# that marks a nested run, which cannot delegate.
+#
 # A --timeout job is stopped by a watchdog that writes $dir/.watchdog_fired
 # when it fires, then terms the job, then kills it five seconds later, so
 # a job that ignores the term cannot outlive the timeout. The job runs in
@@ -66,7 +70,12 @@ done
 [[ -n "$prompt" ]] || die "--prompt is required"
 [[ -f "$prompt" ]] || die "prompt file not found: $prompt"
 [[ -z "$timeout" || "$timeout" =~ ^[0-9]+$ ]] || die "--timeout must be a whole number of seconds (got: $timeout)"
-if [[ "${GG_NEST_DEPTH:-}" =~ ^[0-9]+$ && "$GG_NEST_DEPTH" -ge 1 ]]; then
+# The bash tool marks every command with the depth a gg started there would
+# have (ParentEnv::exports in src/nested.rs): 1 in a top-level run, the only
+# kind that may delegate, and 2 in a nested run. So 1 is no refusal; that
+# starts one past it. Judging 1 a refusal refused every session, top-level
+# ones too.
+if [[ "${GG_NEST_DEPTH:-}" =~ ^[0-9]+$ && "$GG_NEST_DEPTH" -gt 1 ]]; then
   die "this run is already a nested run, and a nested run cannot delegate"
 fi
 command -v "$GG" >/dev/null 2>&1 || die "$GG not found on PATH (set GG=/path/to/gg)"

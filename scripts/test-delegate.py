@@ -194,12 +194,30 @@ class DelegateTest(unittest.TestCase):
         self.assertFalse((self.stub_dir / "argv").exists())
 
     def test_a_nested_run_cannot_delegate(self):
+        # A nested run's bash tool marks its commands with the depth past the
+        # limit, 2; gg would refuse to boot from there as well.
+        for depth in ("2", "3"):
+            with self.subTest(depth=depth):
+                proc = self.delegate(
+                    "--job", "a", "--prompt", str(self.prompt), env=self.env(GG_NEST_DEPTH=depth)
+                )
+                self.assertEqual(proc.returncode, 2)
+                self.assertIn("already a nested run", proc.stderr)
+                self.assertFalse((self.stub_dir / "argv").exists(), "gg must not be started")
+
+    def test_a_top_level_run_can_delegate(self):
+        # The bash tool of a top-level run marks its commands GG_NEST_DEPTH=1:
+        # the depth a gg started there has. That is the one run that may
+        # delegate, so the job starts.
+        directory = self.root / "jobs"
         proc = self.delegate(
-            "--job", "a", "--prompt", str(self.prompt), env=self.env(GG_NEST_DEPTH="1")
+            "--job", "a",
+            "--prompt", str(self.prompt),
+            "--dir", str(directory),
+            env=self.env(GG_NEST_DEPTH="1"),
         )
-        self.assertEqual(proc.returncode, 2)
-        self.assertIn("already a nested run", proc.stderr)
-        self.assertFalse((self.stub_dir / "argv").exists(), "gg must not be started")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual((directory / "a.out").read_text(), "the answer\n")
 
     def test_jobs_from_one_shell_share_a_directory(self):
         jobs = " & ".join(
