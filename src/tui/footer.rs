@@ -154,6 +154,12 @@ impl Footer {
         self.model = model.to_string();
     }
 
+    /// The directory gg is working in. It changes when `/resume` opens a
+    /// session that started in another one.
+    pub fn set_directory(&mut self, cwd: &std::path::Path) {
+        self.cwd_short = shorten(cwd);
+    }
+
     /// The thinking level shown beside the model. Effort is the level when
     /// configured (`medium`, `high`, `xhigh`); a budget alone is shown as
     /// a token cap (`4096t`). Neither set: the model takes provider

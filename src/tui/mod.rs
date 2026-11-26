@@ -19,6 +19,7 @@ pub mod line;
 pub mod mentions;
 pub mod models;
 pub mod reader;
+pub mod resume;
 pub mod shell;
 pub mod suggest;
 pub mod table;
@@ -70,10 +71,17 @@ pub enum SessionPick {
     Path(PathBuf),
 }
 
-/// Rebuilds an Agent for `/new` and `/resume`. The TUI owns the lifetime
-/// decisions; main owns construction (config, client, registry).
+/// Rebuilds an Agent for `/new` and `/resume`, running in the directory
+/// given: the one gg was launched in, or the one the session being opened
+/// started in. The TUI owns the lifetime decisions and the directory;
+/// main owns construction (config, client, registry).
 pub type Factory = Arc<
-    dyn Fn(SessionPick, &crate::config::Endpoint, Arc<AtomicBool>) -> anyhow::Result<Boot>
+    dyn Fn(
+            SessionPick,
+            &std::path::Path,
+            &crate::config::Endpoint,
+            Arc<AtomicBool>,
+        ) -> anyhow::Result<Boot>
         + Send
         + Sync,
 >;
@@ -96,13 +104,52 @@ pub enum Exit {
     Restart(watch::Restart),
 }
 
+/// What every command shares besides the view: the factory, the event
+/// channel, the hooks, the abort flag and the config. Lives as long as
+/// the loop.
+struct Shared<'a> {
+    factory: &'a Factory,
+    ui_tx: &'a tokio::sync::mpsc::Sender<agent_task::UiEvent>,
+    hooks: &'a crate::agent::hooks::Hooks,
+    abort: &'a Arc<AtomicBool>,
+    config: &'a crate::config::Config,
+}
+
+impl Shared<'_> {
+    /// The commands' context over `self`, borrowing the view and what a
+    /// command may move.
+    fn ctx<'a>(
+        &'a self,
+        state: &'a mut State,
+        input_tx: &'a mut tokio::sync::mpsc::Sender<AgentInput>,
+        cwd: &'a mut std::path::PathBuf,
+        active_endpoint: &'a mut crate::config::Endpoint,
+    ) -> CmdCtx<'a> {
+        let skills = state.skills_arc();
+        CmdCtx {
+            state,
+            factory: self.factory,
+            input_tx,
+            ui_tx: self.ui_tx,
+            skills,
+            hooks: self.hooks,
+            cwd,
+            abort: self.abort,
+            config: self.config,
+            active_endpoint,
+        }
+    }
+}
+
 /// Run the TUI until the user quits. `first` is consumed by the first
 /// agent task; `/new` and `/resume` rebuild agents through `factory`.
 /// What comes back is for the user, to read once the screen is the shell's
 /// again (it is: screen and guard drop, in that order, on the way out).
 ///
 /// `watch` enables dev rebuilds; `draft` is composer text carried over
-/// from the process a restart replaced.
+/// from the process a restart replaced. `cwd` is the directory gg was
+/// launched in: it stays the working directory until `/resume` opens a
+/// session that started in another one, and follows it from then on.
 // One flat list, like [`Agent::new`]: each parameter has a distinct owner
 // (boot, lifetime, discovery, location, limits, transport, dev loop) and
 // a builder would only hide the same decisions behind punctuation.
@@ -111,12 +158,17 @@ pub async fn run(
     first: Boot,
     factory: Factory,
     discovered: Discovered,
-    cwd: std::path::PathBuf,
+    mut cwd: std::path::PathBuf,
     config: crate::config::Config,
     abort: Arc<AtomicBool>,
     watch_cfg: Option<watch::Config>,
     draft: Option<String>,
 ) -> anyhow::Result<Exit> {
+    // The directory the process itself was launched in. gg does not
+    // chdir — it hands its working directory around — so it never
+    // changes, and a restart puts the next process here, where that
+    // process resolves `--resume <id>`.
+    let launch_dir = cwd.clone();
     let Discovered { skills, hooks } = discovered;
     let _guard = term::Guard::new()?;
     let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
@@ -192,6 +244,13 @@ pub async fn run(
     // The `/model` popup's rows refresh in the background: the local
     // servers' `/v1/models` probes arrive as UiEvent::ModelsDiscovered.
     models::spawn_model_discovery(config.providers.clone(), ui_tx.clone());
+    let shared = Shared {
+        factory: &factory,
+        ui_tx: &ui_tx,
+        hooks: &hooks,
+        abort: &abort,
+        config: &config,
+    };
     let mut keys = KeyReader::spawn();
     // Ctrl+G sessions report here. The loop keeps its sender, so the
     // channel only ever speaks when an editor session ended.
@@ -217,7 +276,7 @@ pub async fn run(
                 match &watch_cfg {
                     Some(cfg) => match watch::restart_plan(
                         cfg,
-                        &cwd,
+                        &launch_dir,
                         state.session_path.as_deref(),
                         state.editor.text(),
                         &original_args,
@@ -290,11 +349,16 @@ pub async fn run(
                             Cancel::DraftCleared => {
                                 state.push_info("draft cleared — Ctrl+C again to quit")
                             }
+                            // The picker leaving the screen is all the
+                            // feedback this one needs.
+                            Cancel::PickerClosed => {}
                             Cancel::Quit => break,
                         },
                         // Esc keeps its meaning: the run's abort key, and it
                         // marks the run stopping so the footer shows the
-                        // cancel took. Idle, it does nothing.
+                        // cancel took. Idle, it closes the `/resume` picker
+                        // when one is open, and otherwise does nothing.
+                        KeyAction::Abort if state.resume_open() => state.close_resume(),
                         KeyAction::Abort if state.busy => {
                             abort.store(true, Ordering::Release);
                             state.set_stopping(true);
@@ -342,6 +406,30 @@ pub async fn run(
                                     keys.resume();
                                 }
                             }
+                        }
+                        // Enter in the `/resume` picker: the highlighted
+                        // session opens. The picker stays until the
+                        // session is open — `new_session` closes it and
+                        // clears the filter — so a failed open leaves
+                        // the error in the picker's panel, filter and
+                        // all.
+                        KeyAction::Send if state.resume_open() && !state.busy => {
+                            if let Some(session) = state.resume_highlighted() {
+                                let ctx = shared.ctx(
+                                    &mut state,
+                                    &mut input_tx,
+                                    &mut cwd,
+                                    &mut active_endpoint,
+                                );
+                                if let Err(e) = commands::resume_picked(session, ctx) {
+                                    state.resume_failed(&format!("{e:#}"));
+                                }
+                            }
+                        }
+                        // Tab in the picker: every project's sessions, or
+                        // this project's.
+                        KeyAction::SuggestComplete if state.resume_open() && !state.busy => {
+                            commands::toggle_resume_scope(&mut state)
                         }
                         // Submissions land between runs: the text stays
                         // in the editor for resubmission, with a line
@@ -392,19 +480,12 @@ pub async fn run(
                                     if !matches!(command, Command::Quit) {
                                         state.history.record(&text);
                                     }
-                                    let skills_snapshot = state.skills_arc();
-                                    let ctx = CmdCtx {
-                                        state: &mut state,
-                                        factory: &factory,
-                                        input_tx: &mut input_tx,
-                                        ui_tx: &ui_tx,
-                                        skills: &skills_snapshot,
-                                        hooks: &hooks,
-                                        cwd: &cwd,
-                                        abort: &abort,
-                                        config: &config,
-                                        active_endpoint: &mut active_endpoint,
-                                    };
+                                    let ctx = shared.ctx(
+                                        &mut state,
+                                        &mut input_tx,
+                                        &mut cwd,
+                                        &mut active_endpoint,
+                                    );
                                     match handle_command(command, ctx).await {
                                         Ok(false) => {}
                                         Ok(true) => break,
@@ -428,20 +509,21 @@ pub async fn run(
                         KeyAction::ToggleThinking => state.toggle_thinking(),
                         KeyAction::ScrollUp => state.scroll_up(SCROLL_STEP),
                         KeyAction::ScrollDown => state.scroll_down(SCROLL_STEP),
-                        // ↑/↓ belong to the suggestion popup while it is
+                        // ↑/↓ belong to the open popup (the suggestion
+                        // list or the `/resume` picker) while it is
                         // open; otherwise they recall history (from an empty
                         // or single-line composer) or move between the
                         // composer's lines — the rule itself is
                         // [`history::history_for`].
                         KeyAction::SuggestPrev => match state.arrow(true) {
-                            Arrow::SuggestPrev => state.suggest_prev(),
+                            Arrow::SuggestPrev => state.popup_prev(),
                             Arrow::Prev => state.recall_prev(),
                             Arrow::LineUp => state.editor.move_up(),
                             // ↓'s half of the table: not reachable from ↑.
                             Arrow::SuggestNext | Arrow::Next | Arrow::LineDown | Arrow::Nothing => {}
                         },
                         KeyAction::SuggestNext => match state.arrow(false) {
-                            Arrow::SuggestNext => state.suggest_next(),
+                            Arrow::SuggestNext => state.popup_next(),
                             Arrow::Next => state.recall_next(),
                             Arrow::LineDown => state.editor.move_down(),
                             Arrow::Nothing => {}
@@ -452,8 +534,8 @@ pub async fn run(
                         // holds, a three-line draft included (readline's
                         // muscle memory). While the popup is open the arrows
                         // are its, so these keys stand down.
-                        KeyAction::HistoryPrev if !state.suggest_open() => state.recall_prev(),
-                        KeyAction::HistoryNext if !state.suggest_open() => state.recall_next(),
+                        KeyAction::HistoryPrev if !state.popup_open() => state.recall_prev(),
+                        KeyAction::HistoryNext if !state.popup_open() => state.recall_next(),
                         KeyAction::SuggestComplete if state.suggest_open() => {
                             state.complete_suggestion()
                         }
@@ -469,6 +551,12 @@ pub async fn run(
                     // [`classify_wheel`]), so a stray click can never move a
                     // cursor or a selection.
                     crossterm::event::Event::Mouse(mouse) => match classify_wheel(mouse) {
+                        Some(Wheel::Up) if state.resume_open() => {
+                            state.resume_scroll(true, WHEEL_ROWS)
+                        }
+                        Some(Wheel::Down) if state.resume_open() => {
+                            state.resume_scroll(false, WHEEL_ROWS)
+                        }
                         Some(Wheel::Up) => state.scroll_up(WHEEL_ROWS),
                         Some(Wheel::Down) => state.scroll_down(WHEEL_ROWS),
                         None => {}
@@ -478,6 +566,13 @@ pub async fn run(
             }
             ui = ui_rx.recv() => {
                 let Some(event) = ui else { break };
+                // The listing of a bare `/resume`, read off the loop:
+                // the loop opens the picker from it itself, so it never
+                // reaches apply.
+                if let UiEvent::SessionsListed { sessions, warnings } = event {
+                    commands::resume_listed(&mut state, sessions, warnings, &cwd);
+                    continue;
+                }
                 if !agent_task::apply(event, &mut state, &mut input_tx).await {
                     break;
                 }
@@ -514,7 +609,7 @@ pub async fn run(
                             let Some(cfg) = &watch_cfg else { continue };
                             match watch::restart_plan(
                                 cfg,
-                                &cwd,
+                                &launch_dir,
                                 state.session_path.as_deref(),
                                 state.editor.text(),
                                 &original_args,

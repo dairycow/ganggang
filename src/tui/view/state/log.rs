@@ -24,6 +24,11 @@ impl super::super::State {
         self.footer.set_thinking_pct(None);
     }
 
+    /// The directory gg is working in, as the footer shows it.
+    pub fn set_directory(&mut self, directory: &std::path::Path) {
+        self.footer.set_directory(directory);
+    }
+
     /// The active model's thinking level, shown beside its name.
     pub fn set_thinking(&mut self, effort: Option<&str>, budget_tokens: Option<u32>) {
         self.footer.set_thinking(effort, budget_tokens);
@@ -87,6 +92,12 @@ impl super::super::State {
     ) {
         self.session_path = session_path;
         self.sessions_disabled = sessions_disabled;
+        // The new session is the one in use, so no picker outlives it and
+        // its filter goes with it; only an open that got this far reaches
+        // here, a failed one leaves the picker as it was.
+        if self.resume.take().is_some() {
+            self.editor.clear();
+        }
         self.entries = 0;
         self.tokens_in = 0;
         self.tokens_out = 0;

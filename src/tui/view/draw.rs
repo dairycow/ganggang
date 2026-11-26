@@ -1,7 +1,7 @@
 //! Drawing one frame: the theme's ground, the transcript (wrapped, bottom-
 //! anchored, scrollbar when it overflows, welcome block while it is empty),
-//! the composer, the footer, and the suggestion popup floating above the
-//! composer.
+//! the composer, the footer, and, floating above the composer, the
+//! suggestion popup or the `/resume` picker.
 //!
 //! State is read, never written, except for two figures the loop needs
 //! back: the wrapped-row count that clamps scrolling, and the number of
@@ -20,6 +20,7 @@ use super::super::composer;
 use super::super::layout::{Areas, scrollbar_area, show_scrollbar, thumb, transcript_text};
 use super::super::line::{styled_line, wrap_line};
 use super::super::table;
+use super::super::theme::Palette;
 use super::super::transcript::{RenderedLine, TableRow};
 use super::State;
 use super::welcome;
@@ -74,7 +75,13 @@ pub fn render(frame: &mut Frame, state: &mut State) {
         Paragraph::new(state.footer.spans(&palette)).style(Style::new().bg(palette.surface)),
         areas.footer,
     );
-    draw_popup(frame, state, areas);
+    // The two popups share one patch of screen, and the picker has the
+    // composer while it is open: it is the one that draws.
+    if state.resume_open() {
+        draw_resume(frame, state, areas);
+    } else {
+        draw_popup(frame, state, areas);
+    }
 }
 
 /// The transcript's rows at a known width. A run of table rows is laid
@@ -210,6 +217,105 @@ fn draw_popup(frame: &mut Frame, state: &mut State, areas: Areas) {
         area.width as usize,
     ));
     frame.render_widget(Paragraph::new(popup), area);
+}
+
+/// The `/resume` picker: the same floating panel as the suggestion popup,
+/// over the transcript and directly above the composer, with one row per
+/// session the composer's filter keeps. The panel shows a window of the
+/// rows and the window follows the highlight, so a directory with a
+/// hundred sessions is scrolled rather than cut to what fits. A scope
+/// with no row at all — an empty directory, or a filter that keeps no
+/// row — draws a two-row panel that says why in its own ground: the
+/// panel floats over the transcript's newest rows, so the transcript
+/// cannot say it there. The panel's last row is the hint, or, after a
+/// failed open, the error in its place.
+fn draw_resume(frame: &mut Frame, state: &mut State, areas: Areas) {
+    state.sync_resume();
+    let rows = state.resume_matches();
+    let width = areas.composer.width as usize;
+    if rows.is_empty() {
+        // The picker is open but its scope holds no row: one row of
+        // explanation over the hint, not no panel.
+        let height = 2.min(areas.composer.y);
+        if height < 2 {
+            return;
+        }
+        let area = Rect {
+            x: areas.composer.x,
+            y: areas.composer.y - height,
+            width: areas.composer.width,
+            height,
+        };
+        frame.render_widget(Clear, area);
+        frame.render_widget(Fill::new(" ").style(state.palette.popup()), area);
+        let last = resume_last_row(state, &state.palette, width, None);
+        let panel = vec![
+            crate::tui::resume::empty_row(
+                &state.palette,
+                state.resume_scope_empty(),
+                state.resume_all_projects(),
+                state.editor.text(),
+                width,
+            ),
+            last,
+        ];
+        frame.render_widget(Paragraph::new(panel), area);
+        return;
+    }
+    let palette = state.palette;
+    let height = u16::try_from(rows.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(1)
+        .min(areas.composer.y);
+    if height < 2 {
+        return;
+    }
+    let area = Rect {
+        x: areas.composer.x,
+        y: areas.composer.y - height,
+        width: areas.composer.width,
+        height,
+    };
+    frame.render_widget(Clear, area);
+    frame.render_widget(Fill::new(" ").style(palette.popup()), area);
+    let shown = (height as usize - 1).min(rows.len());
+    let selected = state
+        .resume
+        .as_ref()
+        .map_or(0, |pick| pick.selected)
+        .min(rows.len() - 1);
+    let start = composer::scrolled_row(selected, shown, rows.len());
+    let mut panel = Vec::with_capacity(height as usize);
+    for (i, row) in rows.iter().enumerate().skip(start).take(shown) {
+        panel.push(super::super::resume::row_line(
+            &palette,
+            row,
+            i == selected,
+            area.width as usize,
+        ));
+    }
+    let at = (rows.len() > shown).then_some((selected, rows.len()));
+    panel.push(resume_last_row(state, &palette, area.width as usize, at));
+    frame.render_widget(Paragraph::new(panel), area);
+}
+
+/// The picker panel's last row: the error of a failed open while the
+/// picker holds one, in place of the hint; otherwise the hint, with its
+/// place counter when the list is longer than the panel.
+fn resume_last_row(
+    state: &State,
+    palette: &Palette,
+    width: usize,
+    at: Option<(usize, usize)>,
+) -> UiLine<'static> {
+    state
+        .resume
+        .as_ref()
+        .and_then(|pick| pick.error.as_deref())
+        .map(|error| crate::tui::resume::error_row(palette, error, width))
+        .unwrap_or_else(|| {
+            crate::tui::resume::hint_row(palette, width, state.resume_all_projects(), at)
+        })
 }
 
 #[cfg(test)]

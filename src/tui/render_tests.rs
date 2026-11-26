@@ -333,6 +333,187 @@ fn the_suggestion_popup_is_a_panel_of_its_own() {
     );
 }
 
+/// The `/resume` picker: the same panel, one row per session, and a
+/// window that follows the highlight through a list longer than the
+/// panel. The hint row says where the highlight stands; a scope with no
+/// row at all says why on its own row; a failed open says its error on
+/// the panel's last row, in the hint row's place.
+#[test]
+fn the_resume_picker_is_a_window_that_follows_the_highlight() {
+    let (mut terminal, mut state) = fresh(80, 24);
+    let mut pick = super::resume::tests::pick_for_test(30);
+    pick.selected = 25;
+    state.resume = Some(pick);
+    draw(&mut terminal, &mut state);
+
+    // An empty draft is a three-row composer over a one-row footer, so
+    // the panel has the 20 rows above it: 19 rows of sessions, then the
+    // hint. The highlighted row is the window's last, and the highlight
+    // is the whole row, edge to edge.
+    let marker_row = (0..24).find(|y| row(&terminal, *y).starts_with('▸'));
+    assert_eq!(marker_row, Some(18));
+    let text = screen(&terminal);
+    assert!(shows(&terminal, "s25"), "{text}");
+    assert!(
+        shows(&terminal, "s07"),
+        "the window starts 18 rows above: {text}"
+    );
+    assert!(
+        !shows(&terminal, "s06"),
+        "nothing from above the window: {text}"
+    );
+    assert!(!shows(&terminal, "s26"), "or below it: {text}");
+    let hint = row(&terminal, 19);
+    assert!(
+        hint.starts_with(" ↑↓ move 26/30 · "),
+        "the highlight's place in the list: {hint}"
+    );
+    assert!(hint.ends_with("Esc closes"), "{hint}");
+    assert!(
+        row(&terminal, 20).contains(" compose "),
+        "the composer is untouched below the panel: {text}"
+    );
+    let buffer = terminal.backend().buffer();
+    for x in 0..80 {
+        assert_eq!(
+            buffer[(x, 18)].style().bg,
+            Some(TRUECOLOR.selection),
+            "cell ({x}, 18) is on the highlight"
+        );
+    }
+
+    // Back at the top, the window is anchored there.
+    state.resume.as_mut().unwrap().selected = 0;
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(row(&terminal, 0).contains("s00"), "{text}");
+    assert!(row(&terminal, 18).contains("s18"), "{text}");
+    assert!(row(&terminal, 19).starts_with(" ↑↓ move 1/30 · "), "{text}");
+
+    // A list that fits is a short panel directly above the composer, and
+    // its hint has no counter.
+    state.resume = Some(super::resume::tests::pick_for_test(3));
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(row(&terminal, 16).contains("s00"), "{text}");
+    assert!(row(&terminal, 18).contains("s02"), "{text}");
+    assert_eq!(
+        row(&terminal, 19),
+        " ↑↓ move · type filters · Tab: all directories · Enter opens · Esc closes"
+    );
+    assert!(
+        !row(&terminal, 15).contains("↑↓"),
+        "nothing above the panel: {text}"
+    );
+
+    // Every project's sessions: each row shows its session's directory
+    // in the model's place, and the hint offers the way back to this
+    // project's. Five rows make a panel six high, its first row at 14.
+    state.resume = Some(super::resume::ResumePick::new(
+        super::resume::tests::sessions_for_test(3),
+        [
+            super::resume::tests::sessions_for_test(3),
+            super::resume::tests::elsewhere_for_test(2),
+        ]
+        .concat(),
+        Some(std::path::Path::new("/home/u")),
+    ));
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(row(&terminal, 14).contains("s00"), "{text}");
+    assert!(
+        row(&terminal, 16).contains("/tmp/x"),
+        "this project's sessions name their directory too: {text}"
+    );
+    assert!(
+        row(&terminal, 17).contains("~/repo/.worktrees/wt00"),
+        "{text}"
+    );
+    assert!(
+        row(&terminal, 18).contains("~/repo/.worktrees/wt01"),
+        "{text}"
+    );
+    assert!(row(&terminal, 19).contains("Tab: this directory"), "{text}");
+    // And back again.
+    state.resume_narrow();
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(row(&terminal, 16).contains("s00"), "{text}");
+    assert!(shows(&terminal, "s01"), "{text}");
+    assert!(
+        row(&terminal, 19).contains("Tab: all directories"),
+        "{text}"
+    );
+
+    // A filter that keeps no row still draws the panel, in two rows: the
+    // empty row that says why, then the hint. The panel floats over the
+    // transcript's newest rows, so it cannot vanish and say nothing.
+    state.editor.set_text("zzz");
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert_eq!(
+        row(&terminal, 18),
+        " no session matches \"zzz\"",
+        "the panel says why the list is empty: {text}"
+    );
+    assert_eq!(
+        row(&terminal, 19),
+        " ↑↓ move · type filters · Tab: all directories · Enter opens · Esc closes",
+        "the hint row stays the last: {text}"
+    );
+    assert!(!shows(&terminal, "s00"), "{text}");
+    assert!(shows(&terminal, "zzz"), "{text}");
+
+    // Tab into a directory with no sessions: its own empty row, over a
+    // hint that offers the wider listing.
+    state.resume = Some(super::resume::ResumePick::new(
+        Vec::new(),
+        [
+            super::resume::tests::sessions_for_test(3),
+            super::resume::tests::elsewhere_for_test(2),
+        ]
+        .concat(),
+        Some(std::path::Path::new("/home/u")),
+    ));
+    state.editor.clear();
+    state.resume_narrow();
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert_eq!(
+        row(&terminal, 18),
+        " no sessions in this directory",
+        "{text}"
+    );
+    assert!(
+        row(&terminal, 19).contains("Tab: all directories"),
+        "the hint row offers the wider listing: {text}"
+    );
+
+    // A failed open says its error on the panel's last row, in the hint
+    // row's place; a changed filter is a new list, and brings the hint
+    // back.
+    state.resume = Some(super::resume::tests::pick_for_test(3));
+    state.editor.clear();
+    state.resume_failed("boom");
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert_eq!(
+        row(&terminal, 19),
+        "⚠ boom",
+        "the error takes the hint row's place: {text}"
+    );
+    assert!(!shows(&terminal, "↑↓ move"), "{text}");
+    assert!(shows(&terminal, "s00"), "the rows stay: {text}");
+    state.editor.set_text("s01");
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert_eq!(
+        row(&terminal, 19),
+        " ↑↓ move · type filters · Tab: all directories · Enter opens · Esc closes",
+        "a new list brings the hint row back: {text}"
+    );
+}
+
 /// A palette is chosen once, and a 256-colour session draws with indexed
 /// colours throughout — the real fallback, not a stand-in for it: no
 /// truecolor escape ever reaches the terminal.
@@ -465,6 +646,21 @@ fn degenerate_terminals_do_not_panic() {
         state.editor.set_text("draft\nsecond line");
         state.begin_run();
         state.scroll_up(5);
+        draw(&mut terminal, &mut state);
+    }
+    // The picker too, over a list longer than any of them can show.
+    for (w, h) in [(1, 1), (4, 2), (5, 3), (80, 1), (1, 40), (3, 6)] {
+        let (mut terminal, mut state) = fresh(w, h);
+        state.resume = Some(super::resume::tests::pick_for_test(30));
+        state.resume_next();
+        state.editor.set_text("s");
+        draw(&mut terminal, &mut state);
+    }
+    // And the picker's empty scope, with no row at all to show.
+    for (w, h) in [(1, 1), (4, 2), (5, 3), (80, 1), (1, 40), (3, 6)] {
+        let (mut terminal, mut state) = fresh(w, h);
+        state.resume = Some(super::resume::tests::pick_for_test(0));
+        state.resume_next();
         draw(&mut terminal, &mut state);
     }
 }

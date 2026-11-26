@@ -28,8 +28,9 @@ impl crate::tui::view::State {
         self.footer.set_stopping(stopping);
     }
 
-    /// What one Ctrl+C does (gap §5), in one place so the three cases are
-    /// testable without a terminal: cancel a live run, clear a draft, or —
+    /// What one Ctrl+C does (gap §5), in one place so the four cases are
+    /// testable without a terminal: cancel a live run, close the `/resume`
+    /// picker, clear a draft, or —
     /// when there is nothing left to cancel — end the TUI. The caller (the
     /// event loop) sets the abort flag and quits, because those are the two
     /// things the view cannot do.
@@ -45,6 +46,11 @@ impl crate::tui::view::State {
             } else {
                 Cancel::Stopping
             };
+        }
+        if self.resume.is_some() {
+            // An open picker is something to cancel before the TUI is.
+            self.close_resume();
+            return Cancel::PickerClosed;
         }
         if self.editor.text().is_empty() {
             return Cancel::Quit;
@@ -78,7 +84,7 @@ impl crate::tui::view::State {
     pub fn arrow(&self, up: bool) -> Arrow {
         history_for(
             up,
-            self.suggest_open(),
+            self.popup_open(),
             self.history.browsing(),
             self.editor.line_count(),
         )
@@ -142,6 +148,8 @@ pub enum Cancel {
     Stopping,
     /// A second Ctrl+C on a run already stopping: set the flag, then end.
     ForceQuit,
+    /// Idle: the `/resume` picker was open and is closed, filter and all.
+    PickerClosed,
     /// Idle: the composer's text is gone, and the next Ctrl+C quits.
     DraftCleared,
     /// Idle with nothing typed: end.

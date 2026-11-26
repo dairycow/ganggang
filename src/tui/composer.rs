@@ -109,8 +109,9 @@ impl Window {
 /// The first logical line a window of `rows` shows for a cursor on line
 /// `cursor_row` of a `lines`-line draft: anchored at the top while the
 /// draft fits, then the smallest scroll that keeps the cursor visible —
-/// and never past the last full window.
-fn scrolled_row(cursor_row: usize, rows: usize, lines: usize) -> usize {
+/// and never past the last full window. The `/resume` picker's panel
+/// keeps its highlighted row in view by the same rule.
+pub(super) fn scrolled_row(cursor_row: usize, rows: usize, lines: usize) -> usize {
     if rows == 0 || lines <= rows {
         return 0;
     }

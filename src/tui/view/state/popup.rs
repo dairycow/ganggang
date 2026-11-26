@@ -16,9 +16,38 @@ impl crate::tui::view::State {
     }
 
     /// Whether the popup should draw: a bare command word that matches
-    /// at least one row.
+    /// at least one row. The `/resume` picker has the composer while it
+    /// is open, so a filter that happens to start with `/` is a filter.
     pub fn suggest_open(&self) -> bool {
-        crate::tui::suggest::active(self.editor.text()) && !self.suggestions().is_empty()
+        self.resume.is_none()
+            && crate::tui::suggest::active(self.editor.text())
+            && !self.suggestions().is_empty()
+    }
+
+    /// Whether a popup has the arrows: the suggestion list or the
+    /// `/resume` picker.
+    pub fn popup_open(&self) -> bool {
+        self.resume.is_some() || self.suggest_open()
+    }
+
+    /// ↑ while a popup is open: the picker's highlight when the `/resume`
+    /// picker is open, the suggestion list's otherwise.
+    pub fn popup_prev(&mut self) {
+        if self.resume.is_some() {
+            self.resume_prev();
+        } else {
+            self.suggest_prev();
+        }
+    }
+
+    /// ↓ while a popup is open: the other direction of
+    /// [`popup_prev`](Self::popup_prev).
+    pub fn popup_next(&mut self) {
+        if self.resume.is_some() {
+            self.resume_next();
+        } else {
+            self.suggest_next();
+        }
     }
 
     /// ↑: the highlight climbs, stopping at the top.

@@ -63,11 +63,12 @@ async fn reload_forwards_to_the_agent_task() {
     );
     let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
     let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
-    let factory: super::super::Factory = Arc::new(|_, _, _| unreachable!("no /new on this path"));
+    let factory: super::super::Factory =
+        Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
     let config = crate::config::Config::default();
     let mut active_endpoint = config.active_endpoint();
     let abort = Arc::new(AtomicBool::new(false));
-    let cwd = std::path::PathBuf::from("/tmp/x");
+    let mut cwd = std::path::PathBuf::from("/tmp/x");
 
     handle_command(
         Command::Reload,
@@ -76,9 +77,9 @@ async fn reload_forwards_to_the_agent_task() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &[],
+            skills: Arc::new(Vec::new()),
             hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -107,11 +108,12 @@ async fn skills_command_is_removed_with_a_hint() {
     );
     let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
     let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
-    let factory: super::super::Factory = Arc::new(|_, _, _| unreachable!("no /new on this path"));
+    let factory: super::super::Factory =
+        Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
     let config = crate::config::Config::default();
     let mut active_endpoint = config.active_endpoint();
     let abort = Arc::new(AtomicBool::new(false));
-    let cwd = std::path::PathBuf::from("/tmp/x");
+    let mut cwd = std::path::PathBuf::from("/tmp/x");
 
     handle_command(
         Command::Unknown("skills".into()),
@@ -120,9 +122,9 @@ async fn skills_command_is_removed_with_a_hint() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &[],
+            skills: Arc::new(Vec::new()),
             hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -248,7 +250,7 @@ async fn run_skill_command(
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
-    let dir = std::env::temp_dir().join(format!("gg-skill-{tag}-{}", std::process::id()));
+    let mut dir = std::env::temp_dir().join(format!("gg-skill-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("notes.txt"), "attach me\n").unwrap();
@@ -257,16 +259,17 @@ async fn run_skill_command(
         super::super::view::State::new(&dir, "m", 131_072, Arc::new(vec![]), History::default());
     let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
     let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
-    let factory: super::super::Factory = Arc::new(|_, _, _| unreachable!("no /new on this path"));
+    let factory: super::super::Factory =
+        Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
     let config = crate::config::Config::default();
     let mut active_endpoint = config.active_endpoint();
-    let skills = vec![crate::agent::skills::Skill {
+    let skills = Arc::new(vec![crate::agent::skills::Skill {
         name: "pdf-tools".into(),
         description: "d".into(),
         disable_model_invocation: false,
         path: dir.join("SKILL.md"),
         instructions: instructions.into(),
-    }];
+    }]);
     let abort = Arc::new(AtomicBool::new(false));
 
     handle_command(
@@ -279,9 +282,9 @@ async fn run_skill_command(
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &skills,
+            skills: skills.clone(),
             hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &dir,
+            cwd: &mut dir,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -346,13 +349,14 @@ async fn model_command_lists_and_switches_endpoints() {
     );
     let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
     let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
-    let factory: super::super::Factory = Arc::new(|_, _, _| unreachable!("no /new on this path"));
+    let factory: super::super::Factory =
+        Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
     let mut config = crate::config::Config::default();
     config.providers.get_mut("deepseek").unwrap().api_key = Some("test-key".into());
     let mut active_endpoint = config.active_endpoint();
-    let skills: Vec<crate::agent::skills::Skill> = Vec::new();
+    let skills = Arc::new(Vec::new());
     let abort = Arc::new(AtomicBool::new(false));
-    let cwd = std::path::PathBuf::from("/tmp/x");
+    let mut cwd = std::path::PathBuf::from("/tmp/x");
 
     handle_command(
         Command::Model(None),
@@ -361,9 +365,9 @@ async fn model_command_lists_and_switches_endpoints() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &skills,
+            skills: skills.clone(),
             hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -380,9 +384,9 @@ async fn model_command_lists_and_switches_endpoints() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &skills,
+            skills: skills.clone(),
             hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -414,9 +418,10 @@ async fn hooks_lists_loaded_or_disabled() {
     );
     let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
     let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
-    let factory: super::super::Factory = Arc::new(|_, _, _| unreachable!("no /new on this path"));
+    let factory: super::super::Factory =
+        Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
     let abort = Arc::new(AtomicBool::new(false));
-    let cwd = std::path::PathBuf::from("/tmp/x");
+    let mut cwd = std::path::PathBuf::from("/tmp/x");
     let config = crate::config::Config::default();
     let mut active_endpoint = config.active_endpoint();
     let hooks = Hooks::new(vec![Hook {
@@ -433,9 +438,9 @@ async fn hooks_lists_loaded_or_disabled() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &[],
+            skills: Arc::new(Vec::new()),
             hooks: &hooks,
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -460,9 +465,9 @@ async fn hooks_lists_loaded_or_disabled() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &[],
+            skills: Arc::new(Vec::new()),
             hooks: &disabled,
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -520,9 +525,10 @@ async fn model_command_discovers_local_router_and_strata_health() {
     );
     let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
     let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
-    let factory: super::super::Factory = Arc::new(|_, _, _| unreachable!("no /new on this path"));
+    let factory: super::super::Factory =
+        Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
     let abort = Arc::new(AtomicBool::new(false));
-    let cwd = std::path::PathBuf::from("/tmp/x");
+    let mut cwd = std::path::PathBuf::from("/tmp/x");
 
     handle_command(
         Command::Model(None),
@@ -531,9 +537,9 @@ async fn model_command_discovers_local_router_and_strata_health() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &[],
+            skills: Arc::new(Vec::new()),
             hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -557,9 +563,9 @@ async fn model_command_discovers_local_router_and_strata_health() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &[],
+            skills: Arc::new(Vec::new()),
             hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -683,14 +689,15 @@ async fn think_command_shows_and_updates_the_setting() {
     );
     let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
     let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
-    let factory: super::super::Factory = Arc::new(|_, _, _| unreachable!("no /new on this path"));
+    let factory: super::super::Factory =
+        Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
     let config = crate::config::Config::default();
     let mut active_endpoint = config.active_endpoint();
     active_endpoint.reasoning_effort = Some("medium".into());
     active_endpoint.reasoning_budget_tokens = Some(4096);
-    let skills: Vec<crate::agent::skills::Skill> = Vec::new();
+    let skills = Arc::new(Vec::new());
     let abort = Arc::new(AtomicBool::new(false));
-    let cwd = std::path::PathBuf::from("/tmp/x");
+    let mut cwd = std::path::PathBuf::from("/tmp/x");
 
     handle_command(
         Command::Think(None),
@@ -699,9 +706,9 @@ async fn think_command_shows_and_updates_the_setting() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &skills,
+            skills: skills.clone(),
             hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -730,9 +737,9 @@ async fn think_command_shows_and_updates_the_setting() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &skills,
+            skills: skills.clone(),
             hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -764,9 +771,9 @@ async fn think_command_shows_and_updates_the_setting() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &skills,
+            skills: skills.clone(),
             hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -795,9 +802,9 @@ async fn think_command_shows_and_updates_the_setting() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &skills,
+            skills: skills.clone(),
             hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -826,9 +833,9 @@ async fn think_command_shows_and_updates_the_setting() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &skills,
+            skills: skills.clone(),
             hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -849,9 +856,9 @@ async fn think_command_shows_and_updates_the_setting() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &skills,
+            skills: skills.clone(),
             hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,
@@ -872,9 +879,9 @@ async fn think_command_shows_and_updates_the_setting() {
             factory: &factory,
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
-            skills: &skills,
+            skills: skills.clone(),
             hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &cwd,
+            cwd: &mut cwd,
             abort: &abort,
             config: &config,
             active_endpoint: &mut active_endpoint,

@@ -268,6 +268,22 @@ fn listing_is_newest_first_and_prefix_matching_is_strict() {
 
     assert!(resolve_prefix(&sessions, "zz").is_err());
 
+    // The same matches as a list, in listing order: what a caller asks
+    // before deciding whether to look somewhere else.
+    assert_eq!(
+        matching_prefix(&sessions, "aa")
+            .iter()
+            .map(|s| s.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["aacc3333-0000", "aaaa1111-0000"]
+    );
+    assert_eq!(
+        matching_prefix(&sessions, "aaaa1111").len(),
+        1,
+        "the 8-hex id"
+    );
+    assert!(matching_prefix(&sessions, "zz").is_empty());
+
     // And -c picks the newest.
     assert_eq!(latest_in(&dir).unwrap().id, "aacc3333-0000");
 }

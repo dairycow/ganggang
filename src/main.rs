@@ -514,13 +514,12 @@ fn boot_and_factory(
     let boot = assemble_boot(cfg, &endpoint, cwd, abort, cli, pick, &hooks)?;
 
     let cfg = cfg.clone();
-    let cwd = cwd.to_path_buf();
     let cli_tools = cli.tools.clone();
     let no_session = cli.no_session;
     let watch = cli.watch;
     let no_hooks = cli.no_hooks;
     let hooks = hooks.clone();
-    let factory: tui::Factory = Arc::new(move |pick, endpoint, abort| {
+    let factory: tui::Factory = Arc::new(move |pick, cwd, endpoint, abort| {
         let cli = Cli {
             prompt: None,
             tools: cli_tools.clone(),
@@ -540,7 +539,7 @@ fn boot_and_factory(
             max_turns: None,
             session_file: None,
         };
-        assemble_boot(&cfg, endpoint, &cwd, abort, &cli, pick, &hooks)
+        assemble_boot(&cfg, endpoint, cwd, abort, &cli, pick, &hooks)
     });
     Ok((boot, factory))
 }

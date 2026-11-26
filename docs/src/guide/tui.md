@@ -13,22 +13,22 @@ If stdin is not a terminal and no prompt is given, `gg` exits with an error; use
 | `Backspace` | Delete before the cursor |
 | `←` / `→` | Move the cursor |
 | `Ctrl+←` / `Ctrl+→` | Move the cursor by word |
-| `↑` / `↓` | Navigate the `/` suggestion list while it is open; otherwise recall prompts while the composer is empty or single-line, or move between its lines |
-| `Ctrl+P` / `Ctrl+N` | Recall the previous / next prompt, whatever the composer holds |
+| `↑` / `↓` | Navigate the `/` suggestion list or the `/resume` picker while one is open; otherwise recall prompts while the composer is empty or single-line, or move between its lines |
+| `Ctrl+P` / `Ctrl+N` | Recall the previous / next prompt, whatever the composer holds, unless the suggestion list or the `/resume` picker is open |
 | `Ctrl+A`, `Home` | Start of line |
 | `Ctrl+E`, `End` | End of line |
 | `Ctrl+K` | Kill to end of line |
 | `Ctrl+U` | Kill to start of line |
-| `Tab` | Complete the highlighted `/` suggestion |
-| `Esc` | Stop the run in flight: an in-flight stream is cut and a running tool is killed; what had arrived is kept. Idle, it does nothing |
+| `Tab` | Complete the highlighted `/` suggestion; in the `/resume` picker, switch between every directory's sessions and the current directory's |
+| `Esc` | Stop the run in flight: an in-flight stream is cut and a running tool is killed; what had arrived is kept. Idle, it closes the `/resume` picker when one is open and otherwise does nothing |
 | `Ctrl+O` | Expand or collapse tool calls |
 | `Ctrl+T` | Show or hide thinking |
 | `Ctrl+X` | Copy the last answer to the clipboard |
 | `Ctrl+G` | Edit the draft in your external editor |
 | `Ctrl+R` | Rebuild and restart (only in [`--watch`](watch-mode.md) mode) |
 | `PageUp` / `PageDown` | Scroll the transcript (10 rows a page) |
-| Mouse wheel | Scroll the transcript (3 rows a notch) |
-| `Ctrl+C` | Cancel: stop a run in flight, clear a typed draft, or, with nothing left to cancel, quit. A second press while a run is stopping quits at once |
+| Mouse wheel | Scroll the transcript (3 rows a notch); move the highlight in the `/resume` picker |
+| `Ctrl+C` | Cancel: stop a run in flight, close the `/resume` picker, clear a typed draft, or, with nothing left to cancel, quit. A second press while a run is stopping quits at once |
 
 When you stop a run, the footer shows `stopping…` while active streams close and running tools terminate. Partial output received before stopping stays in the transcript and session file ([Stopping a run](tools.md#stopping-a-run)). Use `/quit` to exit directly without cancelling a draft or run. `SIGTERM` shuts down cleanly.
 
@@ -64,6 +64,14 @@ Assistant answers render a deliberately small markdown subset; your own messages
 Typing `/` opens a suggestion list above the composer: the built-ins and, once `/skill:` is typed, one row per skill. `↑`/`↓` move the highlight, `Tab` completes, and `Enter` still sends exactly what you typed.
 
 Typing `/model` lists the models in the same popup: the built-in row first, then one row per model with its context window, any discovery status, whether a key is missing, and the `· active` mark on the model in use. Typing after the space filters the list case-insensitively, and `Tab` completes the highlighted `provider/model` into the command. Live local models (Strata, `llama-server`, Ollama, vLLM) refresh in the background at startup and on `/reload`: their `/v1/models` endpoints are probed off the render loop with short timeouts, so the popup picks up models loaded after the session began without waiting on a down server.
+
+`/resume` opens a session picker in the same popup: one row per saved session, from every directory gg has run in, newest first. Each row shows the session's age (`just now`, `5m ago`, `3h ago`, `2d ago`, then the date), the 8-hex id from its file name, its title or first message, and the directory it started in, with `~` for your home directory. The session you are in is not listed. What you type filters the rows: every word has to appear in a row's id, title, first message, model or directory, so a repository's name or a worktree's narrows the list to it. `↑`/`↓` and the mouse wheel move the highlight, the panel scrolls to follow it, and `Enter` opens the highlighted session. With nothing to show, because a filter matches no row or `Tab` has narrowed the picker to a directory that has no sessions, the panel stays up and says so. If the highlighted session cannot be opened, the picker stays and its panel shows the error. `Esc` and `Ctrl+C` close the picker without opening anything.
+
+`Tab` narrows the picker to the current directory's sessions, where each row shows the session's model instead of its directory, and widens it back.
+
+A session continues in the directory it started in, wherever you launched gg. Opening it moves gg there: its history is replayed, and its tools, hooks, `AGENTS.md` files and skills, and the `@mentions` and `!shell` lines you type, are that directory's. The footer shows the directory, and `/new` then starts a session there. If the directory no longer exists, as with a removed worktree, the session continues in the current directory and the transcript says so. In [`--watch`](watch-mode.md) mode the watched directory stays the one gg was launched in, and a restart continues the session there: one opened from another directory is continued by its file, in the launch directory.
+
+`/resume <n>` opens the session at position `n` in the listing the picker last showed, counting from 1. `/resume <prefix>` opens the session whose id starts with the prefix, among the current directory's sessions and, when none of them matches, among every directory's (see [Sessions](sessions-compaction.md#sessions)).
 
 `/think` shows or sets the active OpenAI-compatible model's thinking configuration: with no argument it reports the current setting; a bare word sets the effort; a bare number sets the budget in tokens (0 clears it); `effort budget` sets both; `off` or `none` sets effort to `none` and clears the budget; `default` or `clear` reverts both to provider defaults.
 

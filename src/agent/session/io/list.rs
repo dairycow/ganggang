@@ -15,9 +15,12 @@ use super::SessionHeader;
 
 /// One resumable session as the CLI sees it.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // `cwd`, `title`, `preview` are surfaced by future listing callers
 pub struct SessionFile {
     pub id: String,
+    /// When the session file was written (from the header). Part of the
+    /// listing's shape; the picker ages a row from its file name instead,
+    /// so this stays unread here.
+    #[allow(dead_code)]
     pub timestamp: String,
     pub model: String,
     /// The cwd the session ran in (from the header).
@@ -242,7 +245,6 @@ pub fn list_sessions(dir: &Path) -> (Vec<SessionFile>, Vec<String>) {
 }
 
 /// Every session under the sessions root, merged across all cwd subdirectories, newest first.
-#[allow(dead_code)] // exported for future callers
 pub fn list_all_sessions(root: &Path) -> (Vec<SessionFile>, Vec<String>) {
     let mut found = Vec::new();
     let mut warnings = Vec::new();
@@ -268,8 +270,10 @@ pub fn latest_in(dir: &Path) -> Option<SessionFile> {
     sessions.into_iter().next()
 }
 
-/// The 8-hex id in a session file's name — the handle users see.
-fn file_stem_id(session: &SessionFile) -> &str {
+/// The 8-hex id in a session file's name: the handle users see, and the
+/// one [`resolve_prefix`] and the `/resume` picker match a prefix against.
+/// Empty for a file not named `<stamp>-<8hex>.jsonl`.
+pub fn short_id(session: &SessionFile) -> &str {
     session
         .path
         .file_stem()
@@ -279,13 +283,21 @@ fn file_stem_id(session: &SessionFile) -> &str {
         .unwrap_or("")
 }
 
+/// The sessions a prefix names, in listing order: it may match the start
+/// of the session's uuid id or of the 8-hex id in its filename. A caller
+/// that wants to know whether anything matched, before deciding where
+/// else to look, asks this.
+pub fn matching_prefix<'a>(sessions: &'a [SessionFile], prefix: &str) -> Vec<&'a SessionFile> {
+    sessions
+        .iter()
+        .filter(|s| s.id.starts_with(prefix) || short_id(s).starts_with(prefix))
+        .collect()
+}
+
 /// Resolve `--resume <id-or-prefix>`: the prefix may match the session's uuid id
 /// or the 8-hex id in its filename; zero or several matches are errors (several list candidates).
 pub fn resolve_prefix(sessions: &[SessionFile], prefix: &str) -> anyhow::Result<SessionFile> {
-    let matches: Vec<&SessionFile> = sessions
-        .iter()
-        .filter(|s| s.id.starts_with(prefix) || file_stem_id(s).starts_with(prefix))
-        .collect();
+    let matches = matching_prefix(sessions, prefix);
     match matches.as_slice() {
         [one] => Ok((*one).clone()),
         [] => anyhow::bail!("no session matches {prefix:?}"),

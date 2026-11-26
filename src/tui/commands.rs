@@ -4,7 +4,14 @@
 //! unit-tested without a terminal.
 
 mod model;
+mod resume;
 mod think;
+
+// `Command::Resume` also calls `resume::resolve_session_prefix` directly.
+/// The event loop calls these three (mod.rs answers
+/// `UiEvent::SessionsListed` with `resume_listed` and the picker's Tab
+/// with `toggle_resume_scope`).
+pub(super) use resume::{resume_listed, resume_picked, toggle_resume_scope};
 
 #[cfg(test)]
 use think::parse_think_args;
@@ -29,8 +36,8 @@ pub enum Submission {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     New,
-    /// No argument lists sessions; an argument picks by list number or
-    /// id prefix.
+    /// No argument opens the session picker; an argument picks by list
+    /// number or id prefix.
     Resume(Option<String>),
     /// Compact the context now; an argument becomes focus instructions
     /// for the summarize call (§14's manual path).
@@ -106,7 +113,7 @@ pub fn classify_submission(text: &str) -> Submission {
 }
 
 impl Command {
-    /// `/resume` with an empty argument is a bare listing request;
+    /// `/resume` with an empty argument opens the picker;
     /// `/compact` with an empty argument is the plain compaction.
     fn filter_arg(self) -> Self {
         match self {
@@ -125,16 +132,23 @@ pub fn known_commands() -> &'static str {
 }
 
 /// Everything a command needs to act: view state, the agent channels, the
-/// factory that rebuilds agents, the shared skills, and the session cwd.
-/// One struct instead of seven parameters.
+/// factory that rebuilds agents, the shared skills, and the working
+/// directory. One struct instead of seven parameters.
+///
+/// `cwd` is the directory gg is working in: where the agent's tools run
+/// and where `@mentions` and `!shell` lines resolve. `/resume` moves it
+/// when it opens a session that started in another directory.
+/// `skills` is the view's shared set, taken by value as a snapshot of
+/// its `Arc` at command start, so a `/reload` mid-command cannot swap
+/// the set out from under the running command.
 pub(super) struct CmdCtx<'a> {
     pub state: &'a mut super::view::State,
     pub factory: &'a super::Factory,
     pub input_tx: &'a mut tokio::sync::mpsc::Sender<super::AgentInput>,
     pub ui_tx: &'a tokio::sync::mpsc::Sender<super::agent_task::UiEvent>,
-    pub skills: &'a [crate::agent::skills::Skill],
+    pub skills: std::sync::Arc<Vec<crate::agent::skills::Skill>>,
     pub hooks: &'a crate::agent::hooks::Hooks,
-    pub cwd: &'a std::path::Path,
+    pub cwd: &'a mut std::path::PathBuf,
     pub abort: &'a std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub config: &'a crate::config::Config,
     pub active_endpoint: &'a mut crate::config::Endpoint,
@@ -247,56 +261,64 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
             input_tx.send(super::AgentInput::Prompt(payload)).await?;
         }
         Command::New => {
-            let boot = factory(super::SessionPick::New, active_endpoint, abort.clone())?;
-            swap_agent(boot, state, input_tx, ui_tx);
+            let boot = factory(super::SessionPick::New, cwd, active_endpoint, abort.clone())?;
+            swap_agent(boot, state, input_tx, ui_tx, cwd);
         }
         Command::Resume(Some(choice)) => {
             if state.sessions_disabled {
                 state.push_warning("/resume is disabled for --no-session runs");
                 return Ok(false);
             }
-            let Some(dir) = crate::agent::session::io::sessions_dir(cwd) else {
-                anyhow::bail!("no HOME: nowhere to look for sessions");
-            };
-            let (sessions, _) = crate::agent::session::io::list_sessions(&dir);
+            // A number counts the last listing, the picker's; anything else
+            // is a prefix, for this project's sessions first and then
+            // every project's.
             let chosen = match choice.parse::<usize>() {
                 Ok(n) if n >= 1 => state
                     .pending_resume
                     .get(n - 1)
                     .cloned()
                     .ok_or_else(|| anyhow::anyhow!("{n} is not in the last /resume listing"))?,
-                _ => crate::agent::session::io::resolve_prefix(&sessions, &choice)?,
+                _ => resume::resolve_session_prefix(cwd, &choice)?,
             };
-            let pick = super::SessionPick::Prefix(chosen.id.clone());
-            let boot = factory(pick, active_endpoint, abort.clone())?;
-            swap_agent(boot, state, input_tx, ui_tx);
+            resume_picked(
+                chosen,
+                CmdCtx {
+                    state,
+                    factory,
+                    input_tx,
+                    ui_tx,
+                    skills,
+                    hooks,
+                    cwd,
+                    abort,
+                    config,
+                    active_endpoint,
+                },
+            )?;
         }
         Command::Resume(None) => {
             if state.sessions_disabled {
                 state.push_warning("/resume is disabled for --no-session runs");
                 return Ok(false);
             }
-            let Some(dir) = crate::agent::session::io::sessions_dir(cwd) else {
+            let Some(root) = crate::agent::session::io::sessions_root() else {
                 anyhow::bail!("no HOME: nowhere to look for sessions");
             };
-            let (sessions, _) = crate::agent::session::io::list_sessions(&dir);
-            if sessions.is_empty() {
-                state.push_info("no sessions yet for this directory");
-                return Ok(false);
-            }
-            state.pending_resume = sessions.clone();
-            let mut listing = String::from("sessions (newest first):");
-            for (i, session) in sessions.iter().enumerate() {
-                listing.push_str(&format!(
-                    "\n  {}) {} {} — {}",
-                    i + 1,
-                    session.timestamp,
-                    session.id,
-                    session.model,
-                ));
-            }
-            listing.push_str("\n/resume <n|prefix> to open one");
-            state.push_info(&listing);
+            // The scan reads every file of every directory, so it runs
+            // off the loop; the picker opens when the listing arrives
+            // (UiEvent::SessionsListed, answered in mod.rs).
+            let ui_tx = ui_tx.clone();
+            tokio::spawn(async move {
+                let listed = tokio::task::spawn_blocking(move || {
+                    crate::agent::session::io::list_all_sessions(&root)
+                })
+                .await;
+                if let Ok((sessions, warnings)) = listed {
+                    let _ = ui_tx
+                        .send(super::agent_task::UiEvent::SessionsListed { sessions, warnings })
+                        .await;
+                }
+            });
         }
         Command::Model(choice) => {
             model::handle_model(
@@ -350,16 +372,19 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
 
 /// Point the session at a new agent: fresh input channel, fresh agent
 /// task (the old one exits when its channel closes — commands only run
-/// while idle, so no run is in flight to orphan), seeded transcript.
+/// while idle, so no run is in flight to orphan), seeded transcript, and
+/// the footer showing `directory`, the one the agent runs in.
 fn swap_agent(
     boot: super::Boot,
     state: &mut super::view::State,
     input_tx: &mut tokio::sync::mpsc::Sender<super::AgentInput>,
     ui_tx: &tokio::sync::mpsc::Sender<super::agent_task::UiEvent>,
+    directory: &std::path::Path,
 ) {
     let (tx, rx) = tokio::sync::mpsc::channel::<super::AgentInput>(16);
     *input_tx = tx;
     state.new_session(boot.session_path, boot.sessions_disabled);
+    state.set_directory(directory);
     state.seed_from_entries(boot.agent.entries());
     state.set_skills(std::sync::Arc::new(boot.agent.skills().to_vec()));
     tokio::spawn(super::agent_task::agent_task(boot.agent, rx, ui_tx.clone()));

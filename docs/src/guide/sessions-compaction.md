@@ -11,7 +11,7 @@ Every conversation is an append-only JSONL file under `~/.gg/sessions/<cwd-slug>
 | `gg --session-file <path>` | Persist to and/or resume an exact session JSONL file path |
 | `gg --no-session` | Keep nothing (cannot combine with `-c`/`--resume`/`--session-file`) |
 | `/new` | Start a fresh session in the TUI |
-| `/resume` | List sessions, then `/resume <n\|prefix>` to open one |
+| `/resume` | Open the session picker across every directory (`Tab` in it narrows it to this one); `/resume <n\|prefix>` opens one directly (`n` counts the listing the picker last showed, from 1). A session continues in the directory it started in |
 | `/session` | Show the session path, model, entry count, and token totals |
 
 ### Crash safety

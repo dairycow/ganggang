@@ -61,7 +61,11 @@ pub struct Suggestion {
 /// `/exit` stays a hidden alias — the popup advertises one way out.
 pub(crate) const BUILTINS: &[(&str, &str, &str)] = &[
     ("/new", "", "start a fresh session"),
-    ("/resume", " [n|prefix]", "list sessions, or open one"),
+    (
+        "/resume",
+        " [n|prefix]",
+        "pick a saved session from any directory",
+    ),
     (
         "/compact",
         " [instructions]",
@@ -272,7 +276,7 @@ pub(super) fn hint_row(palette: &Palette, width: usize) -> UiLine<'static> {
 }
 
 /// First `n` chars of `s` — the popup's no-wrapping truncation.
-fn take_chars(s: &str, n: usize) -> String {
+pub(super) fn take_chars(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 #[cfg(test)]

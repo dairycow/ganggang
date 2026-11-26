@@ -24,6 +24,11 @@ pub struct Restart {
 /// Save the composer draft (unless empty) and build the exec plan. The
 /// draft is keyed by the session file, so it can never surface in another
 /// conversation.
+///
+/// `cwd` is the directory the next process starts in — the launch
+/// directory, where `--resume <id>` is resolved — not wherever a `/resume`
+/// has since moved the session. A session filed under another directory is
+/// continued by its file instead.
 pub fn restart_plan(
     cfg: &Config,
     cwd: &Path,
