@@ -13,8 +13,8 @@
 //! has the arrows, and [`resume`] the `/resume` picker.
 
 mod log;
+mod picker;
 mod popup;
-mod resume;
 mod turn;
 
 pub use turn::Cancel;
@@ -64,7 +64,7 @@ pub struct State {
     pub pending_models: Vec<(String, String)>,
     /// The `/resume` picker while it is open; the composer's text is its
     /// filter. `None` = closed.
-    pub resume: Option<crate::tui::resume::ResumePick>,
+    pub picker: Option<crate::tui::picker::Picker>,
     /// Configured context window — the denominator of the footer's %.
     context_window: u64,
     last_context_tokens: u64,
@@ -138,7 +138,7 @@ impl State {
             tokens_out: 0,
             pending_resume: Vec::new(),
             pending_models: Vec::new(),
-            resume: None,
+            picker: None,
             context_window: context_window as u64,
             last_context_tokens: 0,
             skills,

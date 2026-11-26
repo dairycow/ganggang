@@ -77,8 +77,8 @@ pub fn render(frame: &mut Frame, state: &mut State) {
     );
     // The two popups share one patch of screen, and the picker has the
     // composer while it is open: it is the one that draws.
-    if state.resume_open() {
-        draw_resume(frame, state, areas);
+    if state.picker_open() {
+        draw_picker(frame, state, areas);
     } else {
         draw_popup(frame, state, areas);
     }
@@ -229,9 +229,9 @@ fn draw_popup(frame: &mut Frame, state: &mut State, areas: Areas) {
 /// panel floats over the transcript's newest rows, so the transcript
 /// cannot say it there. The panel's last row is the hint, or, after a
 /// failed open, the error in its place.
-fn draw_resume(frame: &mut Frame, state: &mut State, areas: Areas) {
+fn draw_picker(frame: &mut Frame, state: &mut State, areas: Areas) {
     state.sync_resume();
-    let rows = state.resume_matches();
+    let rows = state.picker_matches();
     let width = areas.composer.width as usize;
     if rows.is_empty() {
         // The picker is open but its scope holds no row: one row of
@@ -248,12 +248,12 @@ fn draw_resume(frame: &mut Frame, state: &mut State, areas: Areas) {
         };
         frame.render_widget(Clear, area);
         frame.render_widget(Fill::new(" ").style(state.palette.popup()), area);
-        let last = resume_last_row(state, &state.palette, width, None);
+        let last = picker_last_row(state, &state.palette, width, None);
         let panel = vec![
-            crate::tui::resume::empty_row(
+            crate::tui::picker::empty_row(
                 &state.palette,
-                state.resume_scope_empty(),
-                state.resume_all_projects(),
+                state.session_scope_empty(),
+                state.session_scope_all(),
                 state.editor.text(),
                 width,
             ),
@@ -280,14 +280,14 @@ fn draw_resume(frame: &mut Frame, state: &mut State, areas: Areas) {
     frame.render_widget(Fill::new(" ").style(palette.popup()), area);
     let shown = (height as usize - 1).min(rows.len());
     let selected = state
-        .resume
+        .picker
         .as_ref()
         .map_or(0, |pick| pick.selected)
         .min(rows.len() - 1);
     let start = composer::scrolled_row(selected, shown, rows.len());
     let mut panel = Vec::with_capacity(height as usize);
     for (i, row) in rows.iter().enumerate().skip(start).take(shown) {
-        panel.push(super::super::resume::row_line(
+        panel.push(super::super::picker::row_line(
             &palette,
             row,
             i == selected,
@@ -295,26 +295,26 @@ fn draw_resume(frame: &mut Frame, state: &mut State, areas: Areas) {
         ));
     }
     let at = (rows.len() > shown).then_some((selected, rows.len()));
-    panel.push(resume_last_row(state, &palette, area.width as usize, at));
+    panel.push(picker_last_row(state, &palette, area.width as usize, at));
     frame.render_widget(Paragraph::new(panel), area);
 }
 
 /// The picker panel's last row: the error of a failed open while the
 /// picker holds one, in place of the hint; otherwise the hint, with its
 /// place counter when the list is longer than the panel.
-fn resume_last_row(
+fn picker_last_row(
     state: &State,
     palette: &Palette,
     width: usize,
     at: Option<(usize, usize)>,
 ) -> UiLine<'static> {
     state
-        .resume
+        .picker
         .as_ref()
         .and_then(|pick| pick.error.as_deref())
-        .map(|error| crate::tui::resume::error_row(palette, error, width))
+        .map(|error| crate::tui::picker::error_row(palette, error, width))
         .unwrap_or_else(|| {
-            crate::tui::resume::hint_row(palette, width, state.resume_all_projects(), at)
+            crate::tui::picker::hint_row(palette, width, state.session_scope_all(), at)
         })
 }
 

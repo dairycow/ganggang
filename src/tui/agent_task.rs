@@ -287,7 +287,7 @@ pub(super) async fn apply(
             state.set_models(std::sync::Arc::new(models));
         }
         // The loop takes this one before apply sees it: it opens the
-        // picker from it itself (commands::resume_listed).
+        // picker from it itself (commands::sessions_listed).
         UiEvent::SessionsListed { .. } => {}
         UiEvent::ShellDone {
             command,

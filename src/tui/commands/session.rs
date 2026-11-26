@@ -20,16 +20,16 @@ fn open_picker(
     if sessions.is_empty() {
         // Nothing to pick from: no picker, and no listing for a number
         // to count.
-        state.resume = None;
+        state.picker = None;
         state.pending_resume.clear();
         state.push_info("no sessions yet");
         return;
     }
     // The order `/resume <n>` counts is whatever listing the picker shows.
-    if !state.open_resume(sessions, project_dir, home) {
+    if !state.open_picker(sessions, project_dir, home) {
         // The session in use was the only one: nothing else to pick
         // from, so no picker and no listing for a number to count.
-        state.resume = None;
+        state.picker = None;
         state.pending_resume.clear();
         state.push_info("no other session yet");
     }
@@ -38,14 +38,14 @@ fn open_picker(
 /// The listing a bare `/resume` asked for, read off the loop: the
 /// picker's rows are built here, on the loop, from what the scan found.
 /// A store with nothing in it, and one that holds only the session in
-/// use, are `open_picker`'s to say (`no sessions yet`, `no other
+/// use, are `open_session`'s to say (`no sessions yet`, `no other
 /// session yet`). A run in flight, or composer text that is not the
 /// filter but a draft typed while the store was read, keeps the user
 /// where they are: the listing is theirs to ask for again, not to be
 /// opened over their draft. Every warning the scan kept is pushed as-is:
 /// a file it could not read is absent from the picker, and the
 /// transcript says so instead of the row just missing.
-pub(in crate::tui) fn resume_listed(
+pub(in crate::tui) fn sessions_listed(
     state: &mut super::super::view::State,
     sessions: Vec<crate::agent::session::io::SessionFile>,
     warnings: Vec<String>,
@@ -68,11 +68,11 @@ pub(in crate::tui) fn resume_listed(
 /// Tab in the `/resume` picker: the scope narrows from every project's
 /// sessions to this project's, or widens back. Both listings were read
 /// when the picker opened, so this reads nothing.
-pub(in crate::tui) fn toggle_resume_scope(state: &mut super::super::view::State) {
-    if state.resume_all_projects() {
-        state.resume_narrow();
+pub(in crate::tui) fn toggle_session_scope(state: &mut super::super::view::State) {
+    if state.session_scope_all() {
+        state.session_scope_this_directory();
     } else {
-        state.resume_widen();
+        state.session_scope_all_directories();
     }
 }
 
@@ -109,7 +109,7 @@ fn resolve_prefix_everywhere(
 /// continues in: its own when it still has one, which moves gg there.
 /// The transcript says which, unless gg was already in it. Errors are
 /// the caller's to report.
-pub(in crate::tui) fn resume_picked(
+pub(in crate::tui) fn open_session(
     session: crate::agent::session::io::SessionFile,
     ctx: CmdCtx<'_>,
 ) -> anyhow::Result<()> {

@@ -143,14 +143,14 @@ fn a_bare_resume_opens_the_picker_on_every_project_and_prints_nothing() {
         here,
         home.clone(),
     );
-    assert!(rig.state.resume_open());
+    assert!(rig.state.picker_open());
     assert!(
-        rig.state.resume_all_projects(),
+        rig.state.session_scope_all(),
         "every project's sessions, to begin with"
     );
     let names: Vec<String> = rig
         .state
-        .resume_matches()
+        .picker_matches()
         .iter()
         .map(|row| row.name.clone())
         .collect();
@@ -170,7 +170,7 @@ fn a_bare_resume_opens_the_picker_on_every_project_and_prints_nothing() {
     );
 
     open_picker(&mut rig.state, Vec::new(), here, home);
-    assert!(!rig.state.resume_open(), "nothing to pick from: no picker");
+    assert!(!rig.state.picker_open(), "nothing to pick from: no picker");
     assert!(
         rig.state.pending_resume.is_empty(),
         "and no listing for a number to count"
@@ -196,10 +196,10 @@ fn the_session_in_use_is_not_listed_by_the_picker() {
         here,
         None,
     );
-    assert!(rig.state.resume_open());
+    assert!(rig.state.picker_open());
     let ids: Vec<&str> = rig
         .state
-        .resume_matches()
+        .picker_matches()
         .iter()
         .map(|row| row.id.as_str())
         .collect();
@@ -214,7 +214,7 @@ fn the_session_in_use_is_not_listed_by_the_picker() {
     solo.state.session_path = Some(in_use.path.clone());
     open_picker(&mut solo.state, vec![in_use], here, None);
     assert!(
-        !solo.state.resume_open(),
+        !solo.state.picker_open(),
         "nothing else to pick from: no picker"
     );
     assert!(
@@ -245,14 +245,14 @@ fn the_listed_sessions_open_the_picker_when_idle_and_say_so_when_not() {
 
     let warnings = vec!["skipping session file: read failed".to_string()];
     let mut rig = ResumeRig::new();
-    resume_listed(
+    sessions_listed(
         &mut rig.state,
         vec![filed("a1b2c3d4", "newest")],
         warnings,
         cwd,
     );
     assert!(
-        rig.state.resume_open(),
+        rig.state.picker_open(),
         "idle and empty composer: the picker opens"
     );
     let lines = rig.state.line_texts_for_test();
@@ -271,14 +271,14 @@ fn the_listed_sessions_open_the_picker_when_idle_and_say_so_when_not() {
 
     let mut busy = ResumeRig::new();
     busy.state.busy = true;
-    resume_listed(
+    sessions_listed(
         &mut busy.state,
         vec![filed("a1b2c3d4", "newest")],
         Vec::new(),
         cwd,
     );
     assert!(
-        !busy.state.resume_open(),
+        !busy.state.picker_open(),
         "a run in flight keeps it unopened"
     );
     let lines = busy.state.line_texts_for_test();
@@ -291,14 +291,14 @@ fn the_listed_sessions_open_the_picker_when_idle_and_say_so_when_not() {
 
     let mut draft = ResumeRig::new();
     draft.state.editor.set_text("a draft, not a filter");
-    resume_listed(
+    sessions_listed(
         &mut draft.state,
         vec![filed("a1b2c3d4", "newest")],
         Vec::new(),
         cwd,
     );
     assert!(
-        !draft.state.resume_open(),
+        !draft.state.picker_open(),
         "a draft typed while the store was read keeps it unopened"
     );
     assert_eq!(
@@ -332,30 +332,30 @@ fn the_picked_row_opens_through_the_factory_by_its_file_in_its_own_directory() {
 
     // The picker open on two sessions, its filter and highlight the
     // user's own: a failure must leave them both where they were.
-    let mut pick = super::super::super::resume::ResumePick::new(
+    let mut pick = super::super::super::picker::Picker::new(
         vec![filed("a1b2c3d4", "newest"), filed("b2c3d4e5", "older")],
         vec![filed("a1b2c3d4", "newest"), filed("b2c3d4e5", "older")],
         None,
     );
     pick.selected = 1;
     pick.filter = "other".into();
-    rig.state.resume = Some(pick);
+    rig.state.picker = Some(pick);
     rig.state.editor.set_text("other");
 
-    let error = resume_picked(session, rig.ctx()).unwrap_err();
+    let error = open_session(session, rig.ctx()).unwrap_err();
     assert_eq!(
         error.to_string(),
         "no agent is built in this test",
         "the factory's error is the caller's to report"
     );
-    assert!(rig.state.resume_open(), "a failed open loses no picker");
+    assert!(rig.state.picker_open(), "a failed open loses no picker");
     assert_eq!(
         rig.state.editor.text(),
         "other",
         "nor the filter the picker was built on"
     );
     assert_eq!(
-        rig.state.resume.as_ref().unwrap().selected,
+        rig.state.picker.as_ref().unwrap().selected,
         1,
         "nor the highlight"
     );
@@ -464,7 +464,7 @@ async fn no_session_refuses_the_picker_and_the_argument() {
     rig.state.sessions_disabled = true;
     assert!(!rig.run(Command::Resume(None)).await.unwrap());
     assert!(!rig.run(Command::Resume(Some("a1b2".into()))).await.unwrap());
-    assert!(!rig.state.resume_open());
+    assert!(!rig.state.picker_open());
     assert!(rig.asked().is_empty());
     let lines = rig.state.line_texts_for_test();
     assert_eq!(

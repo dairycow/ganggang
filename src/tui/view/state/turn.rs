@@ -47,9 +47,9 @@ impl crate::tui::view::State {
                 Cancel::Stopping
             };
         }
-        if self.resume.is_some() {
+        if self.picker.is_some() {
             // An open picker is something to cancel before the TUI is.
-            self.close_resume();
+            self.close_picker();
             return Cancel::PickerClosed;
         }
         if self.editor.text().is_empty() {

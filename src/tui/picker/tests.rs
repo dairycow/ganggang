@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use ratatui::text::Line as UiLine;
 
 use super::*;
+use crate::agent::session::io::SessionFile;
 use crate::tui::theme::TRUECOLOR;
 
 /// 2026-11-25 12:00:00 UTC, as a Unix timestamp.
@@ -26,16 +27,16 @@ fn session(id: &str, stamp: &str, title: Option<&str>, preview: Option<&str>) ->
     }
 }
 
-fn row(id: &str, title: Option<&str>, preview: Option<&str>) -> ResumeRow {
-    ResumeRow::new(session(id, "20261125-090000", title, preview), NOW)
+fn row(id: &str, title: Option<&str>, preview: Option<&str>) -> SessionRow {
+    SessionRow::new(session(id, "20261125-090000", title, preview), NOW)
 }
 
 /// The ids of the rows a filter keeps.
-fn ids<'a>(rows: &[&'a ResumeRow]) -> Vec<&'a str> {
+fn ids<'a>(rows: &[&'a SessionRow]) -> Vec<&'a str> {
     rows.iter().map(|row| row.id.as_str()).collect()
 }
 
-fn keeps<'a>(rows: &'a [ResumeRow], filter: &str) -> Vec<&'a str> {
+fn keeps<'a>(rows: &'a [SessionRow], filter: &str) -> Vec<&'a str> {
     ids(&matching(rows, filter))
 }
 
@@ -94,7 +95,7 @@ fn a_row_is_its_id_its_name_and_its_age() {
 #[test]
 fn a_row_keeps_the_session_it_was_built_from() {
     let session = session("a1b2c3d4", "20261125-090000", Some("Fix the parser"), None);
-    let row = ResumeRow::new(session.clone(), NOW);
+    let row = SessionRow::new(session.clone(), NOW);
     assert_eq!(row.session.id, session.id);
     assert_eq!(row.session.path, session.path);
     assert_eq!(row.session.model, "strata/qwen3.8");
@@ -314,8 +315,8 @@ fn a_long_project_keeps_its_end() {
 fn an_all_projects_row_shows_the_directory_in_the_model_s_place() {
     let session = worktree("a1b2c3d4", "Fix the parser", "feature-x");
     let home = Path::new("/home/u");
-    let here = ResumeRow::new(session.clone(), NOW);
-    let anywhere = ResumeRow::anywhere(session, NOW, Some(home));
+    let here = SessionRow::new(session.clone(), NOW);
+    let anywhere = SessionRow::anywhere(session, NOW, Some(home));
 
     assert_eq!(
         anywhere.project.as_deref(),
@@ -353,7 +354,7 @@ fn an_all_projects_row_shows_the_directory_in_the_model_s_place() {
 #[test]
 fn an_all_projects_row_gives_the_directory_its_room() {
     let session = worktree("a1b2c3d4", &"x".repeat(80), "feature-x");
-    let row = ResumeRow::anywhere(session, NOW, Some(Path::new("/home/u")));
+    let row = SessionRow::anywhere(session, NOW, Some(Path::new("/home/u")));
     let project = row.project.clone().unwrap();
     let before = "3h ago a1b2c3d4  ".chars().count();
     let drawn = |width: usize| row_line(&TRUECOLOR, &row, false, width);
@@ -434,7 +435,7 @@ fn a_row_is_age_id_name_then_the_model_dim() {
     );
 
     // A row with no readable stamp leads with its id.
-    let unstamped = ResumeRow::new(
+    let unstamped = SessionRow::new(
         SessionFile {
             path: PathBuf::from("/x/renamed.jsonl"),
             ..session("a1b2c3d4", "20261125-090000", Some("Fix the parser"), None)
@@ -465,11 +466,11 @@ fn a_row_cuts_at_the_width_and_never_wraps() {
 fn the_picker_opens_on_every_project_and_narrows_to_this_one() {
     let here = sessions_for_test(3);
     let everywhere = [sessions_for_test(3), elsewhere_for_test(2)].concat();
-    let mut pick = ResumePick::new(here, everywhere, Some(Path::new("/home/u")));
+    let mut pick = Picker::new(here, everywhere, Some(Path::new("/home/u")));
 
     // It opens on every project's sessions, each naming its directory,
     // this project's included.
-    assert!(pick.all_projects());
+    assert!(pick.all_directories());
     let uuids: Vec<&str> = pick
         .rows()
         .iter()
@@ -496,7 +497,7 @@ fn the_picker_opens_on_every_project_and_narrows_to_this_one() {
     pick.selected = 4;
 
     pick.narrow();
-    assert!(!pick.all_projects());
+    assert!(!pick.all_directories());
     assert_eq!(pick.rows().len(), 3, "this project's sessions");
     assert!(
         pick.rows().iter().all(|row| row.project.is_none()),
@@ -508,7 +509,7 @@ fn the_picker_opens_on_every_project_and_narrows_to_this_one() {
     );
 
     pick.widen();
-    assert!(pick.all_projects());
+    assert!(pick.all_directories());
     assert_eq!(pick.rows().len(), 5);
     assert_eq!(pick.selected, 0);
 }
@@ -637,13 +638,13 @@ pub(in crate::tui) fn sessions_for_test(n: usize) -> Vec<SessionFile> {
 /// Test seam: the picker on this project's `n` sessions `s00`.., each
 /// aged against a fixed instant, showing this project's rows only (what
 /// Tab narrows it to). No test reads the clock or the disk.
-pub(in crate::tui) fn pick_for_test(n: usize) -> ResumePick {
-    ResumePick {
+pub(in crate::tui) fn pick_for_test(n: usize) -> Picker {
+    Picker {
         here: (0..n)
-            .map(|i| ResumeRow::new(filed_for_test(i, "uuid-of", "s"), 1_795_608_000 + 3_600))
+            .map(|i| SessionRow::new(filed_for_test(i, "uuid-of", "s"), 1_795_608_000 + 3_600))
             .collect(),
         everywhere: Vec::new(),
-        all_projects: false,
+        all_directories: false,
         selected: 0,
         filter: String::new(),
         error: None,

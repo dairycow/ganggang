@@ -18,8 +18,8 @@ pub mod layout;
 pub mod line;
 pub mod mentions;
 pub mod models;
+pub mod picker;
 pub mod reader;
-pub mod resume;
 pub mod shell;
 pub mod suggest;
 pub mod table;
@@ -358,7 +358,7 @@ pub async fn run(
                         // marks the run stopping so the footer shows the
                         // cancel took. Idle, it closes the `/resume` picker
                         // when one is open, and otherwise does nothing.
-                        KeyAction::Abort if state.resume_open() => state.close_resume(),
+                        KeyAction::Abort if state.picker_open() => state.close_picker(),
                         KeyAction::Abort if state.busy => {
                             abort.store(true, Ordering::Release);
                             state.set_stopping(true);
@@ -413,23 +413,23 @@ pub async fn run(
                         // clears the filter — so a failed open leaves
                         // the error in the picker's panel, filter and
                         // all.
-                        KeyAction::Send if state.resume_open() && !state.busy => {
-                            if let Some(session) = state.resume_highlighted() {
+                        KeyAction::Send if state.picker_open() && !state.busy => {
+                            if let Some(session) = state.picker_highlighted() {
                                 let ctx = shared.ctx(
                                     &mut state,
                                     &mut input_tx,
                                     &mut cwd,
                                     &mut active_endpoint,
                                 );
-                                if let Err(e) = commands::resume_picked(session, ctx) {
-                                    state.resume_failed(&format!("{e:#}"));
+                                if let Err(e) = commands::open_session(session, ctx) {
+                                    state.pick_failed(&format!("{e:#}"));
                                 }
                             }
                         }
                         // Tab in the picker: every project's sessions, or
                         // this project's.
-                        KeyAction::SuggestComplete if state.resume_open() && !state.busy => {
-                            commands::toggle_resume_scope(&mut state)
+                        KeyAction::SuggestComplete if state.picker_open() && !state.busy => {
+                            commands::toggle_session_scope(&mut state)
                         }
                         // Submissions land between runs: the text stays
                         // in the editor for resubmission, with a line
@@ -551,11 +551,11 @@ pub async fn run(
                     // [`classify_wheel`]), so a stray click can never move a
                     // cursor or a selection.
                     crossterm::event::Event::Mouse(mouse) => match classify_wheel(mouse) {
-                        Some(Wheel::Up) if state.resume_open() => {
-                            state.resume_scroll(true, WHEEL_ROWS)
+                        Some(Wheel::Up) if state.picker_open() => {
+                            state.scroll_picker(true, WHEEL_ROWS)
                         }
-                        Some(Wheel::Down) if state.resume_open() => {
-                            state.resume_scroll(false, WHEEL_ROWS)
+                        Some(Wheel::Down) if state.picker_open() => {
+                            state.scroll_picker(false, WHEEL_ROWS)
                         }
                         Some(Wheel::Up) => state.scroll_up(WHEEL_ROWS),
                         Some(Wheel::Down) => state.scroll_down(WHEEL_ROWS),
@@ -570,7 +570,7 @@ pub async fn run(
                 // the loop opens the picker from it itself, so it never
                 // reaches apply.
                 if let UiEvent::SessionsListed { sessions, warnings } = event {
-                    commands::resume_listed(&mut state, sessions, warnings, &cwd);
+                    commands::sessions_listed(&mut state, sessions, warnings, &cwd);
                     continue;
                 }
                 if !agent_task::apply(event, &mut state, &mut input_tx).await {

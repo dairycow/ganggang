@@ -1,9 +1,9 @@
-//! The `/resume` picker: what one session's row says, which rows a
-//! filter keeps, and the panel's hint row. Pure, like
-//! [`suggest`](super::suggest). [`view`](super::view) holds whether the
-//! picker is open, which row is highlighted and which projects it shows,
-//! and draws each row with the suggestion popup's own row, so the two
-//! read as one kind of thing.
+//! The session picker's rows: what one session's row says, which rows a
+//! filter keeps, and the panel's rows. Pure, like
+//! [`suggest`](super::super::suggest). [`view`](super::super::view) holds
+//! whether the picker is open, which row is highlighted and which
+//! directories it shows, and draws each row with the suggestion popup's
+//! own row, so the two read as one kind of thing.
 
 use std::path::Path;
 
@@ -11,19 +11,19 @@ use ratatui::text::{Line as UiLine, Span};
 
 use crate::agent::session::io::{SessionFile, short_id};
 
-use super::suggest::{Suggestion, suggestion_row, take_chars};
-use super::theme::Palette;
+use super::super::suggest::{Suggestion, suggestion_row, take_chars};
+use super::super::theme::Palette;
 
 /// The most of a name a row shows, when the row has the room.
-const NAME_CAP: usize = 48;
+pub(in crate::tui) const NAME_CAP: usize = 48;
 
 /// The least of a name a row keeps when a project's path takes its room.
-const NAME_FLOOR: usize = 12;
+pub(in crate::tui) const NAME_FLOOR: usize = 12;
 
 /// The most of a project's path a row keeps, however wide the row: the
 /// end of it, because the end is what tells one worktree from another.
 /// [`row_line`] keeps less of it on a narrow row.
-const PROJECT_CAP: usize = 48;
+pub(in crate::tui) const PROJECT_CAP: usize = 48;
 
 /// Past this many days a row shows the date instead of an age.
 const AGE_DAYS: i64 = 7;
@@ -32,7 +32,7 @@ const AGE_DAYS: i64 = 7;
 /// the picker opens or widens, so filtering and drawing never read the
 /// disk or the clock.
 #[derive(Debug, Clone)]
-pub struct ResumeRow {
+pub struct SessionRow {
     /// The session itself, for when its row is chosen.
     pub session: SessionFile,
     /// When the session started, relative to the moment the row was
@@ -53,7 +53,7 @@ pub struct ResumeRow {
     haystack: String,
 }
 
-impl ResumeRow {
+impl SessionRow {
     /// The row for `session` as this project's view shows it, aged
     /// against `now` (a Unix timestamp).
     pub fn new(session: SessionFile, now: i64) -> Self {
@@ -98,10 +98,10 @@ impl ResumeRow {
 /// scope change or a changed filter clears the error, which belongs to
 /// the rows and the filter it was reported against.
 #[derive(Debug, Clone)]
-pub struct ResumePick {
-    here: Vec<ResumeRow>,
-    everywhere: Vec<ResumeRow>,
-    all_projects: bool,
+pub struct Picker {
+    pub here: Vec<SessionRow>,
+    pub everywhere: Vec<SessionRow>,
+    pub all_directories: bool,
     pub selected: usize,
     pub filter: String,
     /// The last failed open's message, for the panel's own row: the
@@ -111,7 +111,7 @@ pub struct ResumePick {
     pub error: Option<String>,
 }
 
-impl ResumePick {
+impl Picker {
     /// The picker over two listings of the same store, each newest first:
     /// this project's sessions (`here`) and every project's
     /// (`everywhere`, which includes the first). It opens showing every
@@ -122,13 +122,13 @@ impl ResumePick {
         Self {
             here: here
                 .into_iter()
-                .map(|session| ResumeRow::new(session, now))
+                .map(|session| SessionRow::new(session, now))
                 .collect(),
             everywhere: everywhere
                 .into_iter()
-                .map(|session| ResumeRow::anywhere(session, now, home))
+                .map(|session| SessionRow::anywhere(session, now, home))
                 .collect(),
-            all_projects: true,
+            all_directories: true,
             selected: 0,
             filter: String::new(),
             error: None,
@@ -136,8 +136,8 @@ impl ResumePick {
     }
 
     /// The rows in view, in listing order.
-    pub fn rows(&self) -> &[ResumeRow] {
-        if self.all_projects {
+    pub fn rows(&self) -> &[SessionRow] {
+        if self.all_directories {
             &self.everywhere
         } else {
             &self.here
@@ -145,15 +145,15 @@ impl ResumePick {
     }
 
     /// Whether the picker shows every project's sessions.
-    pub fn all_projects(&self) -> bool {
-        self.all_projects
+    pub fn all_directories(&self) -> bool {
+        self.all_directories
     }
 
     /// Every project's sessions. The filter stays, and the highlight
     /// returns to the top row: it is a new list, and the last failed
     /// open belonged to the old one.
     pub fn widen(&mut self) {
-        self.all_projects = true;
+        self.all_directories = true;
         self.selected = 0;
         self.error = None;
     }
@@ -162,7 +162,7 @@ impl ResumePick {
     /// to the top row, and a failed open's error goes with the listing it
     /// was reported against.
     pub fn narrow(&mut self) {
-        self.all_projects = false;
+        self.all_directories = false;
         self.selected = 0;
         self.error = None;
     }
@@ -176,7 +176,7 @@ fn unix_now() -> i64 {
 /// word appears somewhere in the row (id, uuid, name, preview, model or
 /// directory), matched case-insensitively. An empty filter keeps them
 /// all.
-pub fn matching<'a>(rows: &'a [ResumeRow], filter: &str) -> Vec<&'a ResumeRow> {
+pub fn matching<'a>(rows: &'a [SessionRow], filter: &str) -> Vec<&'a SessionRow> {
     let words: Vec<String> = filter
         .split_whitespace()
         .map(|word| word.to_lowercase())
@@ -259,7 +259,7 @@ fn stamp_fields(stamp: &str) -> Option<[i64; 6]> {
 /// Seconds since the Unix epoch of a UTC `YYYYMMDD-HHMMSS` stamp. Only
 /// the tests call it: the calendar, checked against known instants.
 #[cfg(test)]
-fn stamp_epoch(stamp: &str) -> Option<i64> {
+pub(in crate::tui) fn stamp_epoch(stamp: &str) -> Option<i64> {
     let [year, month, day, hour, minute, second] = stamp_fields(stamp)?;
     Some(epoch_of(year, month, day, hour, minute, second))
 }
@@ -330,7 +330,7 @@ fn clip(text: &str, max: usize) -> String {
 /// At most `max` chars of `text` from its end; when that cuts it, an
 /// ellipsis is the first of them. For a path, whose end says more than
 /// its start.
-fn tail(text: &str, max: usize) -> String {
+pub(in crate::tui) fn tail(text: &str, max: usize) -> String {
     let length = text.chars().count();
     if length <= max {
         return text.to_string();
@@ -349,9 +349,9 @@ fn tail(text: &str, max: usize) -> String {
 /// the session's directory in the model's place. The name is cut to
 /// leave that its room, and the highlighted row is marked the way a
 /// highlighted suggestion is (the suggestion popup's row draws it).
-pub(super) fn row_line(
+pub(in crate::tui) fn row_line(
     palette: &Palette,
-    row: &ResumeRow,
+    row: &SessionRow,
     selected: bool,
     width: usize,
 ) -> UiLine<'static> {
@@ -396,14 +396,14 @@ pub(super) fn row_line(
 /// row at all: the panel must not vanish over an empty scope, so it says
 /// why in its own ground — the transcript, which the panel covers, has
 /// nothing newer to say it in.
-pub(super) fn empty_row(
+pub(in crate::tui) fn empty_row(
     palette: &Palette,
     scope_empty: bool,
-    all_projects: bool,
+    all_directories: bool,
     filter: &str,
     width: usize,
 ) -> UiLine<'static> {
-    let text = if scope_empty && all_projects {
+    let text = if scope_empty && all_directories {
         "no sessions yet".to_string()
     } else if scope_empty {
         "no sessions in this directory".to_string()
@@ -419,7 +419,7 @@ pub(super) fn empty_row(
 /// The panel's last row after a failed open: the error itself, in the
 /// warning's colour, in place of the hint — the panel covers the
 /// transcript, where the error is also kept for when the picker closes.
-pub(super) fn error_row(palette: &Palette, error: &str, width: usize) -> UiLine<'static> {
+pub(in crate::tui) fn error_row(palette: &Palette, error: &str, width: usize) -> UiLine<'static> {
     UiLine::from(Span::styled(
         take_chars(&format!("⚠ {error}"), width),
         palette.popup().fg(palette.warn),
@@ -431,13 +431,13 @@ pub(super) fn error_row(palette: &Palette, error: &str, width: usize) -> UiLine<
 /// stands (`3/57`). The counter stands right after the move keys it
 /// describes, not at the end: the keys and the scope survive a narrow
 /// row, where the tail is what gets cut.
-pub(super) fn hint_row(
+pub(in crate::tui) fn hint_row(
     palette: &Palette,
     width: usize,
-    all_projects: bool,
+    all_directories: bool,
     at: Option<(usize, usize)>,
 ) -> UiLine<'static> {
-    let scope = if all_projects {
+    let scope = if all_directories {
         "Tab: this directory"
     } else {
         "Tab: all directories"
@@ -451,6 +451,3 @@ pub(super) fn hint_row(
     ));
     UiLine::from(Span::styled(take_chars(&hint, width), palette.popup_hint()))
 }
-
-#[cfg(test)]
-pub(in crate::tui) mod tests;

@@ -1,13 +1,13 @@
-//! The `/resume` picker's half of [`State`](super::super::State): whether
-//! it is open, which projects and rows it shows, which row is
+//! The session picker's half of [`State`](super::super::State): whether
+//! it is open, which directories and rows it shows, which row is
 //! highlighted, and what its keys do. The rows, the filter and the hint
-//! are [`resume`](crate::tui::resume)'s, and the composer's text is the
+//! are [`picker`](crate::tui::picker)'s, and the composer's text is the
 //! filter.
 
 use std::path::PathBuf;
 
 use crate::agent::session::io::SessionFile;
-use crate::tui::resume::{ResumePick, ResumeRow, matching};
+use crate::tui::picker::{Picker, SessionRow, matching};
 
 impl crate::tui::view::State {
     /// Open the picker over the whole session store (newest first). It
@@ -18,7 +18,7 @@ impl crate::tui::view::State {
     /// reload it from disk, and it is the row Enter would open by
     /// default. `false` when that leaves nothing to open on, in which
     /// case the picker is closed and no listing remembered.
-    pub fn open_resume(
+    pub fn open_picker(
         &mut self,
         sessions: Vec<SessionFile>,
         project_dir: &std::path::Path,
@@ -29,7 +29,7 @@ impl crate::tui::view::State {
             .filter(|session| Some(&session.path) != self.session_path.as_ref())
             .collect();
         if sessions.is_empty() {
-            self.resume = None;
+            self.picker = None;
             self.pending_resume.clear();
             return false;
         }
@@ -40,46 +40,46 @@ impl crate::tui::view::State {
             .filter(|session| session.path.parent() == Some(project_dir))
             .cloned()
             .collect();
-        let mut pick = ResumePick::new(here, sessions, home.as_deref());
+        let mut pick = Picker::new(here, sessions, home.as_deref());
         pick.filter = self.editor.text().to_string();
-        self.resume = Some(pick);
+        self.picker = Some(pick);
         self.remember_listing();
         true
     }
 
     /// Whether the picker is open.
-    pub fn resume_open(&self) -> bool {
-        self.resume.is_some()
+    pub fn picker_open(&self) -> bool {
+        self.picker.is_some()
     }
 
     /// Whether the open picker's scope holds no row at all: an empty
     /// directory in the narrow view, or an empty store in the wide one.
     /// The panel draws one row of its own then, because the transcript,
     /// which the panel covers, would otherwise say nothing newer.
-    pub fn resume_scope_empty(&self) -> bool {
-        self.resume
+    pub fn session_scope_empty(&self) -> bool {
+        self.picker
             .as_ref()
             .is_some_and(|pick| pick.rows().is_empty())
     }
 
     /// The rows the composer's text keeps, in listing order: empty with
     /// the picker closed, and when the filter matches nothing.
-    pub fn resume_matches(&self) -> Vec<&ResumeRow> {
-        match &self.resume {
+    pub fn picker_matches(&self) -> Vec<&SessionRow> {
+        match &self.picker {
             Some(pick) => matching(pick.rows(), self.editor.text()),
             None => Vec::new(),
         }
     }
 
     /// Whether the picker shows every project's sessions.
-    pub fn resume_all_projects(&self) -> bool {
-        self.resume.as_ref().is_some_and(ResumePick::all_projects)
+    pub fn session_scope_all(&self) -> bool {
+        self.picker.as_ref().is_some_and(Picker::all_directories)
     }
 
     /// Tab: every project's sessions. The filter stays, the highlight
     /// returns to the top row, and `/resume <n>` counts the wider listing.
-    pub fn resume_widen(&mut self) {
-        let Some(pick) = self.resume.as_mut() else {
+    pub fn session_scope_all_directories(&mut self) {
+        let Some(pick) = self.picker.as_mut() else {
             return;
         };
         pick.widen();
@@ -87,8 +87,8 @@ impl crate::tui::view::State {
     }
 
     /// Tab again: this project's sessions, the filter kept.
-    pub fn resume_narrow(&mut self) {
-        let Some(pick) = self.resume.as_mut() else {
+    pub fn session_scope_this_directory(&mut self) {
+        let Some(pick) = self.picker.as_mut() else {
             return;
         };
         pick.narrow();
@@ -98,7 +98,7 @@ impl crate::tui::view::State {
     /// `/resume <n>` counts whichever listing the picker shows, newest
     /// first and unfiltered.
     fn remember_listing(&mut self) {
-        let Some(pick) = &self.resume else {
+        let Some(pick) = &self.picker else {
             return;
         };
         let listing = pick.rows().iter().map(|row| row.session.clone()).collect();
@@ -106,26 +106,26 @@ impl crate::tui::view::State {
     }
 
     /// ↑: the highlight climbs, stopping at the top.
-    pub fn resume_prev(&mut self) {
-        self.move_resume(true, 1);
+    pub fn picker_prev(&mut self) {
+        self.move_highlight(true, 1);
     }
 
     /// ↓: the highlight descends, stopping at the last matching row.
-    pub fn resume_next(&mut self) {
-        self.move_resume(false, 1);
+    pub fn picker_next(&mut self) {
+        self.move_highlight(false, 1);
     }
 
     /// The mouse wheel: the highlight moves `by` rows, up or down. The
     /// panel's window follows it, so the highlighted row is always one
     /// of the rows on screen.
-    pub fn resume_scroll(&mut self, up: bool, by: u16) {
-        self.move_resume(up, usize::from(by));
+    pub fn scroll_picker(&mut self, up: bool, by: u16) {
+        self.move_highlight(up, usize::from(by));
     }
 
-    fn move_resume(&mut self, up: bool, by: usize) {
+    fn move_highlight(&mut self, up: bool, by: usize) {
         self.sync_resume();
-        let last = self.resume_matches().len().saturating_sub(1);
-        let Some(pick) = self.resume.as_mut() else {
+        let last = self.picker_matches().len().saturating_sub(1);
+        let Some(pick) = self.picker.as_mut() else {
             return;
         };
         pick.selected = if up {
@@ -142,26 +142,26 @@ impl crate::tui::view::State {
     /// open (or the picker closes of its own Esc); `None` when the
     /// picker is closed, or when the filter keeps no row — which the
     /// panel's empty row says, so nothing goes to the transcript.
-    pub fn resume_highlighted(&mut self) -> Option<SessionFile> {
+    pub fn picker_highlighted(&mut self) -> Option<SessionFile> {
         self.sync_resume();
-        self.resume_matches()
-            .get(self.resume.as_ref()?.selected)
+        self.picker_matches()
+            .get(self.picker.as_ref()?.selected)
             .map(|row| row.session.clone())
     }
 
     /// A failed open: the transcript keeps the error for when the picker
     /// closes, and the open picker's panel shows it now, because the
     /// panel covers the transcript's newest rows — where the error sits.
-    pub fn resume_failed(&mut self, error: &str) {
+    pub fn pick_failed(&mut self, error: &str) {
         self.push_command_error(error);
-        if let Some(pick) = self.resume.as_mut() {
+        if let Some(pick) = self.picker.as_mut() {
             pick.error = Some(error.to_string());
         }
     }
 
     /// Esc: the picker closes, and the filter goes with it.
-    pub fn close_resume(&mut self) {
-        self.resume = None;
+    pub fn close_picker(&mut self) {
+        self.picker = None;
         self.editor.clear();
     }
 
@@ -170,7 +170,7 @@ impl crate::tui::view::State {
     /// again. render() calls this every frame, and so does every key
     /// the picker handles.
     pub(crate) fn sync_resume(&mut self) {
-        let Some(pick) = self.resume.as_mut() else {
+        let Some(pick) = self.picker.as_mut() else {
             return;
         };
         if pick.filter != self.editor.text() {

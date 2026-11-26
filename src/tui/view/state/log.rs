@@ -95,7 +95,7 @@ impl super::super::State {
         // The new session is the one in use, so no picker outlives it and
         // its filter goes with it; only an open that got this far reaches
         // here, a failed one leaves the picker as it was.
-        if self.resume.take().is_some() {
+        if self.picker.take().is_some() {
             self.editor.clear();
         }
         self.entries = 0;

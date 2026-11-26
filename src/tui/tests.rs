@@ -926,7 +926,7 @@ fn the_open_popup_outranks_history_for_the_arrows() {
 /// The highlighted row of the open picker.
 fn highlighted(state: &State) -> usize {
     state
-        .resume
+        .picker
         .as_ref()
         .map(|pick| pick.selected)
         .unwrap_or(usize::MAX)
@@ -935,7 +935,7 @@ fn highlighted(state: &State) -> usize {
 /// The names of the rows the composer's filter keeps, in listing order.
 fn picker_names(state: &State) -> Vec<String> {
     state
-        .resume_matches()
+        .picker_matches()
         .iter()
         .map(|row| row.name.clone())
         .collect()
@@ -946,11 +946,11 @@ fn picker_names(state: &State) -> Vec<String> {
 #[test]
 fn the_picker_filters_the_listing_through_the_composer() {
     let mut state = state_with_history(&["prompt"]);
-    assert!(state.resume_matches().is_empty(), "closed: no rows");
-    assert!(!state.resume_open() && !state.popup_open());
+    assert!(state.picker_matches().is_empty(), "closed: no rows");
+    assert!(!state.picker_open() && !state.popup_open());
 
-    state.resume = Some(super::resume::tests::pick_for_test(3));
-    assert!(state.resume_open() && state.popup_open());
+    state.picker = Some(super::picker::tests::pick_for_test(3));
+    assert!(state.picker_open() && state.popup_open());
     state.editor.set_text("  ");
     assert_eq!(picker_names(&state), ["s00", "s01", "s02"], "listing order");
     state.editor.set_text("S02");
@@ -968,7 +968,7 @@ fn the_picker_filters_the_listing_through_the_composer() {
 #[test]
 fn the_picker_owns_the_arrows_and_keeps_its_highlight_on_a_matching_row() {
     let mut state = state_with_history(&["prompt"]);
-    state.resume = Some(super::resume::tests::pick_for_test(3));
+    state.picker = Some(super::picker::tests::pick_for_test(3));
 
     state.popup_next();
     assert_eq!(
@@ -976,26 +976,26 @@ fn the_picker_owns_the_arrows_and_keeps_its_highlight_on_a_matching_row() {
         1,
         "↓: the picker's, not the suggestion list's"
     );
-    state.resume_scroll(false, 5);
+    state.scroll_picker(false, 5);
     assert_eq!(
         highlighted(&state),
         2,
         "the wheel moves by rows, and stops at the end"
     );
-    state.resume_scroll(true, 1);
+    state.scroll_picker(true, 1);
     assert_eq!(highlighted(&state), 1);
-    state.resume_prev();
-    state.resume_prev();
+    state.picker_prev();
+    state.picker_prev();
     assert_eq!(highlighted(&state), 0, "↑: stops at the top");
 
     // A changed filter is a new list: the highlight returns to the top
     // row before any key is pressed (render syncs it every frame).
-    state.resume_next();
+    state.picker_next();
     state.editor.set_text("s");
     state.sync_resume();
     assert_eq!(highlighted(&state), 0);
     for _ in 0..5 {
-        state.resume_next();
+        state.picker_next();
     }
     assert_eq!(
         highlighted(&state),
@@ -1010,7 +1010,7 @@ fn the_picker_owns_the_arrows_and_keeps_its_highlight_on_a_matching_row() {
     assert_eq!(state.arrow(false), Arrow::SuggestNext);
     assert!(!state.suggest_open(), "the picker has the composer");
     assert!(state.popup_open());
-    state.resume_next();
+    state.picker_next();
     assert_eq!(highlighted(&state), 0, "nothing matches: nowhere to go");
 }
 
@@ -1023,60 +1023,60 @@ fn the_picker_owns_the_arrows_and_keeps_its_highlight_on_a_matching_row() {
 #[test]
 fn enter_takes_the_highlighted_session_and_closes_the_picker() {
     let mut state = state_with_history(&["prompt"]);
-    state.resume = Some(super::resume::tests::pick_for_test(3));
-    let newest = state.resume_highlighted().expect("the top row");
+    state.picker = Some(super::picker::tests::pick_for_test(3));
+    let newest = state.picker_highlighted().expect("the top row");
     assert_eq!(
         newest.id, "uuid-of-00000000",
         "no filter: the newest session"
     );
-    assert!(state.resume_open(), "Enter never discards the picker");
+    assert!(state.picker_open(), "Enter never discards the picker");
     assert!(state.popup_open());
     assert_eq!(state.editor.text(), "", "the filter stays with the picker");
 
     // The session is open: `new_session` closes the picker and takes the
     // filter with it.
     state.new_session(None, false);
-    assert!(!state.resume_open());
+    assert!(!state.picker_open());
     assert_eq!(state.editor.text(), "", "the filter goes with the picker");
     assert!(
-        state.resume_highlighted().is_none(),
+        state.picker_highlighted().is_none(),
         "closed: nothing to take"
     );
     let transcript_after_new_session = state_line_texts(&state);
 
-    state.resume = Some(super::resume::tests::pick_for_test(3));
+    state.picker = Some(super::picker::tests::pick_for_test(3));
     state.editor.set_text("s01");
     assert_eq!(
-        state.resume_highlighted().unwrap().id,
+        state.picker_highlighted().unwrap().id,
         "uuid-of-00000001",
         "the one row a filter keeps is the one that opens"
     );
-    assert!(state.resume_open(), "and the filter stays");
+    assert!(state.picker_open(), "and the filter stays");
     assert_eq!(state.editor.text(), "s01");
 
-    state.resume = Some(super::resume::tests::pick_for_test(3));
+    state.picker = Some(super::picker::tests::pick_for_test(3));
     state.editor.set_text("zzz");
     assert!(
-        state.resume_highlighted().is_none(),
+        state.picker_highlighted().is_none(),
         "a filter that keeps no row opens none"
     );
-    assert!(state.resume_open(), "nothing to open: the picker stays");
+    assert!(state.picker_open(), "nothing to open: the picker stays");
     assert_eq!(state.editor.text(), "zzz", "and so does what was typed");
     assert_eq!(
         state_line_texts(&state),
         transcript_after_new_session,
         "nothing went to the transcript: the panel's empty row says it"
     );
-    state.close_resume();
-    assert!(!state.resume_open());
+    state.close_picker();
+    assert!(!state.picker_open());
     assert_eq!(state.editor.text(), "");
 
-    state.resume = Some(super::resume::tests::pick_for_test(3));
+    state.picker = Some(super::picker::tests::pick_for_test(3));
     state.editor.set_text("s01");
-    state.close_resume();
-    assert!(!state.resume_open());
+    state.close_picker();
+    assert!(!state.picker_open());
     assert_eq!(state.editor.text(), "");
-    assert!(state.resume_matches().is_empty());
+    assert!(state.picker_matches().is_empty());
 }
 
 /// Opening the picker builds its rows from a listing: the session, its
@@ -1093,23 +1093,23 @@ fn opening_the_picker_builds_rows_from_the_listing() {
         preview: Some("first question".into()),
         path: std::path::PathBuf::from("/s/20261125-120000-a1b2c3d4.jsonl"),
     };
-    state.open_resume(vec![session], std::path::Path::new("/s"), None);
-    assert!(state.resume_open());
+    state.open_picker(vec![session], std::path::Path::new("/s"), None);
+    assert!(state.picker_open());
     assert!(state.popup_open());
     {
-        let rows = state.resume_matches();
+        let rows = state.picker_matches();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "a1b2c3d4");
         assert_eq!(rows[0].name, "first question", "no title: the preview");
         assert!(!rows[0].age.is_empty(), "aged, whatever the clock says");
     }
-    assert_eq!(state.resume_highlighted().unwrap().id, "uuid-of-a1b2c3d4");
+    assert_eq!(state.picker_highlighted().unwrap().id, "uuid-of-a1b2c3d4");
     assert!(
-        state.resume_open(),
+        state.picker_open(),
         "the picker stays until the session is open"
     );
     state.new_session(None, false);
-    assert!(!state.resume_open());
+    assert!(!state.picker_open());
 }
 
 /// The picker opens on every project's sessions. Tab narrows it to this
@@ -1118,26 +1118,26 @@ fn opening_the_picker_builds_rows_from_the_listing() {
 #[test]
 fn tab_narrows_the_picker_to_this_project_and_widens_it_back() {
     let mut state = state_with_history(&["prompt"]);
-    state.open_resume(
+    state.open_picker(
         [
-            super::resume::tests::sessions_for_test(3),
-            super::resume::tests::elsewhere_for_test(2),
+            super::picker::tests::sessions_for_test(3),
+            super::picker::tests::elsewhere_for_test(2),
         ]
         .concat(),
         std::path::Path::new("/s"),
         Some(std::path::PathBuf::from("/home/u")),
     );
     assert!(
-        state.resume_all_projects(),
+        state.session_scope_all(),
         "every project's sessions, to begin with"
     );
-    state.resume_next();
+    state.picker_next();
     assert_eq!(highlighted(&state), 1);
 
-    super::commands::toggle_resume_scope(&mut state);
-    assert!(!state.resume_all_projects());
+    super::commands::toggle_session_scope(&mut state);
+    assert!(!state.session_scope_all());
     assert!(
-        state.resume_open() && state.popup_open(),
+        state.picker_open() && state.popup_open(),
         "still the picker, with the composer"
     );
     assert_eq!(
@@ -1158,22 +1158,22 @@ fn tab_narrows_the_picker_to_this_project_and_widens_it_back() {
 
     // The filter applies across the scope change, to the directory too.
     state.editor.set_text("wt01");
-    super::commands::toggle_resume_scope(&mut state);
-    assert!(state.resume_all_projects());
+    super::commands::toggle_session_scope(&mut state);
+    assert!(state.session_scope_all());
     assert_eq!(
         picker_names(&state),
         ["a01"],
         "a worktree's name narrows to it"
     );
     let directories: Vec<&str> = state
-        .resume_matches()
+        .picker_matches()
         .iter()
         .map(|row| row.project.as_deref().unwrap_or(""))
         .collect();
     assert_eq!(directories, ["~/repo/.worktrees/wt01"]);
     assert_eq!(state.pending_resume.len(), 5);
-    super::commands::toggle_resume_scope(&mut state);
-    assert!(!state.resume_all_projects());
+    super::commands::toggle_session_scope(&mut state);
+    assert!(!state.session_scope_all());
     assert!(
         picker_names(&state).is_empty(),
         "this project's rows are not in that worktree"
@@ -1188,28 +1188,31 @@ fn tab_narrows_the_picker_to_this_project_and_widens_it_back() {
 #[test]
 fn the_pickers_scope_can_be_empty_and_the_panel_says_why() {
     let mut state = state_with_history(&["prompt"]);
-    assert!(!state.resume_scope_empty(), "closed: no scope at all");
+    assert!(!state.session_scope_empty(), "closed: no scope at all");
     // Nothing filed in this directory: only another project's sessions.
-    state.open_resume(
-        super::resume::tests::elsewhere_for_test(2),
+    state.open_picker(
+        super::picker::tests::elsewhere_for_test(2),
         std::path::Path::new("/s"),
         Some(std::path::PathBuf::from("/home/u")),
     );
-    assert!(!state.resume_scope_empty(), "the wide listing is not empty");
-    state.resume_narrow();
     assert!(
-        state.resume_scope_empty(),
+        !state.session_scope_empty(),
+        "the wide listing is not empty"
+    );
+    state.session_scope_this_directory();
+    assert!(
+        state.session_scope_empty(),
         "a directory with no sessions is empty, whatever the filter keeps"
     );
     state.editor.set_text("a01");
     assert!(
-        state.resume_scope_empty(),
+        state.session_scope_empty(),
         "even a filter that would match the wide listing"
     );
-    state.resume_widen();
-    assert!(!state.resume_scope_empty(), "the wide listing is not");
-    state.close_resume();
-    assert!(!state.resume_scope_empty(), "and closed: no scope at all");
+    state.session_scope_all_directories();
+    assert!(!state.session_scope_empty(), "the wide listing is not");
+    state.close_picker();
+    assert!(!state.session_scope_empty(), "and closed: no scope at all");
 }
 
 /// A failed open is the panel's own row: the transcript keeps it for
@@ -1218,9 +1221,9 @@ fn the_pickers_scope_can_be_empty_and_the_panel_says_why() {
 #[test]
 fn a_failed_open_says_its_error_in_the_pickers_panel() {
     let mut state = state_with_history(&["prompt"]);
-    state.resume_failed("boom");
+    state.pick_failed("boom");
     assert!(
-        !state.resume_open(),
+        !state.picker_open(),
         "nothing to store in when the picker is closed"
     );
     assert!(
@@ -1229,9 +1232,9 @@ fn a_failed_open_says_its_error_in_the_pickers_panel() {
         state_line_texts(&state)
     );
 
-    state.resume = Some(super::resume::tests::pick_for_test(3));
-    state.resume_failed("boom");
-    let pick = state.resume.as_ref().unwrap();
+    state.picker = Some(super::picker::tests::pick_for_test(3));
+    state.pick_failed("boom");
+    let pick = state.picker.as_ref().unwrap();
     assert_eq!(pick.error.as_deref(), Some("boom"), "stored in the picker");
     assert!(
         state_line_texts(&state).iter().any(|l| l == "✗ boom"),
@@ -1241,18 +1244,18 @@ fn a_failed_open_says_its_error_in_the_pickers_panel() {
     state.editor.set_text("s01");
     state.sync_resume();
     assert!(
-        state.resume.as_ref().unwrap().error.is_none(),
+        state.picker.as_ref().unwrap().error.is_none(),
         "a changed filter is a new list: the error goes with the old one"
     );
 
-    state.resume_failed("boom");
+    state.pick_failed("boom");
     assert_eq!(
-        state.resume.as_ref().unwrap().error.as_deref(),
+        state.picker.as_ref().unwrap().error.as_deref(),
         Some("boom")
     );
-    state.resume_widen();
+    state.session_scope_all_directories();
     assert!(
-        state.resume.as_ref().unwrap().error.is_none(),
+        state.picker.as_ref().unwrap().error.is_none(),
         "a scope change is a new list too"
     );
 }
@@ -1301,10 +1304,10 @@ fn ctrl_c_cancels_a_run_clears_a_draft_and_only_then_quits() {
 
     // An open picker is something to cancel before the TUI is: one press
     // closes it, filter and all, and the next press is an idle one.
-    state.resume = Some(super::resume::tests::pick_for_test(3));
+    state.picker = Some(super::picker::tests::pick_for_test(3));
     state.editor.set_text("s01");
     assert_eq!(state.interrupt(), Cancel::PickerClosed);
-    assert!(!state.resume_open());
+    assert!(!state.picker_open());
     assert_eq!(state.editor.text(), "");
     assert_eq!(state.interrupt(), Cancel::Quit);
 }

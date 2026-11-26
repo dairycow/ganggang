@@ -341,9 +341,9 @@ fn the_suggestion_popup_is_a_panel_of_its_own() {
 #[test]
 fn the_resume_picker_is_a_window_that_follows_the_highlight() {
     let (mut terminal, mut state) = fresh(80, 24);
-    let mut pick = super::resume::tests::pick_for_test(30);
+    let mut pick = super::picker::tests::pick_for_test(30);
     pick.selected = 25;
-    state.resume = Some(pick);
+    state.picker = Some(pick);
     draw(&mut terminal, &mut state);
 
     // An empty draft is a three-row composer over a one-row footer, so
@@ -383,7 +383,7 @@ fn the_resume_picker_is_a_window_that_follows_the_highlight() {
     }
 
     // Back at the top, the window is anchored there.
-    state.resume.as_mut().unwrap().selected = 0;
+    state.picker.as_mut().unwrap().selected = 0;
     draw(&mut terminal, &mut state);
     let text = screen(&terminal);
     assert!(row(&terminal, 0).contains("s00"), "{text}");
@@ -392,7 +392,7 @@ fn the_resume_picker_is_a_window_that_follows_the_highlight() {
 
     // A list that fits is a short panel directly above the composer, and
     // its hint has no counter.
-    state.resume = Some(super::resume::tests::pick_for_test(3));
+    state.picker = Some(super::picker::tests::pick_for_test(3));
     draw(&mut terminal, &mut state);
     let text = screen(&terminal);
     assert!(row(&terminal, 16).contains("s00"), "{text}");
@@ -409,11 +409,11 @@ fn the_resume_picker_is_a_window_that_follows_the_highlight() {
     // Every project's sessions: each row shows its session's directory
     // in the model's place, and the hint offers the way back to this
     // project's. Five rows make a panel six high, its first row at 14.
-    state.resume = Some(super::resume::ResumePick::new(
-        super::resume::tests::sessions_for_test(3),
+    state.picker = Some(super::picker::Picker::new(
+        super::picker::tests::sessions_for_test(3),
         [
-            super::resume::tests::sessions_for_test(3),
-            super::resume::tests::elsewhere_for_test(2),
+            super::picker::tests::sessions_for_test(3),
+            super::picker::tests::elsewhere_for_test(2),
         ]
         .concat(),
         Some(std::path::Path::new("/home/u")),
@@ -435,7 +435,7 @@ fn the_resume_picker_is_a_window_that_follows_the_highlight() {
     );
     assert!(row(&terminal, 19).contains("Tab: this directory"), "{text}");
     // And back again.
-    state.resume_narrow();
+    state.session_scope_this_directory();
     draw(&mut terminal, &mut state);
     let text = screen(&terminal);
     assert!(row(&terminal, 16).contains("s00"), "{text}");
@@ -466,17 +466,17 @@ fn the_resume_picker_is_a_window_that_follows_the_highlight() {
 
     // Tab into a directory with no sessions: its own empty row, over a
     // hint that offers the wider listing.
-    state.resume = Some(super::resume::ResumePick::new(
+    state.picker = Some(super::picker::Picker::new(
         Vec::new(),
         [
-            super::resume::tests::sessions_for_test(3),
-            super::resume::tests::elsewhere_for_test(2),
+            super::picker::tests::sessions_for_test(3),
+            super::picker::tests::elsewhere_for_test(2),
         ]
         .concat(),
         Some(std::path::Path::new("/home/u")),
     ));
     state.editor.clear();
-    state.resume_narrow();
+    state.session_scope_this_directory();
     draw(&mut terminal, &mut state);
     let text = screen(&terminal);
     assert_eq!(
@@ -492,9 +492,9 @@ fn the_resume_picker_is_a_window_that_follows_the_highlight() {
     // A failed open says its error on the panel's last row, in the hint
     // row's place; a changed filter is a new list, and brings the hint
     // back.
-    state.resume = Some(super::resume::tests::pick_for_test(3));
+    state.picker = Some(super::picker::tests::pick_for_test(3));
     state.editor.clear();
-    state.resume_failed("boom");
+    state.pick_failed("boom");
     draw(&mut terminal, &mut state);
     let text = screen(&terminal);
     assert_eq!(
@@ -651,16 +651,16 @@ fn degenerate_terminals_do_not_panic() {
     // The picker too, over a list longer than any of them can show.
     for (w, h) in [(1, 1), (4, 2), (5, 3), (80, 1), (1, 40), (3, 6)] {
         let (mut terminal, mut state) = fresh(w, h);
-        state.resume = Some(super::resume::tests::pick_for_test(30));
-        state.resume_next();
+        state.picker = Some(super::picker::tests::pick_for_test(30));
+        state.picker_next();
         state.editor.set_text("s");
         draw(&mut terminal, &mut state);
     }
     // And the picker's empty scope, with no row at all to show.
     for (w, h) in [(1, 1), (4, 2), (5, 3), (80, 1), (1, 40), (3, 6)] {
         let (mut terminal, mut state) = fresh(w, h);
-        state.resume = Some(super::resume::tests::pick_for_test(0));
-        state.resume_next();
+        state.picker = Some(super::picker::tests::pick_for_test(0));
+        state.picker_next();
         draw(&mut terminal, &mut state);
     }
 }

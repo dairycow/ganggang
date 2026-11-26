@@ -4,14 +4,14 @@
 //! unit-tested without a terminal.
 
 mod model;
-mod resume;
+mod session;
 mod think;
 
-// `Command::Resume` also calls `resume::resolve_session_prefix` directly.
+// `Command::Resume` also calls `session::resolve_session_prefix` directly.
 /// The event loop calls these three (mod.rs answers
-/// `UiEvent::SessionsListed` with `resume_listed` and the picker's Tab
-/// with `toggle_resume_scope`).
-pub(super) use resume::{resume_listed, resume_picked, toggle_resume_scope};
+/// `UiEvent::SessionsListed` with `sessions_listed` and the picker's Tab
+/// with `toggle_session_scope`).
+pub(super) use session::{open_session, sessions_listed, toggle_session_scope};
 
 #[cfg(test)]
 use think::parse_think_args;
@@ -278,9 +278,9 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
                     .get(n - 1)
                     .cloned()
                     .ok_or_else(|| anyhow::anyhow!("{n} is not in the last /resume listing"))?,
-                _ => resume::resolve_session_prefix(cwd, &choice)?,
+                _ => session::resolve_session_prefix(cwd, &choice)?,
             };
-            resume_picked(
+            open_session(
                 chosen,
                 CmdCtx {
                     state,
