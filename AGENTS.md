@@ -1,6 +1,6 @@
 # ganggang: contributor & agent guide
 
-A small agentic harness in Rust (`gg`). `TASKS.md` tracks the build.
+A small agentic harness in Rust (`gg`).
 
 ## Before every commit
 

@@ -10,7 +10,7 @@ homepage = "https://github.com/dairycow/ganggang"
 documentation = "https://dairycow.github.io/ganggang/"
 keywords = ["agent", "ai", "cli", "tui"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = [".cargo/", ".claude/", ".github/", ".review-*.md", "AGENTS.md", ".agents/", "docs/", "scripts/", "TASKS.md", "GAP-ANALYSIS.md"]
+exclude = [".cargo/", ".claude/", ".github/", ".review-*.md", "AGENTS.md", ".agents/", "docs/", "scripts/", "GAP-ANALYSIS.md"]
 
 [[bin]]
 name = "gg"

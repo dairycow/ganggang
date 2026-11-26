@@ -77,8 +77,7 @@ The 2026-11-23 audit's "would bite you in week one" list has shipped:
 
 ## Deliberately non-scope
 
-`TASKS.md` lists the non-scope. These are the ones an everyday driver
-will feel:
+These are the ones an everyday driver will feel:
 
 - **MCP/plugins.** Every integration is a code change and a rebuild.
 - **Images, web search/fetch, subagents/plan mode, git tooling, LSP
