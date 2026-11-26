@@ -9,6 +9,9 @@ use ratatui::text::Line as UiLine;
 use super::*;
 use crate::agent::session::io::SessionFile;
 use crate::tui::history::History;
+use crate::tui::picker::sessions::{
+    NAME_CAP, NAME_FLOOR, PROJECT_CAP, age, project_label, row_line, stamp_epoch, tail,
+};
 use crate::tui::theme::TRUECOLOR;
 
 /// 2026-11-25 12:00:00 UTC, as a Unix timestamp.
@@ -17,13 +20,22 @@ const NOW: i64 = 1_795_608_000;
 /// A session filed as `<stamp>-<id>.jsonl`, with a uuid-shaped `id` that
 /// shares nothing with the id in its name (as in a real store).
 fn session(id: &str, stamp: &str, title: Option<&str>, preview: Option<&str>) -> SessionFile {
+    let mut file = other_file(id, stamp);
+    file.title = title.map(Into::into);
+    file.preview = preview.map(Into::into);
+    file
+}
+
+/// A session filed as `<stamp>-<id>.jsonl`, with a uuid-shaped `id` that
+/// shares nothing with the id in its name (as in a real store).
+fn other_file(id: &str, stamp: &str) -> SessionFile {
     SessionFile {
         id: format!("f3e2d1c0-{id}-4a7b-9c1d-0123456789ab"),
         timestamp: String::new(),
         model: "strata/qwen3.8".into(),
         cwd: "/tmp/x".into(),
-        title: title.map(Into::into),
-        preview: preview.map(Into::into),
+        title: None,
+        preview: None,
         path: PathBuf::from(format!("/home/u/.gg/sessions/-tmp-x/{stamp}-{id}.jsonl")),
     }
 }
@@ -33,11 +45,15 @@ fn row(id: &str, title: Option<&str>, preview: Option<&str>) -> SessionRow {
 }
 
 /// The ids of the rows a filter keeps.
-fn ids<'a>(rows: &[&'a SessionRow]) -> Vec<&'a str> {
-    rows.iter().map(|row| row.id.as_str()).collect()
+fn ids<'a>(rows: &[&'a Row]) -> Vec<&'a str> {
+    rows.iter()
+        .map(|row| match row {
+            Row::Session(session) => session.id.as_str(),
+        })
+        .collect()
 }
 
-fn keeps<'a>(rows: &'a [SessionRow], filter: &str) -> Vec<&'a str> {
+fn keeps<'a>(rows: &'a [Row], filter: &str) -> Vec<&'a str> {
     ids(&matching(rows, filter))
 }
 
@@ -126,6 +142,44 @@ fn a_name_is_one_line_and_is_cut_to_the_row() {
 }
 
 #[test]
+fn a_rows_search_text_is_the_id_the_uuid_the_name_the_preview_the_model_and_the_directory() {
+    let row = row(
+        "a1b2c3d4",
+        Some("Fix the parser"),
+        Some("the parser breaks on…"),
+    );
+    let wrapped = Row::Session(row);
+    let text = wrapped.search_text();
+    for word in [
+        "a1b2c3d4",
+        "f3e2d1c0",
+        "fix the parser",
+        "the parser breaks on…",
+        "strata/qwen3.8",
+        "/tmp/x",
+    ] {
+        assert!(
+            text.contains(word),
+            "{word:?} is in the search text: {text}"
+        );
+    }
+    assert_eq!(text, text.to_lowercase(), "lower-cased");
+}
+
+#[test]
+fn two_rows_are_the_same_row_when_they_are_the_same_session() {
+    let session = session("a1b2c3d4", "20261125-090000", Some("Fix the parser"), None);
+    let one = Row::Session(SessionRow::new(session.clone(), NOW));
+    let same = Row::Session(SessionRow::new(session.clone(), NOW + 60));
+    let other = Row::Session(SessionRow::new(
+        other_file("b2c3d4e5", "20261125-090000"),
+        NOW,
+    ));
+    assert!(one.same_row(&same), "the same session, whatever the age");
+    assert!(!one.same_row(&other), "another session is another row");
+}
+
+#[test]
 fn ages_read_minutes_hours_days_then_the_date() {
     let age_of = |stamp: &str| age(Some(stamp), NOW);
     assert_eq!(age_of("20261125-115959"), "just now");
@@ -195,14 +249,14 @@ fn a_stamp_that_is_not_a_stamp_ages_nothing() {
 
 #[test]
 fn a_filter_keeps_the_rows_where_every_word_matches() {
-    let rows = [
-        row(
+    let rows: [Row; 3] = [
+        Row::Session(row(
             "a1b2c3d4",
             Some("Fix the parser"),
             Some("the parser breaks on…"),
-        ),
-        row("b2c3d4e5", None, Some("write tests for the CLI")),
-        row("c3d4e5f6", None, None),
+        )),
+        Row::Session(row("b2c3d4e5", None, Some("write tests for the CLI"))),
+        Row::Session(row("c3d4e5f6", None, None)),
     ];
     assert_eq!(
         keeps(&rows, ""),
@@ -341,15 +395,11 @@ fn an_all_projects_row_shows_the_directory_in_the_model_s_place() {
 
     // The directory is among what a filter matches, in both views: a
     // filter typed in one view keeps matching the same rows after Tab.
-    assert_eq!(
-        keeps(std::slice::from_ref(&here), "projects"),
-        vec!["a1b2c3d4"]
-    );
-    assert_eq!(
-        keeps(std::slice::from_ref(&anywhere), "PARSER feature-x"),
-        vec!["a1b2c3d4"]
-    );
-    assert!(keeps(std::slice::from_ref(&anywhere), "main").is_empty());
+    let here = [Row::Session(here)];
+    let anywhere = [Row::Session(anywhere)];
+    assert_eq!(keeps(&here, "projects"), vec!["a1b2c3d4"]);
+    assert_eq!(keeps(&anywhere, "PARSER feature-x"), vec!["a1b2c3d4"]);
+    assert!(keeps(&anywhere, "main").is_empty());
 }
 
 #[test]
@@ -469,8 +519,8 @@ fn the_picker_opens_on_every_project_and_narrows_to_this_one() {
     let everywhere = [sessions_for_test(3), elsewhere_for_test(2)].concat();
     let mut pick = Picker::new(here, everywhere, Some(Path::new("/home/u")));
 
-    // It opens on every project's sessions, each naming its directory,
-    // this project's included.
+    // It opens on every directory's sessions, each naming its directory,
+    // this directory's included.
     assert!(pick.all_directories());
     let uuids: Vec<&str> = pick
         .rows()
@@ -499,7 +549,7 @@ fn the_picker_opens_on_every_project_and_narrows_to_this_one() {
 
     pick.narrow();
     assert!(!pick.all_directories());
-    assert_eq!(pick.rows().len(), 3, "this project's sessions");
+    assert_eq!(pick.rows().len(), 3, "this directory's sessions");
     assert!(
         pick.rows().iter().all(|row| row.project.is_none()),
         "with the model where the directory was"
@@ -518,22 +568,22 @@ fn the_picker_opens_on_every_project_and_narrows_to_this_one() {
 #[test]
 fn the_hint_names_the_keys_the_scope_and_the_place_in_a_long_list() {
     assert_eq!(
-        row_text(&hint_row(&TRUECOLOR, 80, false, None)),
+        row_text(&hint_row(&TRUECOLOR, 80, Some(false), None)),
         " ↑↓ move · type filters · Tab: all directories · Enter opens · Esc closes"
     );
     assert_eq!(
-        row_text(&hint_row(&TRUECOLOR, 80, true, None)),
+        row_text(&hint_row(&TRUECOLOR, 80, Some(true), None)),
         " ↑↓ move · type filters · Tab: this directory · Enter opens · Esc closes",
         "the hint names the scope Tab switches TO"
     );
-    let long = row_text(&hint_row(&TRUECOLOR, 80, false, Some((2, 57))));
+    let long = row_text(&hint_row(&TRUECOLOR, 80, Some(false), Some((2, 57))));
     assert!(long.starts_with(" ↑↓ move 3/57 · "), "{long}");
     assert!(long.ends_with("Esc closes"), "{long}");
     assert!(
         long.chars().count() <= 80,
         "it all fits an 80-column row: {long}"
     );
-    let three_digits = row_text(&hint_row(&TRUECOLOR, 80, false, Some((104, 230))));
+    let three_digits = row_text(&hint_row(&TRUECOLOR, 80, Some(false), Some((104, 230))));
     assert!(
         three_digits.starts_with(" ↑↓ move 105/230 · "),
         "{three_digits}"
@@ -543,11 +593,11 @@ fn the_hint_names_the_keys_the_scope_and_the_place_in_a_long_list() {
         "a three-digit total still fits: {three_digits}"
     );
     assert_eq!(
-        row_text(&hint_row(&TRUECOLOR, 10, false, Some((2, 57)))),
+        row_text(&hint_row(&TRUECOLOR, 10, Some(false), Some((2, 57)))),
         " ↑↓ move 3",
         "narrow: the keys come first, the rest is cut"
     );
-    assert_eq!(row_text(&hint_row(&TRUECOLOR, 0, true, None)), "");
+    assert_eq!(row_text(&hint_row(&TRUECOLOR, 0, Some(true), None)), "");
 }
 
 /// The panel's one row of explanation when the list has nothing to
@@ -642,16 +692,11 @@ pub(in crate::tui) fn sessions_for_test(n: usize) -> Vec<SessionFile> {
 /// aged against a fixed instant, showing this project's rows only (what
 /// Tab narrows it to). No test reads the clock or the disk.
 pub(in crate::tui) fn pick_for_test(n: usize) -> Picker {
-    Picker {
-        here: (0..n)
+    Picker::for_test(
+        (0..n)
             .map(|i| SessionRow::new(filed_for_test(i, "uuid-of", "s"), 1_795_608_000 + 3_600))
             .collect(),
-        everywhere: Vec::new(),
-        all_directories: false,
-        selected: 0,
-        filter: String::new(),
-        error: None,
-    }
+    )
 }
 
 /// Test seam: `n` sessions of other projects, `a00`.., one worktree each
@@ -705,7 +750,9 @@ mod state_tests {
         state
             .picker_matches()
             .iter()
-            .map(|row| row.name.clone())
+            .map(|row| match row {
+                Row::Session(session) => session.name.clone(),
+            })
             .collect()
     }
 
@@ -824,7 +871,11 @@ mod state_tests {
         assert_eq!(highlighted(&state), 2, "the session it stood on, by path");
 
         // It is gone from the listing: the first row again.
+        state.editor.set_text("");
+        state.sync_picker();
         state.sessions_listed(elsewhere_for_test(1), Vec::new());
+        state.editor.set_text("/resume");
+        state.sync_picker();
         assert_eq!(names(&state), ["a00"]);
         assert_eq!(
             highlighted(&state),
@@ -1008,5 +1059,45 @@ mod state_tests {
             3,
             "the listing stays until the scan replaces it"
         );
+    }
+}
+
+#[cfg(test)]
+mod trigger_tests {
+    use super::*;
+
+    /// The trigger, as `(list, filter)` where one is.
+    fn of(text: &str) -> Option<(List, String)> {
+        trigger(text).map(|t| (t.list, t.filter))
+    }
+
+    #[test]
+    fn the_resume_command_opens_the_session_list_with_the_rest_as_its_filter() {
+        assert_eq!(
+            of("/resume"),
+            Some((List::Sessions, String::new())),
+            "the bare command: an empty filter"
+        );
+        assert_eq!(
+            of("/resume glm fix"),
+            Some((List::Sessions, "glm fix".into())),
+            "every word after the command is the filter"
+        );
+        assert_eq!(
+            of("/resume   "),
+            Some((List::Sessions, String::new())),
+            "trailing whitespace is no filter"
+        );
+        for text in [
+            "/resum",
+            "/resumex",
+            "/resume:x",
+            "resume",
+            "hello there",
+            "/model",
+        ] {
+            assert_eq!(of(text), None, "{text:?} opens nothing");
+        }
+        assert_eq!(of(""), None, "an empty composer opens nothing");
     }
 }

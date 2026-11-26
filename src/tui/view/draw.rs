@@ -282,12 +282,7 @@ fn draw_picker(frame: &mut Frame, state: &mut State, areas: Areas) {
     let start = composer::scrolled_row(selected, shown, rows.len());
     let mut panel = Vec::with_capacity(height as usize);
     for (i, row) in rows.iter().enumerate().skip(start).take(shown) {
-        panel.push(super::super::picker::row_line(
-            &palette,
-            row,
-            i == selected,
-            area.width as usize,
-        ));
+        panel.push(row.line(&palette, i == selected, area.width as usize));
     }
     let at = (rows.len() > shown).then_some((selected, rows.len()));
     panel.push(picker_last_row(state, &palette, area.width as usize, at));
@@ -309,7 +304,7 @@ fn picker_last_row(
         .and_then(|pick| pick.error.as_deref())
         .map(|error| crate::tui::picker::error_row(palette, error, width))
         .unwrap_or_else(|| {
-            crate::tui::picker::hint_row(palette, width, state.session_scope_all(), at)
+            crate::tui::picker::hint_row(palette, width, Some(state.session_scope_all()), at)
         })
 }
 

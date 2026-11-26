@@ -446,6 +446,7 @@ fn the_resume_list_is_a_window_that_follows_the_highlight() {
         super::picker::tests::elsewhere_for_test(2),
     ]
     .concat();
+    state.close_picker();
     open_list(&mut terminal, &mut state, everywhere, "/resume", 0);
     let text = screen(&terminal);
     assert!(row(&terminal, 14).contains("s00"), "{text}");
@@ -494,6 +495,7 @@ fn the_resume_list_is_a_window_that_follows_the_highlight() {
 
     // Tab into a directory with no sessions: its own empty row, over a
     // hint that offers the wider listing.
+    state.close_picker();
     open_list(
         &mut terminal,
         &mut state,
@@ -517,6 +519,7 @@ fn the_resume_list_is_a_window_that_follows_the_highlight() {
     // A failed open says its error on the panel's last row, in the hint
     // row's place; a changed filter is a new list, and brings the hint
     // back.
+    state.close_picker();
     open_list(
         &mut terminal,
         &mut state,

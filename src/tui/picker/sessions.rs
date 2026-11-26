@@ -1,17 +1,17 @@
-//! The session picker's rows: what one session's row says, which rows a
-//! filter keeps, and the panel's rows. Pure, like
+//! The session picker's rows: what one session's row says, and one
+//! session's row as the panel draws it. Pure, like
 //! [`suggest`](super::super::suggest). [`view`](super::super::view) holds
-//! whether the picker is open, which row is highlighted and which
-//! directories it shows, and draws each row with the suggestion popup's
-//! own row, so the two read as one kind of thing.
+//! which list is open and which row is highlighted; the list's other
+//! rows, and the panel's own rows, are
+//! [`picker`](super::super::picker)'s.
 
 use std::path::Path;
 
-use ratatui::text::{Line as UiLine, Span};
+use ratatui::text::Line as UiLine;
 
 use crate::agent::session::io::{SessionFile, short_id};
 
-use super::super::suggest::{Suggestion, suggestion_row, take_chars};
+use super::super::suggest::{Suggestion, suggestion_row};
 use super::super::theme::Palette;
 
 /// The most of a name a row shows, when the row has the room.
@@ -50,7 +50,7 @@ pub struct SessionRow {
     pub project: Option<String>,
     /// Lower-cased id, uuid, name, preview, model and the session's
     /// directory, in both views: what a filter word matches.
-    haystack: String,
+    pub(super) haystack: String,
 }
 
 impl SessionRow {
@@ -88,106 +88,6 @@ impl SessionRow {
             haystack: haystack.to_lowercase(),
         }
     }
-}
-
-/// An open picker: every project's rows and this project's, which of the
-/// two it is showing, the highlighted row, the filter text the
-/// highlight was last built for, and the last failed open's error. A
-/// changed filter is a new list, so the highlight returns to the top row
-/// (the rule the suggestion popup keeps in its own `suggest_filter`); a
-/// scope change or a changed filter clears the error, which belongs to
-/// the rows and the filter it was reported against.
-#[derive(Debug, Clone)]
-pub struct Picker {
-    pub here: Vec<SessionRow>,
-    pub everywhere: Vec<SessionRow>,
-    pub all_directories: bool,
-    pub selected: usize,
-    pub filter: String,
-    /// The last failed open's message, for the panel's own row: the
-    /// panel covers the transcript, where the error is also kept for
-    /// when the picker closes. `None` until one fails, and cleared by a
-    /// scope change or a changed filter, which are a new list.
-    pub error: Option<String>,
-}
-
-impl Picker {
-    /// The picker over two listings of the same store, each newest first:
-    /// this project's sessions (`here`) and every project's
-    /// (`everywhere`, which includes the first). It opens showing every
-    /// project's, each row aged against the clock now and its directory
-    /// abbreviated against `home`.
-    pub fn new(here: Vec<SessionFile>, everywhere: Vec<SessionFile>, home: Option<&Path>) -> Self {
-        let now = unix_now();
-        Self {
-            here: here
-                .into_iter()
-                .map(|session| SessionRow::new(session, now))
-                .collect(),
-            everywhere: everywhere
-                .into_iter()
-                .map(|session| SessionRow::anywhere(session, now, home))
-                .collect(),
-            all_directories: true,
-            selected: 0,
-            filter: String::new(),
-            error: None,
-        }
-    }
-
-    /// The rows in view, in listing order.
-    pub fn rows(&self) -> &[SessionRow] {
-        if self.all_directories {
-            &self.everywhere
-        } else {
-            &self.here
-        }
-    }
-
-    /// Whether the picker shows every project's sessions.
-    pub fn all_directories(&self) -> bool {
-        self.all_directories
-    }
-
-    /// Every project's sessions. The filter stays, and the highlight
-    /// returns to the top row: it is a new list, and the last failed
-    /// open belonged to the old one.
-    pub fn widen(&mut self) {
-        self.all_directories = true;
-        self.selected = 0;
-        self.error = None;
-    }
-
-    /// This project's sessions. The filter stays, the highlight returns
-    /// to the top row, and a failed open's error goes with the listing it
-    /// was reported against.
-    pub fn narrow(&mut self) {
-        self.all_directories = false;
-        self.selected = 0;
-        self.error = None;
-    }
-}
-
-fn unix_now() -> i64 {
-    time::OffsetDateTime::now_utc().unix_timestamp()
-}
-
-/// The rows `filter` keeps, in listing order: every whitespace-separated
-/// word appears somewhere in the row (id, uuid, name, preview, model or
-/// directory), matched case-insensitively. An empty filter keeps them
-/// all.
-pub fn matching<'a>(rows: &'a [SessionRow], filter: &str) -> Vec<&'a SessionRow> {
-    let words: Vec<String> = filter
-        .split_whitespace()
-        .map(|word| word.to_lowercase())
-        .collect();
-    rows.iter()
-        .filter(|row| {
-            words
-                .iter()
-                .all(|word| row.haystack.contains(word.as_str()))
-        })
-        .collect()
 }
 
 /// How long before `now` (a Unix timestamp) the file-name stamp
@@ -390,50 +290,4 @@ pub(in crate::tui) fn row_line(
         description,
     };
     suggestion_row(palette, &suggestion, selected, width)
-}
-
-/// The panel's one row when the list is open but has nothing to show:
-/// `reason` says why, in the panel's own ground — the transcript, which
-/// the panel covers, has nothing newer to say it in.
-pub(in crate::tui) fn empty_row(palette: &Palette, reason: &str, width: usize) -> UiLine<'static> {
-    UiLine::from(Span::styled(
-        take_chars(&format!(" {reason}"), width),
-        palette.popup_hint(),
-    ))
-}
-
-/// The panel's last row after a failed open: the error itself, in the
-/// warning's colour, in place of the hint — the panel covers the
-/// transcript, where the error is also kept for when the picker closes.
-pub(in crate::tui) fn error_row(palette: &Palette, error: &str, width: usize) -> UiLine<'static> {
-    UiLine::from(Span::styled(
-        take_chars(&format!("⚠ {error}"), width),
-        palette.popup().fg(palette.warn),
-    ))
-}
-
-/// The picker's last row: how to drive it, which scope Tab switches to,
-/// and, when the list is longer than the panel, where the highlight
-/// stands (`3/57`). The counter stands right after the move keys it
-/// describes, not at the end: the keys and the scope survive a narrow
-/// row, where the tail is what gets cut.
-pub(in crate::tui) fn hint_row(
-    palette: &Palette,
-    width: usize,
-    all_directories: bool,
-    at: Option<(usize, usize)>,
-) -> UiLine<'static> {
-    let scope = if all_directories {
-        "Tab: this directory"
-    } else {
-        "Tab: all directories"
-    };
-    let mut hint = String::from(" ↑↓ move");
-    if let Some((selected, total)) = at {
-        hint.push_str(&format!(" {}/{}", selected + 1, total));
-    }
-    hint.push_str(&format!(
-        " · type filters · {scope} · Enter opens · Esc closes"
-    ));
-    UiLine::from(Span::styled(take_chars(&hint, width), palette.popup_hint()))
 }

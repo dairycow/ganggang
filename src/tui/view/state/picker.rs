@@ -5,16 +5,16 @@
 //! are [`picker`](crate::tui::picker)'s; the trigger is its.
 
 use crate::agent::session::io::SessionFile;
-use crate::tui::picker::{Picker, SessionRow, matching, trigger};
+use crate::tui::picker::{Pick, Picker, Row, matching, trigger};
 
 impl crate::tui::view::State {
-    /// Build the list's rows from the state's listing cache, the way the
-    /// list opens: the session gg is in now is dropped (reopening it would
-    /// only reload it from disk), and the sessions filed under
-    /// `sessions.dir` are this directory's. It opens even when nothing is
-    /// left: an empty list is a panel row now, not a transcript line. The
-    /// filter is the trigger's filter, not the whole composer text.
-    fn open_picker_from_listing(&mut self) {
+    /// The session list's rows, built from the state's listing cache: the
+    /// session gg is in now is dropped (reopening it would only reload it
+    /// from disk), and the sessions filed under `sessions.dir` are this
+    /// directory's. Every directory's scope, an empty filter and the top
+    /// row highlighted, as a list opens; even when nothing is left, since
+    /// an empty list is a panel row now, not a transcript line.
+    fn session_list(&self) -> Picker {
         let sessions: Vec<SessionFile> = self
             .sessions
             .everywhere
@@ -36,10 +36,14 @@ impl crate::tui::view::State {
         } else {
             sessions.clone()
         };
-        let mut pick = Picker::new(here, sessions, self.sessions.home.as_deref());
-        if let Some(t) = trigger(self.editor.text()) {
-            pick.filter = t.filter;
-        }
+        Picker::new(here, sessions, self.sessions.home.as_deref())
+    }
+
+    /// Open the session list from the listing cache, on the trigger's
+    /// filter: not the whole composer text.
+    fn open_picker_from_listing(&mut self) {
+        let mut pick = self.session_list();
+        pick.filter = trigger(self.editor.text()).map_or_else(String::new, |t| t.filter);
         self.picker = Some(pick);
     }
 
@@ -59,10 +63,19 @@ impl crate::tui::view::State {
     }
 
     /// The rows the open list's filter keeps, in listing order: empty
-    /// with the list closed, and when the filter matches nothing.
-    pub fn picker_matches(&self) -> Vec<&SessionRow> {
+    /// with the list closed, and when the filter matches nothing. A
+    /// listing is about a hundred rows and this runs once per frame, so
+    /// the kept rows are cloned, not borrowed.
+    pub fn picker_matches(&self) -> Vec<Row> {
         match &self.picker {
-            Some(pick) => matching(pick.rows(), &pick.filter),
+            Some(pick) => {
+                let rows: Vec<Row> = pick
+                    .rows()
+                    .iter()
+                    .map(|row| Row::Session(row.clone()))
+                    .collect();
+                matching(&rows, &pick.filter).into_iter().cloned().collect()
+            }
             None => Vec::new(),
         }
     }
@@ -150,29 +163,31 @@ impl crate::tui::view::State {
                 self.push_warning(warning);
             }
         }
-        // A listing that arrived while the list is open is its new rows:
-        // built from the cache, with the highlight kept on the session it
-        // stood on (its path, still in the new rows) or on the first row
-        // when that session is gone.
-        if self.picker.is_some() {
-            let (selected, all_directories, filter) = self
-                .picker
-                .as_ref()
-                .map_or((0, true, String::new()), |pick| {
-                    (pick.selected, pick.all_directories(), pick.filter.clone())
-                });
-            let path = self
-                .picker_matches()
-                .get(selected)
-                .map(|row| row.session.path.clone());
-            self.open_picker_from_listing();
-            if let Some(pick) = self.picker.as_mut() {
-                pick.all_directories = all_directories;
-                let rows = matching(pick.rows(), &filter);
-                pick.selected = path
-                    .as_ref()
-                    .and_then(|path| rows.iter().position(|row| row.session.path == *path))
-                    .unwrap_or(0);
+        // A listing that arrived while the list is open is its new rows,
+        // with the user's scope and filter kept, and the highlight on the
+        // session it stood on (by path, still in the new rows) or on the
+        // first row when that session is gone. The error goes with the
+        // rows it was reported against.
+        if let Some(open) = &self.picker {
+            let (every_directory, filter) = (open.all_directories(), open.filter.clone());
+            let was_on = self.picker_matches().get(open.selected).cloned();
+            let mut pick = self.session_list();
+            if every_directory {
+                pick.widen();
+            } else {
+                pick.narrow();
+            }
+            pick.filter = filter;
+            self.picker = Some(pick);
+            // Where the row it stood on is now, among the rows the kept
+            // filter still shows; the first row when it is gone.
+            let at = was_on.as_ref().and_then(|was| {
+                self.picker_matches()
+                    .iter()
+                    .position(|row| row.same_row(was))
+            });
+            if let (Some(pick), Some(at)) = (self.picker.as_mut(), at) {
+                pick.selected = at;
             }
         }
     }
@@ -211,18 +226,21 @@ impl crate::tui::view::State {
         };
     }
 
-    /// Enter: the highlighted session, as a clone for the loop to open.
-    /// The list stays open, filter and all: Enter never discards it, so
-    /// a failed open leaves the user where they were, with the panel's
-    /// error row saying why. The caller closes it once the session is
-    /// open (or the list closes of its own Esc); `None` when the list is
-    /// closed, or when the filter keeps no row — which the panel's empty
-    /// row says, so nothing goes to the transcript.
-    pub fn picker_highlighted(&mut self) -> Option<SessionFile> {
+    /// Enter: what the highlighted row does. The list stays open, filter
+    /// and all: Enter never discards it, so a failed open leaves the user
+    /// where they were, with the panel's error row saying why. The caller
+    /// closes it once the session is open (or the list closes of its own
+    /// Esc); `None` when the list is closed, or when the filter keeps no
+    /// row — which the panel's empty row says, so nothing goes to the
+    /// transcript.
+    pub fn picker_action(&mut self) -> Option<Pick> {
         self.sync_picker();
-        self.picker_matches()
-            .get(self.picker.as_ref()?.selected)
-            .map(|row| row.session.clone())
+        let selected = self.picker.as_ref()?.selected;
+        let rows = self.picker_matches();
+        let row = rows.get(selected)?;
+        match row {
+            Row::Session(_) => Some(Pick::Open(row.session().clone())),
+        }
     }
 
     /// A failed open: the transcript keeps the error for when the list
@@ -254,7 +272,15 @@ impl crate::tui::view::State {
             self.picker = None;
             return;
         };
-        if self.picker.is_none() {
+        // No open list, or one for another kind of list: this trigger's
+        // list opens from the cache (even when the cache is empty: an
+        // empty list is a panel row, not a transcript line) and asks for
+        // a scan.
+        if self
+            .picker
+            .as_ref()
+            .is_none_or(|open| open.list != trigger.list)
+        {
             self.open_picker_from_listing();
             self.request_session_scan();
         }

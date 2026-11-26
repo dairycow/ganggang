@@ -8,6 +8,7 @@ use super::agent_task::{UiEvent, apply, usage_totals};
 use super::footer::Footer;
 use super::history::{Arrow, History};
 use super::keys::{KeyAction, classify};
+use super::picker::{Pick, Row};
 use super::transcript::LineKind;
 use super::view::{Cancel, State};
 use crate::agent::session::{Entry, Message, Role};
@@ -937,7 +938,9 @@ fn picker_names(state: &State) -> Vec<String> {
     state
         .picker_matches()
         .iter()
-        .map(|row| row.name.clone())
+        .map(|row| match row {
+            Row::Session(row) => row.name.clone(),
+        })
         .collect()
 }
 
@@ -1022,9 +1025,12 @@ fn the_list_owns_the_arrows_and_keeps_its_highlight_on_a_matching_row() {
 #[test]
 fn enter_takes_the_highlighted_session_and_closes_the_list() {
     let mut state = list_on(super::picker::tests::sessions_for_test(3), "/resume");
-    let newest = state.picker_highlighted().expect("the top row");
+    let newest = state.picker_action().expect("the top row");
     assert_eq!(
-        newest.id, "uuid-of-00000000",
+        match &newest {
+            Pick::Open(session) => &session.id,
+        },
+        "uuid-of-00000000",
         "no filter: the listing's first session"
     );
     assert!(state.picker_open(), "Enter never discards the list");
@@ -1040,16 +1046,15 @@ fn enter_takes_the_highlighted_session_and_closes_the_list() {
     state.new_session(None, false);
     assert!(!state.picker_open());
     assert_eq!(state.editor.text(), "", "the text goes with the list");
-    assert!(
-        state.picker_highlighted().is_none(),
-        "closed: nothing to take"
-    );
+    assert!(state.picker_action().is_none(), "closed: nothing to take");
     let transcript_after_new_session = state_line_texts(&state);
 
     state.editor.set_text("/resume s01");
     state.sync_picker();
     assert_eq!(
-        state.picker_highlighted().unwrap().id,
+        match state.picker_action().expect("the one row") {
+            Pick::Open(session) => session.id,
+        },
         "uuid-of-00000001",
         "the one row a filter keeps is the one that opens"
     );
@@ -1059,7 +1064,7 @@ fn enter_takes_the_highlighted_session_and_closes_the_list() {
     state.editor.set_text("/resume zzz");
     state.sync_picker();
     assert!(
-        state.picker_highlighted().is_none(),
+        state.picker_action().is_none(),
         "a filter that keeps no row opens none"
     );
     assert!(state.picker_open(), "nothing to open: the list stays");
@@ -1105,11 +1110,23 @@ fn opening_the_list_builds_rows_from_the_listing() {
     {
         let rows = state.picker_matches();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, "a1b2c3d4");
-        assert_eq!(rows[0].name, "first question", "no title: the preview");
-        assert!(!rows[0].age.is_empty(), "aged, whatever the clock says");
+        let row = &rows[0];
+        assert_eq!(row.session().id, "uuid-of-a1b2c3d4");
+        assert!(
+            matches!(row, Row::Session(row) if row.name == "first question"),
+            "no title: the preview: {row:?}"
+        );
+        assert!(
+            matches!(row, Row::Session(row) if !row.age.is_empty()),
+            "aged, whatever the clock says"
+        );
     }
-    assert_eq!(state.picker_highlighted().unwrap().id, "uuid-of-a1b2c3d4");
+    assert_eq!(
+        match state.picker_action().expect("the one row") {
+            Pick::Open(session) => session.id,
+        },
+        "uuid-of-a1b2c3d4"
+    );
     assert!(
         state.picker_open(),
         "the list stays until the session is open"
@@ -1131,13 +1148,24 @@ fn the_cached_listing_is_the_lists_rows() {
     let state = list_on(sessions.clone(), "/resume");
     let rows = state.picker_matches();
     assert_eq!(
-        rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+        rows.iter()
+            .map(|row| match row {
+                Row::Session(session) => session.id.as_str(),
+            })
+            .collect::<Vec<_>>(),
         ["00000000", "00000001", "00000002", "00000000", "00000001"],
         "the listing's sessions, in its order"
     );
     for (row, session) in rows.iter().zip(sessions.iter()) {
-        assert_eq!(row.session.path, session.path, "the row keeps the session");
-        assert!(!row.age.is_empty(), "aged against now");
+        assert_eq!(
+            row.session().path,
+            session.path,
+            "the row keeps the session"
+        );
+        assert!(
+            matches!(row, Row::Session(row) if !row.age.is_empty()),
+            "aged against now"
+        );
     }
 }
 
@@ -1186,10 +1214,12 @@ fn tab_narrows_the_list_to_this_directory_and_widens_it_back() {
         ["a01"],
         "a worktree's name narrows to it"
     );
-    let directories: Vec<&str> = state
-        .picker_matches()
+    let rows = state.picker_matches();
+    let directories: Vec<&str> = rows
         .iter()
-        .map(|row| row.project.as_deref().unwrap_or(""))
+        .map(|row| match row {
+            Row::Session(session) => session.project.as_deref().unwrap_or(""),
+        })
         .collect();
     assert_eq!(directories, ["~/repo/.worktrees/wt01"]);
     state.toggle_session_scope();

@@ -425,7 +425,9 @@ pub async fn run(
                         // the error in the picker's panel, filter and
                         // all.
                         KeyAction::Send if state.picker_open() && !state.busy => {
-                            if let Some(session) = state.picker_highlighted() {
+                            if let Some(crate::tui::picker::Pick::Open(session)) =
+                                state.picker_action()
+                            {
                                 let ctx = shared.ctx(
                                     &mut state,
                                     &mut input_tx,
