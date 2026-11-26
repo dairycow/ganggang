@@ -22,7 +22,11 @@ fn one_bash_call(command: &str) -> (FakeServer, Registry) {
         text_response("never asked"),
     ]);
     let mut registry = Registry::new();
-    registry.register(Box::new(BashTool::new(std::env::temp_dir(), 300)));
+    registry.register(Box::new(BashTool::new(
+        std::env::temp_dir(),
+        300,
+        crate::nested::ParentEnv::default().shared(),
+    )));
     (server, registry)
 }
 

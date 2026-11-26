@@ -118,7 +118,11 @@ async fn a_parallel_batch_runs_every_call_and_keeps_their_order() {
 
 #[test]
 fn the_default_registry_matches_the_canonical_name_list() {
-    let registry = default_registry(std::env::temp_dir(), 30);
+    let registry = default_registry(
+        std::env::temp_dir(),
+        30,
+        crate::nested::ParentEnv::default().shared(),
+    );
     let names: Vec<&str> = registry.tools().iter().map(|tool| tool.name()).collect();
     assert_eq!(names, NAMES);
     assert!(registry.is_read_only("outline"));
@@ -205,7 +209,11 @@ async fn dispatch_and_dispatch_parallel_reject_unknown_parameters() {
 
 #[tokio::test]
 async fn grep_rejects_unknown_flags_with_valid_parameter_list() {
-    let registry = default_registry(std::env::temp_dir(), 30);
+    let registry = default_registry(
+        std::env::temp_dir(),
+        30,
+        crate::nested::ParentEnv::default().shared(),
+    );
     let res = registry
         .dispatch(
             &call(

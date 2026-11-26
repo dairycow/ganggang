@@ -13,6 +13,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::session::ToolCall;
+use crate::nested::SharedParentEnv;
 
 // bash is pub(crate): the TUI's `!` shell shares its bounded runner.
 pub(crate) mod bash;
@@ -273,13 +274,15 @@ pub(crate) const NAMES: &[&str] = &[
 ];
 
 /// The default tool set, anchored at the session cwd. The `--tools` flag and
-/// config allowlist filter this registry (M2.11).
-pub fn default_registry(cwd: PathBuf, bash_timeout_secs: u64) -> Registry {
+/// config allowlist filter this registry (M2.11). The `bash` tool carries
+/// `nest`, the lineage of a nested run it may start, into every command.
+pub fn default_registry(cwd: PathBuf, bash_timeout_secs: u64, nest: SharedParentEnv) -> Registry {
     let mut registry = Registry::new();
     registry.register(Box::new(read::ReadTool::new(cwd.clone())));
     registry.register(Box::new(bash::BashTool::new(
         cwd.clone(),
         bash_timeout_secs,
+        nest,
     )));
     registry.register(Box::new(edit::EditTool::new(cwd.clone())));
     registry.register(Box::new(write::WriteTool::new(cwd.clone())));

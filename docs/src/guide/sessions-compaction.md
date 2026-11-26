@@ -4,6 +4,8 @@
 
 Every conversation is an append-only JSONL file under `~/.gg/sessions/<cwd-slug>/`, named `<YYYYMMDD-HHMMSS>-<8hex>.jsonl` (mode `0600`). The slug is the working directory with `/` turned into `-`, so each directory has its own history. Each entry is flushed as it is written. A new session's file appears on its first message. Starting and quitting without sending a message creates no file.
 
+The first line is a header (`type`, `version`, `id`, timestamp, cwd and model). A session started by another run's `bash` tool also records that run's id as `parent_id`; see [Delegation](delegation.md).
+
 | Command | Action |
 |---|---|
 | `gg -c` | Continue the newest session for this directory |

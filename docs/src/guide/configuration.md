@@ -42,6 +42,7 @@ Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `a
 - `replay_reasoning` controls whether earlier thinking is sent back to the model: `"never"` (`false`), `"turn"` (only assistant turns since the last user message; `strata` default), or `"all"` (`true`).
 - `compact_threshold_tokens` caps when auto-compaction triggers (e.g. `65536` on `strata` to stay within local VRAM KV residency; `0` disables).
 - `max_turns` caps turns per run (`0` disables); `gg` nudges the model to wrap up at 80% of the budget.
+- `bash_timeout_secs` is the ceiling for one `bash` call, in seconds (minimum `1`); a call's `timeout_secs` is clamped to it. A [nested run](delegation.md) started from `bash` lives inside that call, so delegating needs a ceiling of minutes.
 - `max_retries` sets the number of extra attempts for transient LLM failures (HTTP 408, 429, 5xx, timeouts, and dropped connections). Backoff starts at 500 ms with jitter; a `Retry-After` header overrides the backoff (capped at 30 s). Set to `0` to disable retries. Other 4xx responses fail immediately.
 - `request_timeout_secs` sets the total timeout in seconds for a complete LLM request and response stream (minimum `1`). Responses exceeding this limit are cut off and partial text is kept (see [Output modes and export](modes.md#print-mode)).
 - `tools` is the allowlist of tools offered to the model (also `--tools read,grep`). Unknown names are an error. See [Tools](tools.md).
@@ -100,6 +101,12 @@ Choose at the command line with `-P deepseek`, `-m deepseek-flash`, or `-m openc
 | `GG_MAX_RETRIES` | Extra attempts per transient LLM failure (`0` disables) |
 | `GG_REQUEST_TIMEOUT` | Whole-request timeout in seconds, stream included |
 | `GG_DEBUG_PROMPT` | Set to `1` to dump the assembled system prompt to stderr |
+| `GG_NEST_DEPTH` | Marks a nested run: how many runs sit above it. A headless boot that finds it clamps to its parent; any value other than `1` is an error |
+| `GG_PARENT_SESSION` | The parent run's session id, recorded in the nested run's session header |
+| `GG_PARENT_MODEL` | The parent run's current model, the nested run's default |
+| `GG_TOOL_CAP` | The parent run's tool allowlist, the most a nested run may have |
+| `GG_MAX_TURNS_CAP` | The parent run's `max_turns`, the most a nested run may take |
+| `GG_NO_HOOKS` | `1` when the parent run's hooks are off, so the nested run's are too |
 | `ZHIPU_API_KEY` | Key for `glm-coding-plan` |
 | `OPENCODE_API_KEY` | Key for `opencode-go` |
 | `DEEPSEEK_API_KEY` | Key for `deepseek` |
@@ -107,6 +114,8 @@ Choose at the command line with `-P deepseek`, `-m deepseek-flash`, or `-m openc
 | `VISUAL`, `EDITOR` | External editor for `Ctrl+G` (`nano` otherwise) |
 
 Model-scoped settings (`max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`) are configured per provider or per model in `config.toml`. Use `--reasoning-effort`, `--thinking-budget`, and `/think` for one-off overrides.
+
+The `bash` tool sets `GG_NEST_DEPTH` and the five variables after it in every command it runs. They describe the run for a `gg -p` the command starts: see [What a nested run inherits](delegation.md#what-a-nested-run-inherits).
 
 `gg` also reads `TMUX` to ask the terminal for extended keys.
 

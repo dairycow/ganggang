@@ -570,6 +570,20 @@ python3 - "$ROOT" "$GG_BIN" "$HOME_DIR" "$EVAL_TIMEOUT" "$GG_ARGS" "$EVAL_OUT" "
     "$EVAL_SESSIONS_DIR" "$EVAL_SUITE" <<'PY'
 import json, os, re, shlex, subprocess, sys, time
 
+# Variables a gg session's bash tool hands its commands (the nesting
+# handshake). The eval runs gg with this script's flags and config
+# defaults, so it drops them: started from inside a session, the runs
+# would otherwise be clamped to that session's tools, hooks, model and
+# turn budget, and measure something else.
+NESTING_VARS = (
+    "GG_NEST_DEPTH",
+    "GG_PARENT_SESSION",
+    "GG_PARENT_MODEL",
+    "GG_TOOL_CAP",
+    "GG_MAX_TURNS_CAP",
+    "GG_NO_HOOKS",
+)
+
 (
     root,
     gg_bin,
@@ -738,6 +752,8 @@ else:
 results = []
 for name, cwd, prompt, check_fn in tasks:
     env = dict(os.environ, HOME=home_dir)
+    for var in NESTING_VARS:
+        env.pop(var, None)
     session_dir = sessions_dir if sessions_dir else scratch_dir
     session_file = os.path.join(session_dir, f"{name}.jsonl")
     if os.path.exists(session_file):

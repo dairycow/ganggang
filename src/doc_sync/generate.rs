@@ -139,7 +139,11 @@ fn schema_type(prop: &serde_json::Value) -> String {
 }
 
 pub(super) fn tools_reference() -> String {
-    let registry = crate::agent::tools::default_registry(std::path::PathBuf::from("."), 30);
+    let registry = crate::agent::tools::default_registry(
+        std::path::PathBuf::from("."),
+        30,
+        crate::nested::ParentEnv::default().shared(),
+    );
     let mut out = format!(
         "{HEADER}\n# Built-in tools\n\nThe tool surface the model sees, generated from the registry (advertisement order). Behaviour and limits are explained in [Tools](../guide/tools.md).\n\n"
     );

@@ -18,7 +18,7 @@ Options:
   -p, --print <PROMPT>
           One-shot print mode: run this prompt and print the final answer. A prompt of "-" reads the prompt text from stdin
       --tools <TOOLS>
-          Comma-separated tool allowlist, e.g. "read,bash". Overrides the `tools` setting from config files
+          Comma-separated tool allowlist, e.g. "read,bash". Overrides the `tools` setting from config files. A nested run can only name tools its parent run has
   -c, --continue
           Continue the newest session for this directory
       --resume <RESUME>
@@ -38,13 +38,13 @@ Options:
       --list-models
           List configured providers and models (probing local servers), then exit
       --no-hooks
-          Skip user hooks for this run, including the hooks file and the project-file warning
+          Skip user hooks for this run, including the hooks file and the project-file warning. Ignored in a nested run, which keeps its parent's hooks
       --reasoning-effort <EFFORT>
           Reasoning effort sent to supporting endpoints (e.g. "low", "medium", "high", "xhigh", "none"). Pass "" to clear a provider preset's default
       --thinking-budget <TOKENS>
           Cap thinking/reasoning tokens per turn (Strata/local backends). 0 disables any preset cap
       --max-turns <N>
-          Maximum turns per run (0 disables). Soft wrap-up nudge at 80% of budget
+          Maximum turns per run (0 disables). Soft wrap-up nudge at 80% of budget. A nested run cannot exceed its parent's
       --session-file <PATH>
           Persist and/or resume this exact session JSONL file path
   -h, --help
@@ -58,7 +58,7 @@ Options:
 | Argument | Description | Default | Values |
 |---|---|---|---|
 | `-p, --print <PROMPT>` | One-shot print mode: run this prompt and print the final answer. A prompt of "-" reads the prompt text from stdin |  |  |
-| `--tools <TOOLS>` | Comma-separated tool allowlist, e.g. "read,bash". Overrides the `tools` setting from config files |  |  |
+| `--tools <TOOLS>` | Comma-separated tool allowlist, e.g. "read,bash". Overrides the `tools` setting from config files. A nested run can only name tools its parent run has |  |  |
 | `-c, --continue` | Continue the newest session for this directory |  |  |
 | `--resume <RESUME>` | Resume a session by id (or a unique id prefix) |  |  |
 | `--no-session` | Do not persist a session for this run |  |  |
@@ -69,8 +69,8 @@ Options:
 | `-P, --provider <PROVIDER>` | Provider preset or configured provider name (e.g. "strata", "glm-coding-plan", "opencode-go", "deepseek") |  |  |
 | `-m, --model <MODEL>` | Model id or `provider/model` (overrides config and provider default) |  |  |
 | `--list-models` | List configured providers and models (probing local servers), then exit |  |  |
-| `--no-hooks` | Skip user hooks for this run, including the hooks file and the project-file warning |  |  |
+| `--no-hooks` | Skip user hooks for this run, including the hooks file and the project-file warning. Ignored in a nested run, which keeps its parent's hooks |  |  |
 | `--reasoning-effort <EFFORT>` | Reasoning effort sent to supporting endpoints (e.g. "low", "medium", "high", "xhigh", "none"). Pass "" to clear a provider preset's default |  |  |
 | `--thinking-budget <TOKENS>` | Cap thinking/reasoning tokens per turn (Strata/local backends). 0 disables any preset cap |  |  |
-| `--max-turns <N>` | Maximum turns per run (0 disables). Soft wrap-up nudge at 80% of budget |  |  |
+| `--max-turns <N>` | Maximum turns per run (0 disables). Soft wrap-up nudge at 80% of budget. A nested run cannot exceed its parent's |  |  |
 | `--session-file <PATH>` | Persist and/or resume this exact session JSONL file path |  |  |

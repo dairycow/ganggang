@@ -11,6 +11,7 @@ mod export;
 mod home;
 mod json_mode;
 mod llm;
+mod nested;
 mod printers;
 mod tool_args;
 mod tui;
@@ -38,7 +39,8 @@ struct Cli {
     prompt: Option<String>,
 
     /// Comma-separated tool allowlist, e.g. "read,bash". Overrides the
-    /// `tools` setting from config files.
+    /// `tools` setting from config files. A nested run can only name tools
+    /// its parent run has.
     #[arg(long, value_delimiter = ',')]
     tools: Option<Vec<String>>,
 
@@ -97,7 +99,8 @@ struct Cli {
     list_models: bool,
 
     /// Skip user hooks for this run, including the hooks file and the
-    /// project-file warning.
+    /// project-file warning. Ignored in a nested run, which keeps its
+    /// parent's hooks.
     #[arg(long)]
     no_hooks: bool,
 
@@ -111,6 +114,7 @@ struct Cli {
     thinking_budget: Option<u32>,
 
     /// Maximum turns per run (0 disables). Soft wrap-up nudge at 80% of budget.
+    /// A nested run cannot exceed its parent's.
     #[arg(long = "max-turns", value_name = "N")]
     max_turns: Option<u32>,
 
@@ -197,6 +201,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if cli.mode == Mode::Json {
+        // A headless boot another run's `bash` tool started is nested, and
+        // clamps to that run. Read before the prompt: a run nested too
+        // deep fails now rather than after draining stdin.
+        let nested_boot = nested::NestedBoot::from_process_env()?;
         let sigterm_hit = Arc::new(AtomicBool::new(false));
         spawn_shutdown_signals(abort.clone(), sigterm_hit.clone());
         let prompt_arg = cli
@@ -223,7 +231,7 @@ async fn main() -> anyhow::Result<()> {
             _ = crate::agent::loop_::wait_for_abort(&abort) => {
                 flush_and_exit(if sigterm_hit.load(Ordering::Acquire) { 143 } else { 130 });
             }
-            res = open_agent(&cli, abort.clone()) => res?,
+            res = open_agent(&cli, abort.clone(), nested_boot) => res?,
         };
         if sigterm_hit.load(Ordering::Acquire) {
             flush_and_exit(143);
@@ -333,6 +341,8 @@ async fn main() -> anyhow::Result<()> {
         };
     }
 
+    // The nest, as in JSON mode: read before the prompt.
+    let nested_boot = nested::NestedBoot::from_process_env()?;
     let sigterm_hit = Arc::new(AtomicBool::new(false));
     spawn_shutdown_signals(abort.clone(), sigterm_hit.clone());
 
@@ -357,7 +367,7 @@ async fn main() -> anyhow::Result<()> {
         _ = crate::agent::loop_::wait_for_abort(&abort) => {
             flush_and_exit(if sigterm_hit.load(Ordering::Acquire) { 143 } else { 130 });
         }
-        res = open_agent(&cli, abort.clone()) => res?,
+        res = open_agent(&cli, abort.clone(), nested_boot) => res?,
     };
     if sigterm_hit.load(Ordering::Acquire) {
         flush_and_exit(143);
@@ -478,22 +488,61 @@ fn pick_of(cli: &Cli) -> tui::SessionPick {
 }
 
 /// Build the Agent print mode runs (every mode persists by default, §13;
-/// -c/--resume replay an existing file).
-async fn open_agent(cli: &Cli, abort: Arc<AtomicBool>) -> anyhow::Result<Agent> {
+/// -c/--resume replay an existing file). A nested boot clamps to the run
+/// that started it, whatever its flags ask for.
+async fn open_agent(
+    cli: &Cli,
+    abort: Arc<AtomicBool>,
+    nested_boot: Option<nested::NestedBoot>,
+) -> anyhow::Result<Agent> {
     let mut cfg = config::load()?;
-    cfg.apply_cli(cli.provider.as_deref(), cli.model.as_deref())?;
+    // A nested run without a model of its own takes its parent's current
+    // one; `-P` alone names a provider, whose default then applies.
+    let model = cli.model.clone().or_else(|| {
+        cli.provider
+            .is_none()
+            .then(|| {
+                nested_boot
+                    .as_ref()
+                    .and_then(|nest| nest.parent_model.clone())
+            })
+            .flatten()
+    });
+    cfg.apply_cli(cli.provider.as_deref(), model.as_deref())?;
     cfg.apply_reasoning_cli(cli.reasoning_effort.as_deref(), cli.thinking_budget);
     cfg.apply_max_turns_cli(cli.max_turns);
+    if let Some(nest) = &nested_boot {
+        cfg.max_turns = nest.effective_max_turns(cfg.max_turns);
+    }
     let mut endpoint = cfg.active_endpoint();
     endpoint.require_auth()?;
     crate::llm::health::maybe_probe_local_health(&mut endpoint).await;
     let cwd = std::env::current_dir()?;
-    let (hooks, hook_warnings) = agent::hooks::load(&cwd, cli.no_hooks)?;
+    // A nested run keeps its parent's hooks, on or off.
+    let no_hooks = match nested_boot.as_ref() {
+        Some(nest) => {
+            if cli.no_hooks {
+                eprintln!("warning: --no-hooks ignored: a nested run keeps its parent's hooks");
+            }
+            nest.hooks_off
+        }
+        None => cli.no_hooks,
+    };
+    let (hooks, hook_warnings) = agent::hooks::load(&cwd, no_hooks)?;
     for warning in &hook_warnings {
         eprintln!("warning: {warning}");
     }
     let pick = pick_of(cli);
-    let boot = assemble_boot(&cfg, &endpoint, &cwd, abort, cli, pick, &hooks)?;
+    let boot = assemble_boot(
+        &cfg,
+        &endpoint,
+        &cwd,
+        abort,
+        cli,
+        pick,
+        &hooks,
+        nested_boot.as_ref(),
+    )?;
     if let Some(path) = &boot.session_path {
         eprintln!("session: {}", path.display());
     }
@@ -511,7 +560,7 @@ fn boot_and_factory(
 ) -> anyhow::Result<(tui::Boot, tui::Factory)> {
     let pick = pick_of(cli);
     let endpoint = cfg.active_endpoint();
-    let boot = assemble_boot(cfg, &endpoint, cwd, abort, cli, pick, &hooks)?;
+    let boot = assemble_boot(cfg, &endpoint, cwd, abort, cli, pick, &hooks, None)?;
 
     let cfg = cfg.clone();
     let cli_tools = cli.tools.clone();
@@ -539,7 +588,7 @@ fn boot_and_factory(
             max_turns: None,
             session_file: None,
         };
-        assemble_boot(&cfg, endpoint, cwd, abort, &cli, pick, &hooks)
+        assemble_boot(&cfg, endpoint, cwd, abort, &cli, pick, &hooks, None)
     });
     Ok((boot, factory))
 }
@@ -554,7 +603,9 @@ type ResolvedSession = (
 
 /// Build one [`tui::Boot`]: resolve the session (store + entries), then
 /// construct the agent around it. The single path both interfaces and
-/// the TUI factory share.
+/// the TUI factory share. `nested_boot` is set by a headless boot another
+/// run started.
+#[allow(clippy::too_many_arguments)]
 fn assemble_boot(
     cfg: &config::Config,
     endpoint: &config::Endpoint,
@@ -563,9 +614,16 @@ fn assemble_boot(
     cli: &Cli,
     pick: tui::SessionPick,
     hooks: &agent::hooks::Hooks,
+    nested_boot: Option<&nested::NestedBoot>,
 ) -> anyhow::Result<tui::Boot> {
-    let (store, entries, session_path) = open_session_for(cli, cwd, &endpoint.label(), pick)?;
-    let mut agent = build_agent(cfg, endpoint, cwd, abort, cli, store, hooks)?;
+    let (store, entries, session_path) = open_session_for(
+        cli,
+        cwd,
+        &endpoint.label(),
+        pick,
+        nested_boot.and_then(|nest| nest.parent_session.as_deref()),
+    )?;
+    let mut agent = build_agent(cfg, endpoint, cwd, abort, cli, store, hooks, nested_boot)?;
     if let Some(entries) = entries {
         agent.load_entries(entries);
     }
@@ -582,7 +640,10 @@ fn assemble_boot(
 }
 
 /// Agent construction, shared by every boot: config, client, registry
-/// filtered by the allowlist, cwd, and the already-resolved store.
+/// filtered by the allowlist, cwd, and the already-resolved store. The
+/// allowlist is resolved against the canonical names so the nest a nested
+/// run's own commands carry can be built before the registry is.
+#[allow(clippy::too_many_arguments)]
 fn build_agent(
     cfg: &config::Config,
     endpoint: &config::Endpoint,
@@ -591,20 +652,28 @@ fn build_agent(
     cli: &Cli,
     store: Option<agent::session::io::SessionStore>,
     hooks: &agent::hooks::Hooks,
+    nested_boot: Option<&nested::NestedBoot>,
 ) -> anyhow::Result<Agent> {
     let client = LlmClient::from_endpoint(endpoint)?
         .with_retry(cfg.max_retries)
         .with_request_timeout(cfg.request_timeout_secs);
-    let mut registry = default_registry(cwd.to_path_buf(), cfg.bash_timeout_secs);
-    let allowlist = config::resolve_tools(
-        cli.tools.clone(),
-        cfg.tools.clone(),
-        &registry
-            .tools()
-            .iter()
-            .map(|t| t.name())
-            .collect::<Vec<_>>(),
-    )?;
+    let mut allowlist =
+        config::resolve_tools(cli.tools.clone(), cfg.tools.clone(), agent::tools::NAMES)?;
+    if let Some(nest) = nested_boot {
+        allowlist = nest.narrow_tools(cli.tools.as_deref(), allowlist)?;
+    }
+    // What the runs this run's commands start inherit.
+    let nest = nested::ParentEnv {
+        depth: nested_boot.map_or(0, |nest| nest.depth),
+        session: store.as_ref().map(|store| store.id().to_string()),
+        model: Some(endpoint.label()),
+        tool_cap: Some(allowlist.clone()),
+        max_turns_cap: cfg.max_turns,
+        hooks_off: hooks.disabled(),
+    }
+    .shared();
+    let mut registry =
+        default_registry(cwd.to_path_buf(), cfg.bash_timeout_secs, Arc::clone(&nest));
     registry.retain(|t| allowlist.iter().any(|n| n == t.name()));
 
     Ok(Agent::new(
@@ -624,20 +693,34 @@ fn build_agent(
     .with_replay_reasoning(endpoint.replay_reasoning)
     .with_compact_threshold(endpoint.compact_threshold_tokens)
     .with_max_turns(cfg.max_turns)
-    .with_model_label(endpoint.label()))
+    .with_model_label(endpoint.label())
+    .with_parent_env(nest))
 }
 
 /// Resolve a session pick into (store, entries-to-replay, path). New:
-/// fresh file. Resume: reopen the matched file and return its entries so
-/// the Agent continues that conversation. Load warnings print to stderr —
-/// boots happen before the TUI owns the screen.
+/// fresh file, its header linked to `parent` when a run started it.
+/// Resume: reopen the matched file and return its entries so the Agent
+/// continues that conversation. Load warnings print to stderr — boots
+/// happen before the TUI owns the screen.
 fn open_session_for(
     cli: &Cli,
     cwd: &std::path::Path,
     model: &str,
     pick: tui::SessionPick,
+    parent: Option<&str>,
 ) -> anyhow::Result<ResolvedSession> {
     use agent::session::io::{SessionFile, SessionStore};
+
+    // A fresh store records the session that started it, when one did.
+    fn linked(
+        store: anyhow::Result<SessionStore>,
+        parent: Option<&str>,
+    ) -> anyhow::Result<SessionStore> {
+        match parent {
+            Some(parent) => store?.with_parent(Some(parent.to_string())),
+            None => store,
+        }
+    }
 
     if cli.no_session {
         if !matches!(pick, tui::SessionPick::New) {
@@ -647,7 +730,7 @@ fn open_session_for(
     }
     let chosen = match pick {
         tui::SessionPick::New => {
-            let store = SessionStore::create(cwd, model)?;
+            let store = linked(SessionStore::create(cwd, model), parent)?;
             let path = store.path().to_path_buf();
             return Ok((Some(store), None, Some(path)));
         }
@@ -685,7 +768,10 @@ fn open_session_for(
                 }
                 return Ok((Some(store), Some(entries), Some(resolved)));
             }
-            let store = SessionStore::create_at(resolved.clone(), cwd, model)?;
+            let store = linked(
+                SessionStore::create_at(resolved.clone(), cwd, model),
+                parent,
+            )?;
             return Ok((Some(store), None, Some(resolved)));
         }
         tui::SessionPick::Latest => {

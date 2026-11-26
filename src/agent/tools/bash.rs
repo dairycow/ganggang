@@ -5,6 +5,9 @@
 //! per-call timeout is clamped to the configured maximum. And everything
 //! that can hang can also be stopped: the user's abort takes down the
 //! whole process group, the same kill the timeout uses.
+//!
+//! Every command also carries the run's nest ([`crate::nested`]): the
+//! limits and lineage of a `gg -p` the command starts.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -16,6 +19,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{BoxFuture, Cancel, Tool, ToolResult, parse_args};
+use crate::nested::{self, ParentEnv, SharedParentEnv};
 
 mod hint;
 
@@ -24,13 +28,17 @@ const OUTPUT_CAP: usize = 10 * 1024;
 pub struct BashTool {
     cwd: PathBuf,
     max_timeout_secs: u64,
+    /// The nest shared with the run: what a `gg -p` this tool starts
+    /// inherits. Read per command, so a model switch shows at once.
+    nest: SharedParentEnv,
 }
 
 impl BashTool {
-    pub fn new(cwd: PathBuf, max_timeout_secs: u64) -> Self {
+    pub fn new(cwd: PathBuf, max_timeout_secs: u64, nest: SharedParentEnv) -> Self {
         Self {
             cwd,
             max_timeout_secs,
+            nest,
         }
     }
 }
@@ -236,17 +244,21 @@ async fn settle(
 /// Run `bash -c command` in `cwd`: streams merged inside the shell, head
 /// and tail kept within `cap` bytes and the rest drained (bounded memory,
 /// real exit code), process-group kill on timeout **and** on cancellation.
+/// `nest` is the run's, for the nested runs the command may start; `None`
+/// leaves the command's environment alone.
 pub(crate) async fn run_bash(
     command: &str,
     cwd: &Path,
     timeout: Duration,
     cap: usize,
     cancel: &Cancel,
+    nest: Option<&ParentEnv>,
 ) -> BashOutcome {
     // `exec 2>&1` merges the streams inside the shell, so ordering is the
     // real arrival order and no pipe plumbing is needed to interleave.
     let script = format!("exec 2>&1\n{command}");
-    let mut child = match tokio::process::Command::new("bash")
+    let mut spawning = tokio::process::Command::new("bash");
+    spawning
         .arg("-c")
         .arg(&script)
         .current_dir(cwd)
@@ -257,9 +269,11 @@ pub(crate) async fn run_bash(
         // pipelines and background children running. Group id == child pid
         // (it is the leader).
         .process_group(0)
-        .kill_on_drop(true)
-        .spawn()
-    {
+        .kill_on_drop(true);
+    if let Some(nest) = nest {
+        apply_env(&mut spawning, nest.exports());
+    }
+    let mut child = match spawning.spawn() {
         Ok(c) => c,
         Err(e) => return BashOutcome::Failed(format!("failed to spawn bash: {e}")),
     };
@@ -327,7 +341,8 @@ impl Tool for BashTool {
     fn description(&self) -> &'static str {
         "Run a shell command in bash; returns merged stdout+stderr and the exit code. \
  Output keeps the start and end when over 10 KiB. Nonzero exits are errors that still \
- include the output; a timeout or abort reports any partial output."
+ include the output; a timeout or abort reports any partial output. A `gg -p` started \
+ here is a nested run: it keeps this run's tools, hooks, model and limits."
     }
 
     fn schema(&self) -> Value {
@@ -352,7 +367,17 @@ impl Tool for BashTool {
                     .unwrap_or(self.max_timeout_secs)
                     .min(self.max_timeout_secs),
             );
-            match run_bash(&args.command, &self.cwd, timeout, OUTPUT_CAP, cancel).await {
+            let nest = nested::current(&self.nest);
+            match run_bash(
+                &args.command,
+                &self.cwd,
+                timeout,
+                OUTPUT_CAP,
+                cancel,
+                Some(&nest),
+            )
+            .await
+            {
                 BashOutcome::Done { output, status } => {
                     let code = match status.code() {
                         Some(c) => c.to_string(),
@@ -392,6 +417,22 @@ impl Tool for BashTool {
                 BashOutcome::Failed(message) => ToolResult::err(message),
             }
         })
+    }
+}
+
+/// Hand a command the nest it may start. Every variable is either set or
+/// removed: one left in place would pass this run's inherited values off
+/// as its own.
+fn apply_env(command: &mut tokio::process::Command, exports: Vec<(&'static str, Option<String>)>) {
+    for (name, value) in exports {
+        match value {
+            Some(value) => {
+                command.env(name, value);
+            }
+            None => {
+                command.env_remove(name);
+            }
+        }
     }
 }
 
