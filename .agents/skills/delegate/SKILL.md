@@ -52,7 +52,9 @@ Each job ends with one line: the exit status, the answer's size and the session 
 
 ## Limits
 
-- A job runs for minutes, so `bash_timeout_secs` must be at least the longest `--timeout` plus a margin. At the default of 30 s every job is killed.
+- A job runs for minutes, so either `bash_timeout_secs` is at least the longest `--timeout` plus a margin, or the call that starts the jobs passes `background: true` and is collected with `wait_for`. Each `wait_for` waits at most the ceiling, 30 s by default, and reports a job still running.
+- A job started with `--timeout` runs in a session of its own (`delegate.sh` uses `setsid`), so `stop: <id>` cannot reach it: `stop` kills the call's process group, which holds the job's watchdog but not the job, and so does a call killed at the deadline or the end of the session. Wait for every job to finish or time out before answering.
+- To end one job early, kill its process group by the pid `delegate.sh` wrote: `kill -TERM -- -$(cat <dir>/<job>.pid)`.
 - A subagent cannot delegate: subagents are one level deep.
 - Jobs share the working tree. Give jobs that edit disjoint files.
 - `delegate.sh` runs `gg` from `PATH`. Set `GG=/path/to/gg` to use another build.

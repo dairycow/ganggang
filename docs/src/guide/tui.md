@@ -20,7 +20,7 @@ If stdin is not a terminal and no prompt is given, `gg` exits with an error; use
 | `Ctrl+K` | Kill to end of line |
 | `Ctrl+U` | Kill to start of line |
 | `Tab` | Complete the highlighted `/` suggestion; in the `/session` list, switch between every directory's sessions and the current directory's; in the `/model` and `/skill` lists, complete the highlighted row's command |
-| `Esc` | Stop the run in flight: an in-flight stream is cut and a running tool is killed; what had arrived is kept. Idle, it clears the line and closes the open list when one is, and otherwise does nothing |
+| `Esc` | Stop the run in flight: an in-flight stream is cut and a running tool is killed, except that a kept [background job](tools.md#bash) keeps running; what had arrived is kept. Idle, it clears the line and closes the open list when one is, and otherwise does nothing |
 | `Ctrl+O` | Expand or collapse tool calls |
 | `Ctrl+T` | Show or hide thinking |
 | `Ctrl+X` | Copy the last answer to the clipboard |

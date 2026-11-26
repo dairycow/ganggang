@@ -15,7 +15,7 @@ echo "explain this" | gg -p -
 
 The final answer goes to **stdout**; progress (turn markers, formatted tool-call lines, per-turn token/throughput stats, a final run summary that includes the session's cache hit rate when the provider reports cache reads, and a spinner on a terminal) goes to **stderr**. A consumer that closes the pipe early (`… | head -c 5`) ends the run quietly.
 
-`Ctrl+C` aborts the run: in-flight requests close within about 100 ms, running `bash` commands have their process group killed, and any partial text already streamed is printed to stdout. A second `Ctrl+C` exits immediately with status 130. `SIGTERM` triggers the same graceful abort, flushes output, and exits with status 143.
+`Ctrl+C` aborts the run: in-flight requests close within about 100 ms, running `bash` commands have their process group killed, except a kept [background job](tools.md#bash), and any partial text already streamed is printed to stdout. A second `Ctrl+C` exits immediately with status 130. `SIGTERM` triggers the same graceful abort, flushes output, and exits with status 143.
 
 ### Truncated responses
 

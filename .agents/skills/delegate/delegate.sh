@@ -11,6 +11,9 @@
 #   NAME.out        the answer (gg's stdout)
 #   NAME.err        progress (gg's stderr)
 #   NAME.jsonl      the job's session; run the same job again to continue it
+#   NAME.pid        the job's pid, which is also its process group id when
+#                   the job got a group of its own: kill -TERM -- -$(cat NAME.pid)
+#                   ends the job and every command it started
 #
 # Exit status: 0 with an answer, 124 on a timeout, 1 with no answer, and
 # otherwise the job's own. See scripts/test-delegate.py.
@@ -107,6 +110,7 @@ else
   "$GG" "${args[@]}" < "$prompt" > "$out" 2> "$err" &
 fi
 pid=$!
+echo "$pid" > "$dir/$job.pid"
 watchdog=''
 if [[ -n "$timeout" ]]; then
   # The watchdog is self-contained: the script's main path stays parked

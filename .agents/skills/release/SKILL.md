@@ -5,7 +5,7 @@ description: "Cut a ganggang release: version bump, docs sync, cargo publish, ta
 
 # Release
 
-Run from the repository root. The `bash` tool caps every call at `bash_timeout_secs` (default 30 s, see `AGENTS.md`), so anything that takes longer must run in the background or with the cap raised first.
+Run from the repository root. The `bash` tool caps every call at `bash_timeout_secs` (default 30 s, see `AGENTS.md`), so anything that takes longer runs with `background: true` on the call (then `wait_for`), in the shell background as in step 4, or with the cap raised first.
 
 1. Bump `version` in `Cargo.toml`; commit as `Bump version to X` (matches the existing tag history).
 2. `./scripts/sync-docs.sh`, then `cargo test` (the doc contracts fail on stale reference pages).

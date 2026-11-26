@@ -7,6 +7,8 @@ use super::output::{prefix_string, suffix_string};
 use super::*;
 use crate::nested::{DEPTH, MAX_TURNS_CAP, PARENT_MODEL, PARENT_SESSION, TOOL_CAP};
 
+mod jobs;
+
 /// A nest with nothing in it: these tests are about commands, not nesting.
 fn no_nest() -> SharedParentEnv {
     ParentEnv::default().shared()

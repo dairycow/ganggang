@@ -8,6 +8,9 @@
 //!
 //! Every command also carries the run's nest ([`crate::nested`]): the
 //! limits and lineage of a `gg -p` the command starts.
+//!
+//! A command longer than the deadline can be kept as a background job
+//! instead of being killed ([`jobs`]); every call still ends in time.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,6 +23,7 @@ use super::{BoxFuture, Cancel, Tool, ToolResult, parse_args};
 use crate::nested::{self, ParentEnv, SharedParentEnv};
 
 mod hint;
+mod jobs;
 mod output;
 mod process;
 
@@ -32,6 +36,9 @@ pub struct BashTool {
     /// The nest shared with the run: what a `gg -p` this tool starts
     /// inherits. Read per command, so a model switch shows at once.
     nest: SharedParentEnv,
+    /// Commands kept past their deadline by `background: true`, numbered
+    /// for `wait_for` and `stop`.
+    jobs: jobs::Jobs,
 }
 
 impl BashTool {
@@ -40,14 +47,22 @@ impl BashTool {
             cwd,
             max_timeout_secs,
             nest,
+            jobs: jobs::Jobs::default(),
         }
     }
 }
 
 #[derive(Deserialize)]
 struct BashArgs {
-    command: String,
+    /// Absent for a `wait_for` or `stop` call, which acts on a job instead.
+    command: Option<String>,
     timeout_secs: Option<u64>,
+    /// Keep the command as a job when the deadline passes, not kill it.
+    background: Option<bool>,
+    /// Collect this background job instead of running a command.
+    wait_for: Option<u64>,
+    /// Kill this background job instead of running a command.
+    stop: Option<u64>,
 }
 
 /// Outcome of a bounded bash run. Shared by the bash tool and the TUI's
@@ -90,7 +105,7 @@ pub(crate) async fn run_bash(
     };
     let pgid = spawned.pgid;
     let capture = Arc::clone(&spawned.capture);
-    let status = match settle(drain_and_wait(spawned, cap), timeout, cancel, pgid).await {
+    let status = match settle(drain_and_wait(spawned, cap, || {}), timeout, cancel, pgid).await {
         Ok(status) => status,
         Err(stop) => {
             let output = render_capture(&capture, cap);
@@ -116,7 +131,10 @@ impl Tool for BashTool {
     fn description(&self) -> &'static str {
         "Run a shell command in bash; returns merged stdout+stderr and the exit code. \
  Output keeps the start and end when over 10 KiB. Nonzero exits are errors that still \
- include the output; a timeout or abort reports any partial output. A `gg -p` started \
+ include the output; a timeout or abort reports any partial output. A command that may \
+ outlive the timeout takes background: true: it keeps running as a job and the result \
+ names it; wait_for: <id> waits for that job and returns its output; stop: <id> kills \
+ it. A `gg -p` started \
  here is a nested run: it keeps this run's tools, hooks, model and limits."
     }
 
@@ -124,10 +142,16 @@ impl Tool for BashTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "Shell command to run"},
-                "timeout_secs": {"type": "integer", "description": "Kill the command after this many seconds"}
-            },
-            "required": ["command"]
+                "command": {"type": "string", "description": "Shell command to run (required unless wait_for or stop is set)"},
+                "timeout_secs": {"type": "integer", "description": format!(
+                    "Kill the command after this many seconds; the most this session allows is {}. \
+                     wait_for waits this long for a job",
+                    self.max_timeout_secs
+                )},
+                "background": {"type": "boolean", "description": "For a command that may still be running at the deadline: keep it running as a job and name it in the result instead of killing it. Collect the job later with wait_for"},
+                "wait_for": {"type": "integer", "description": "Wait for background job <id> and return its output and exit code. A job still running when timeout_secs pass is reported with its output so far. Takes no command"},
+                "stop": {"type": "integer", "description": "Kill background job <id>, whole process group included. Takes no command"}
+            }
         })
     }
 
@@ -143,43 +167,60 @@ impl Tool for BashTool {
                     .min(self.max_timeout_secs),
             );
             let nest = nested::current(&self.nest);
-            match run_bash(
-                &args.command,
-                &self.cwd,
-                timeout,
-                OUTPUT_CAP,
-                cancel,
-                Some(&nest),
-            )
-            .await
+            let jobs_only = args.wait_for.is_some() || args.stop.is_some();
+            if args.wait_for.is_some() && args.stop.is_some() || jobs_only && args.command.is_some()
             {
+                return ToolResult::err(jobs::JOB_TAKES_NO_COMMAND.to_string());
+            }
+            if let Some(id) = args.wait_for {
+                return self.jobs.collect(id, timeout, cancel).await;
+            }
+            if let Some(id) = args.stop {
+                return self.jobs.stop(id, cancel).await;
+            }
+            let Some(command) = args.command else {
+                return ToolResult::err(jobs::NO_COMMAND.to_string());
+            };
+            let outcome = if args.background == Some(true) {
+                match self
+                    .jobs
+                    .start(&command, &self.cwd, timeout, cancel, Some(&nest))
+                    .await
+                {
+                    jobs::Start::Settled(outcome) => outcome,
+                    jobs::Start::Kept { id, output } => {
+                        return ToolResult::ok(jobs::kept(id, timeout, output));
+                    }
+                }
+            } else {
+                run_bash(
+                    &command,
+                    &self.cwd,
+                    timeout,
+                    OUTPUT_CAP,
+                    cancel,
+                    Some(&nest),
+                )
+                .await
+            };
+            match outcome {
                 BashOutcome::Done { output, status } => {
-                    let code = match status.code() {
-                        Some(c) => c.to_string(),
-                        None => "killed by signal".to_string(),
-                    };
-                    let mut result = format!("[exit code: {code}]\n{output}");
+                    let mut result = done_result(output, status);
                     // A shell command that duplicates a native tool gets a
                     // one-line nudge; the command itself ran regardless.
-                    if let Some(h) = hint::workaround_hint(&args.command, &self.cwd) {
-                        if !result.ends_with('\n') {
-                            result.push('\n');
+                    if let Some(h) = hint::workaround_hint(&command, &self.cwd) {
+                        if !result.output.ends_with('\n') {
+                            result.output.push('\n');
                         }
-                        result.push_str(&format!("[hint: {h}]"));
+                        result.output.push_str(&format!("[hint: {h}]"));
                     }
-                    if status.success() {
-                        ToolResult::ok(result)
-                    } else {
-                        // Nonzero exit is an error *result* that still
-                        // carries the output — the model needs to see what
-                        // went wrong to retry.
-                        ToolResult::err(result)
-                    }
+                    result
                 }
                 BashOutcome::TimedOut { output } => ToolResult::err(with_partial(
                     format!(
-                        "command timed out after {}s and was killed",
-                        timeout.as_secs()
+                        "command timed out after {}s and was killed{}",
+                        timeout.as_secs(),
+                        jobs::NEEDS_BACKGROUND
                     ),
                     output,
                 )),
@@ -192,6 +233,23 @@ impl Tool for BashTool {
                 BashOutcome::Failed(message) => ToolResult::err(message),
             }
         })
+    }
+}
+
+/// What a finished command reports, whether it ran inside the call or was
+/// collected from a job: the exit code first, then everything it printed.
+fn done_result(output: String, status: std::process::ExitStatus) -> ToolResult {
+    let code = match status.code() {
+        Some(c) => c.to_string(),
+        None => "killed by signal".to_string(),
+    };
+    let result = format!("[exit code: {code}]\n{output}");
+    if status.success() {
+        ToolResult::ok(result)
+    } else {
+        // Nonzero exit is an error *result* that still carries the output —
+        // the model needs to see what went wrong to retry.
+        ToolResult::err(result)
     }
 }
 

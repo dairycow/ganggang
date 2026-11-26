@@ -96,13 +96,15 @@ pub(super) fn spawn(
 
 /// Drain the command's pipe to EOF, retaining only a bounded head and tail
 /// (bounded memory), then wait for its exit status. The capture is shared,
-/// so a kill can still report what arrived first.
+/// so a kill can still report what arrived first. `on_exit` runs once the
+/// shell has been reaped, which may be long before the pipe closes.
 ///
 /// Reading to the end and waiting are one unit: waiting without the read
 /// deadlocks once the pipe fills.
 pub(super) async fn drain_and_wait(
     mut spawned: Spawned,
     cap: usize,
+    on_exit: impl FnOnce(),
 ) -> std::io::Result<std::process::ExitStatus> {
     let mut stdout: Box<dyn tokio::io::AsyncRead + Unpin + Send> = match spawned.child.stdout.take()
     {
@@ -129,7 +131,12 @@ pub(super) async fn drain_and_wait(
             tokio::task::yield_now().await;
         }
     };
-    let ((), status) = tokio::try_join!(read_to_end, spawned.child.wait())?;
+    let wait = async move {
+        let status = spawned.child.wait().await;
+        on_exit();
+        status
+    };
+    let ((), status) = tokio::try_join!(read_to_end, wait)?;
     Ok(status)
 }
 

@@ -7,7 +7,7 @@ The tool surface the model sees, generated from the registry (advertisement orde
 | Tool | Description |
 |---|---|
 | `read` | Read a text file as 1-based numbered lines (N\| text). Returns up to 400 lines or 24 KiB by default, with truncation noted; an explicit limit caps at 2000 lines. A negative offset reads the last N lines. Lines over 500 characters are cut. |
-| `bash` | Run a shell command in bash; returns merged stdout+stderr and the exit code. Output keeps the start and end when over 10 KiB. Nonzero exits are errors that still include the output; a timeout or abort reports any partial output. A `gg -p` started here is a nested run: it keeps this run's tools, hooks, model and limits. |
+| `bash` | Run a shell command in bash; returns merged stdout+stderr and the exit code. Output keeps the start and end when over 10 KiB. Nonzero exits are errors that still include the output; a timeout or abort reports any partial output. A command that may outlive the timeout takes background: true: it keeps running as a job and the result names it; wait_for: &lt;id> waits for that job and returns its output; stop: &lt;id> kills it. A `gg -p` started here is a nested run: it keeps this run's tools, hooks, model and limits. |
 | `edit` | Apply exact-match edits: each old_text must appear exactly once unless the edit sets replace_all: true, and any miss or ambiguity writes nothing. |
 | `write` | Create or overwrite a file. Refuses paths outside the working directory unless force is true; reports bytes written. |
 | `grep` | Search file contents by regex, or literal text with fixed_strings. Respects .gitignore and skips .git, target, node_modules and binaries. Results are grouped by file; supports glob, case_insensitive, context lines and files_only; caps at max_results (default 50) and 16 KiB of output. |
@@ -27,12 +27,15 @@ Read a text file as 1-based numbered lines (N| text). Returns up to 400 lines or
 
 ## `bash`
 
-Run a shell command in bash; returns merged stdout+stderr and the exit code. Output keeps the start and end when over 10 KiB. Nonzero exits are errors that still include the output; a timeout or abort reports any partial output. A `gg -p` started here is a nested run: it keeps this run's tools, hooks, model and limits.
+Run a shell command in bash; returns merged stdout+stderr and the exit code. Output keeps the start and end when over 10 KiB. Nonzero exits are errors that still include the output; a timeout or abort reports any partial output. A command that may outlive the timeout takes background: true: it keeps running as a job and the result names it; wait_for: <id> waits for that job and returns its output; stop: <id> kills it. A `gg -p` started here is a nested run: it keeps this run's tools, hooks, model and limits.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `command` | string | yes | Shell command to run |
-| `timeout_secs` | integer | no | Kill the command after this many seconds |
+| `background` | boolean | no | For a command that may still be running at the deadline: keep it running as a job and name it in the result instead of killing it. Collect the job later with wait_for |
+| `command` | string | no | Shell command to run (required unless wait_for or stop is set) |
+| `stop` | integer | no | Kill background job &lt;id>, whole process group included. Takes no command |
+| `timeout_secs` | integer | no | Kill the command after this many seconds; the most this session allows is 30. wait_for waits this long for a job |
+| `wait_for` | integer | no | Wait for background job &lt;id> and return its output and exit code. A job still running when timeout_secs pass is reported with its output so far. Takes no command |
 
 ## `edit`
 
