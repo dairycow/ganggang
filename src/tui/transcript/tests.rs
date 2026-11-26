@@ -449,3 +449,47 @@ fn resume_seeds_thinking_before_the_text() {
     t.toggle_thinking();
     assert_eq!(texts(&t), vec!["> hi", "~ pondered", "hello"]);
 }
+
+/// A run that failed leaves an error entry behind: a resumed session
+/// replays it as the failure line the live run ended with.
+#[test]
+fn resume_seeds_a_recorded_run_error_as_its_failure_line() {
+    use crate::agent::session::{Entry, Message, Role};
+    let entries = vec![
+        Entry::Message {
+            id: "u".into(),
+            parent_id: None,
+            timestamp: "t".into(),
+            message: Message {
+                role: Role::User,
+                content: Some("hi".into()),
+                reasoning: None,
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                usage: None,
+                is_error: false,
+            },
+        },
+        Entry::Error {
+            id: "e".into(),
+            parent_id: Some("u".into()),
+            timestamp: "t".into(),
+            error: "POST /v1 failed (503)".into(),
+        },
+    ];
+
+    let mut resumed = Transcript::default();
+    resumed.extend_from_entries(&entries);
+    assert_eq!(
+        texts(&resumed),
+        vec!["> hi", "⚠ run failed: POST /v1 failed (503)"]
+    );
+    assert_eq!(kinds(&resumed), vec![LineKind::User, LineKind::Warning]);
+
+    // The same lines a live failure leaves.
+    let mut live = Transcript::default();
+    live.push_user("hi");
+    live.push_failure("POST /v1 failed (503)");
+    assert_eq!(texts(&live), texts(&resumed));
+    assert_eq!(kinds(&live), kinds(&resumed));
+}

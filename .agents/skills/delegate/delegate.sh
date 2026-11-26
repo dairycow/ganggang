@@ -92,6 +92,10 @@ args=(-p - --session-file "$session")
 if [[ -n "$model" ]]; then args+=(-m "$model"); fi
 if [[ -n "$tools" ]]; then args+=(--tools "$tools"); fi
 if [[ -n "$max_turns" ]]; then args+=(--max-turns "$max_turns"); fi
+# A job with a timeout gets a time budget ten seconds short of it: gg asks
+# the model to wrap up before the watchdog fires, so the answer lands in
+# NAME.out instead of being cut off by its SIGTERM.
+if [[ -n "$timeout" && "$timeout" -ge 20 ]]; then args+=(--max-seconds "$((timeout - 10))"); fi
 
 # A job in its own process group gives the timeout a group to kill: the
 # job and the commands it starts die together. That is only safe when this

@@ -581,6 +581,7 @@ NESTING_VARS = (
     "GG_PARENT_MODEL",
     "GG_TOOL_CAP",
     "GG_MAX_TURNS_CAP",
+    "GG_MAX_SECONDS_CAP",
     "GG_NO_HOOKS",
 )
 

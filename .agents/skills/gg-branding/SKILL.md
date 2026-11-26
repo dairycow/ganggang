@@ -82,10 +82,11 @@ Exact characters and rules from `src/tui/`:
 
 - **Separators:** ` │ ` (U+2502) for footer fields; ` · ` (U+00B7) for inline hints and metadata.
 - **Markers:** `> ` (`accent` bold: opens a user message once; the rows after it indent two columns), `▸` and `▾` (collapsed and expanded tool calls; `▸ ` in `accent` on `selection` for active popup rows), `$ ` (shell command), `✓` (`ok`), `✗` (`error`), `⚠ ` (`warn`), `~ ` (`dim` italic for thinking), `■ run aborted` (`accent` bold), `○ ready` (`muted`), `↑in ↓out` (token totals), `• ` (list bullets), `…` (ellipsis), `[truncated: N lines]`.
-- **Spinner:** 4-frame block cycle (`▘ ▝ ▗ ▖`: a small square orbiting clockwise) at 100 ms ticks (`accent` on the crest frame `▘`, `accent_soft` the rest; `accent` throughout when stopping). Block glyphs rather than Braille, so every monospace font has them.
+- **Mark:** two cells, `gg` bold in `accent` at rest. While a run is live the same two cells are the gang-gang's wings — `◤◤ ◤◥ ◥◤ ◣◢ ◣◢ ◤◤`, one frame per 100 ms, `accent` on the crest frame (`◤◤`) and `accent_soft` the rest. The wings fill exactly the cells `gg` does, so nothing behind the mark moves while a run turns. `accent` throughout when stopping.
 - **Borders and surfaces:** rounded borders (`BorderType::Rounded`) for boxes; full-frame `bg` fill; edge-to-edge padded bands on `surface_alt` for code and expanded output; edge-to-edge `selection` band for highlighted popup rows.
 - **State signalling:**
   - Composer border: `border` when idle, `accent_soft` when busy, `accent` when stopping.
+  - Footer crest: `gg` in `accent` at rest; the wings in `accent_soft` while a run works, `accent` on the crest frame only — the one frame of a turn that reads as the brand mark rather than as a working state.
   - Footer `ctx N%`: `muted` at `<= 60%`, `warn` from `61%` to `85%`, `error` above `85%`.
   - Scrollbar: one column, each cell `▐` with `outline` behind it; the thumb in `accent`, the track in `border`.
 - **Empty state (`src/tui/view/welcome.rs`):** three centred rows (name in `accent` bold, tagline in `muted`, key hints in `dim`), omitted on tiny viewports, cleared as soon as content appears.

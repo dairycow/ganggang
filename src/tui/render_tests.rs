@@ -145,6 +145,62 @@ fn an_80_by_24_frame_is_the_theme_not_the_terminal() {
     }
 }
 
+/// `gg` sits at the left edge of the footer, and while a run is live the
+/// cell where the name is gives way to a wing frame of the turn — so the
+/// start of the row says `working` without a whole extra field appearing.
+/// When it ends, the name is back.
+#[test]
+fn the_mark_is_gg_at_rest_and_a_wing_while_a_run_works() {
+    use crate::tui::footer::WINGS as SPINNER;
+
+    // Idle: the mark is the name, at the left edge of the footer's row.
+    let (mut terminal, mut state) = fresh(80, 24);
+    draw(&mut terminal, &mut state);
+    let footer = row(&terminal, 23);
+    assert!(
+        footer.starts_with("gg"),
+        "the mark sits at the left of the footer: {footer:?}"
+    );
+    assert!(footer.contains("○ ready"), "it is not working: {footer:?}");
+
+    // A run is live: the name's two cells become the wings, and the
+    // word `gg` is gone from the row — the only thing the name gave up.
+    state.begin_run();
+    for frame in 0..SPINNER.len() as u16 {
+        state.tick_spinner();
+        draw(&mut terminal, &mut state);
+        let footer = row(&terminal, 23);
+        // The row opens with the frame the footer is actually on — read
+        // back from the footer, so the test checks the drawing rather than
+        // a count it could get wrong.
+        let expected = state.footer.mark();
+        assert_eq!(
+            expected.chars().count(),
+            2,
+            "the wings take the name's two cells: {expected:?}"
+        );
+        assert!(
+            footer.starts_with(expected.as_str()),
+            "frame {frame} leads the footer: {footer:?}, expected {expected:?}"
+        );
+        assert!(
+            footer.contains("working"),
+            "frame {frame} is still a run: {footer:?}"
+        );
+        assert!(
+            !footer.contains("gg"),
+            "frame {frame} shows no name: {footer:?}"
+        );
+    }
+
+    // The run ends and the mark is the name again.
+    state.run_finished();
+    draw(&mut terminal, &mut state);
+    let footer = row(&terminal, 23);
+    assert!(footer.starts_with("gg"), "the mark comes back: {footer:?}");
+    assert!(footer.contains("○ ready"), "{footer:?}");
+}
+
 /// A 24×8 terminal is a real thing (a narrow split, a phone terminal): the
 /// layout must adapt, keep the marks, and not panic. The composer may
 /// shrink to its minimum; the transcript keeps a row.
@@ -632,7 +688,7 @@ fn an_indexed_session_draws_only_indexed_colours() {
         shows(&terminal, "fn a() {}"),
         "the code band still reads: {text}"
     );
-    assert!(shows(&terminal, "▘ working"), "the spinner shows: {text}");
+    assert!(shows(&terminal, "◤◤ working"), "the wing shows: {text}");
 }
 
 /// Every row of the transcript is the theme's, and a wrapped row keeps the

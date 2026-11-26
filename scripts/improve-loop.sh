@@ -751,7 +751,7 @@ for ((iter = 1; iter <= ITERATIONS; iter++)); do
   # config defaults however the loop was started, so a gg session that
   # launched it does not change what an iteration measures.
   if ! env -u GG_NEST_DEPTH -u GG_PARENT_SESSION -u GG_PARENT_MODEL \
-       -u GG_TOOL_CAP -u GG_MAX_TURNS_CAP -u GG_NO_HOOKS \
+       -u GG_TOOL_CAP -u GG_MAX_TURNS_CAP -u GG_MAX_SECONDS_CAP -u GG_NO_HOOKS \
        "$GG_BIN" --no-hooks --session-file "$SESSION_FILE" --max-turns "$MAX_TURNS" -p - < "$PROMPT_FILE"; then
     echo "WARN: gg exited nonzero; continuing"
   fi

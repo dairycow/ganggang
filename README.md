@@ -50,7 +50,7 @@ provider = "strata"
 max_tokens = 16384
 # context_window = 131072   # auto-probed from Strata /health when unset
 bash_timeout_secs = 30
-max_retries = 3           # extra attempts on a transient transport failure
+max_retries = 5           # extra attempts on a transient transport failure
 request_timeout_secs = 600  # whole-response timeout (a stream included)
 tools = ["read", "bash", "edit", "write", "grep", "find", "ls", "outline"]
 

@@ -106,6 +106,15 @@ impl Transcript {
         self.thinking_open = false;
     }
 
+    /// A run failed: the shape a `Warned` event folds to, prefixed so the
+    /// line reads as the run's end rather than one more warning. Live
+    /// failures and a persisted one replayed on resume share it.
+    pub fn push_failure(&mut self, error: &str) {
+        self.apply(&AgentEvent::Warned {
+            message: format!("run failed: {error}"),
+        });
+    }
+
     /// One `!`/`!!` shell execution for the human to read.
     pub fn push_shell(
         &mut self,

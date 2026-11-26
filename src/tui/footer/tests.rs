@@ -94,48 +94,100 @@ fn the_context_number_darkens_as_the_window_fills() {
 }
 
 #[test]
-fn the_spinner_turns_only_while_a_run_is_live() {
+fn the_mark_is_gg_at_rest_and_a_pair_of_wings_while_a_run_works() {
     let mut f = footer();
-    assert!(!f.spinning(), "idle must not be on a timer");
-    assert_eq!(f.spinner(), SPINNER[0]);
+    assert_eq!(f.mark(), "gg", "at rest the mark is the name, not a blank");
     f.set_busy(true);
-    assert!(f.spinning());
-    f.tick();
-    f.tick();
-    assert_eq!(f.spinner(), SPINNER[2]);
-    assert!(text(&f).contains("working"));
-    // A full cycle returns to the top; a run that starts does too.
-    for _ in 0..SPINNER.len() {
+
+    // The pair fills the same two cells the name did, so nothing behind
+    // the mark moves while the turn turns.
+    let mut pairs = Vec::new();
+    for _ in 0..WINGS.len() {
+        let mark = f.mark();
+        assert_eq!(mark.chars().count(), 2, "the name's two cells: {mark:?}");
+        assert_ne!(mark, "gg");
+        pairs.push(mark);
         f.tick();
     }
-    assert_eq!(f.spinner(), SPINNER[2], "wrapped, not reset by itself");
-    f.set_busy(false);
-    assert_eq!(f.spinner(), SPINNER[0], "a new run starts at the top");
-    f.set_busy(true);
-    assert_eq!(f.spinner(), SPINNER[0]);
-    assert_eq!(SPINNER.len(), 4, "the documented frame count");
-    assert!(
-        !SPINNER.contains(&'⠋'),
-        "no Braille: a font without it draws a box"
+    // A whole turn comes round to the start.
+    assert_eq!(f.mark(), pairs[0], "wrapped, not reset by itself");
+    assert_eq!(pairs.len(), WINGS.len());
+    assert_eq!(
+        pairs,
+        vec!["◤◤", "◤◥", "◥◤", "◣◢", "◣◢", "◤◤"]
+            .into_iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>(),
     );
+    // The mark goes back to the name when the run ends.
+    f.set_busy(false);
+    assert_eq!(f.mark(), "gg");
+    f.set_busy(true);
+    assert_eq!(f.mark(), "◤◤", "a new run starts on the crest");
 }
 
-/// On brand: the orbit flashes scarlet once a turn, on the crest frame,
-/// and is the cheek's orange-red the rest of the way.
 #[test]
-fn the_spinner_flashes_the_crest_once_a_turn() {
+fn the_wings_beat_in_the_order_they_draw_in() {
+    // Left wing first in every frame, and the right one trailing it, so
+    // the pair reads as two marks beating rather than one glyph swapping.
+    let wings = ["◤", "◥", "◣", "◢"];
+    for (left, right) in WINGS {
+        assert!(wings.contains(&left), "left wing: {left}");
+        assert!(wings.contains(&right), "right wing: {right}");
+    }
+    // The pair rises together on the first frame, beats over the top,
+    // holds the descent for a frame, and the turn ends where it began.
+    let pairs: Vec<_> = WINGS[0..2].iter().map(|(l, r)| (*l, *r)).collect();
+    assert_eq!(
+        pairs,
+        [("◤", "◤"), ("◤", "◥")],
+        "the wings rise, then beat over the top"
+    );
+    let pairs: Vec<_> = WINGS[3..5].iter().map(|(l, r)| (*l, *r)).collect();
+    assert_eq!(
+        pairs,
+        [("◣", "◢"), ("◣", "◢")],
+        "the descent is held a frame"
+    );
+    assert_eq!(WINGS[5], WINGS[0], "the turn ends where it began");
+    // No glyph is used that this font would draw as nothing.
+    for (left, right) in WINGS {
+        for glyph in [left, right] {
+            assert!(
+                !glyph.is_empty() && !glyph.chars().all(char::is_control),
+                "glyph {glyph:?}"
+            );
+        }
+    }
+}
+
+/// On brand: the wings flash scarlet on the crest frame and are the
+/// cheek's orange-red the rest of the turn, so the crest is the one frame
+/// that reads as `gg`'s own mark rather than as a working state.
+#[test]
+fn the_wings_flash_the_crest_once_a_turn() {
     use crate::tui::theme::TRUECOLOR as T;
     let mut f = footer();
     f.set_busy(true);
-    assert_eq!(f.spinner_colour(&T), T.accent);
-    assert_eq!(colour(&f, "▘"), Some(T.accent));
-    for _ in 0..3 {
+    for i in 0..WINGS.len() {
+        let line = f.spans(&T);
+        assert_eq!(
+            line.spans[0].content,
+            f.mark(),
+            "the mark is the frame the footer is on"
+        );
+        let want = if i == 0 { T.accent } else { T.accent_soft };
+        assert_eq!(
+            line.spans[0].style.fg,
+            Some(want),
+            "frame {i} of {WINGS:?} should be {}",
+            if i == 0 { "the crest" } else { "the cheek" }
+        );
         f.tick();
-        assert_eq!(f.spinner_colour(&T), T.accent_soft);
     }
-    assert_eq!(colour(&f, "▖"), Some(T.accent_soft));
-    f.tick();
-    assert_eq!(f.spinner_colour(&T), T.accent, "back at the crest");
+    // One flash per turn, not one per frame.
+    assert_eq!(f.frame % WINGS.len(), 0);
+    f.set_busy(false);
 }
 
 #[test]

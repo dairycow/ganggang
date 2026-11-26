@@ -425,9 +425,9 @@ async fn single_run_multi_turn_session_compacts_at_assistant_boundary() {
 }
 
 /// A 32K window scales both knobs: 12,288 reserved, a 20,480 compaction
-/// line, and 10,240 tokens kept. Two ~9k-token batches cross the kept
-/// budget, so compaction drops the first batch and replays the summary
-/// plus the second.
+/// line, and 6,826 tokens kept. The second ~9k-token batch crosses the
+/// kept budget on its own, so compaction drops the first run and replays
+/// the summary plus the second.
 #[tokio::test]
 async fn tiny_32k_window_scales_reserve_and_keep_recent() {
     let big = "x".repeat(12_000);

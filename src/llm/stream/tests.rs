@@ -350,7 +350,9 @@ async fn a_cut_stream_keeps_its_partial_answer_and_says_it_is_incomplete() {
 }
 
 /// A cut with nothing assembled is still an error: there is no partial
-/// answer to salvage and nothing for the loop to continue from.
+/// answer to salvage and nothing for the loop to continue from. The
+/// client retries it first (`client::stream_tests`); with retries off it
+/// is the call's error at once.
 #[tokio::test]
 async fn a_cut_stream_that_assembled_nothing_is_an_error() {
     let mut body =
@@ -359,7 +361,7 @@ async fn a_cut_stream_that_assembled_nothing_is_an_error() {
     body.truncate(body.len() - "data: [DONE]\n\n".len());
     let server = SseServer::spawn(vec![body]);
 
-    let client = LlmClient::new(&server.base_url).unwrap();
+    let client = LlmClient::new(&server.base_url).unwrap().with_retry(0);
     let err = client
         .send_stream("m", &[], 64, &[], &never_abort(), |_| Box::pin(async {}))
         .await
@@ -441,32 +443,30 @@ fn assembles_full_strata_timings_and_usage() {
 
 /// An OpenAI-compatible provider reports cache reads under
 /// `prompt_tokens_details.cached_tokens`; a server that sends a top-level
-/// `cache_read_tokens` keeps its own figure. Either way the assembled
-/// usage carries one `cache_read_tokens`.
+/// `cache_read_tokens` keeps its own figure. Assembly keeps the whole
+/// `Usage` — the fold happens where the field is needed, so a caller can
+/// read either wire shape off the message.
 #[test]
-fn cache_reads_are_folded_from_either_wire_shape() {
-    let fold = |usage: &str| {
+fn assembly_keeps_the_usage_it_was_given() {
+    let finish = |json: &str| {
         let mut asm = Assembler::default();
-        asm.feed(serde_json::from_str(&format!(r#"{{"choices":[],"usage":{usage}}}"#)).unwrap());
-        asm.finish().usage.unwrap().cache_read_tokens
+        asm.feed(serde_json::from_str(&format!(r#"{{"choices":[],"usage":{json}}}"#)).unwrap());
+        asm.finish().usage.unwrap()
     };
-    assert_eq!(
-        fold(
-            r#"{"prompt_tokens":1000,"completion_tokens":5,"total_tokens":1005,"prompt_tokens_details":{"cached_tokens":870}}"#
-        ),
-        870
+    let openai = finish(
+        r#"{"prompt_tokens":1000,"completion_tokens":5,"total_tokens":1005,"prompt_tokens_details":{"cached_tokens":870}}"#,
     );
-    assert_eq!(
-        fold(
-            r#"{"prompt_tokens":1000,"completion_tokens":5,"total_tokens":1005,"cache_read_tokens":40,"prompt_tokens_details":{"cached_tokens":870}}"#
-        ),
-        40,
-        "a top-level figure wins"
+    assert_eq!(openai.prompt_tokens, 1000);
+    assert_eq!(openai.prompt_tokens_details.unwrap().cached_tokens, 870);
+    let anthropic = finish(
+        r#"{"prompt_tokens":1000,"completion_tokens":5,"total_tokens":1005,"cache_read_tokens":40}"#,
     );
-    assert_eq!(
-        fold(
-            r#"{"prompt_tokens":1000,"completion_tokens":5,"total_tokens":1005,"prompt_tokens_details":null}"#
-        ),
-        0
+    assert_eq!(anthropic.cache_read_tokens, 40);
+    assert_eq!(anthropic.prompt_tokens_details, None);
+    let combined = finish(
+        r#"{"prompt_tokens":1000,"completion_tokens":5,"total_tokens":1005,"cache_read_tokens":40,"prompt_tokens_details":{"cached_tokens":870}}"#,
     );
+    // The wire keeps both figures; the shared method prefers the wire's.
+    assert_eq!(combined.cache_read_tokens, 40);
+    assert_eq!(combined.effective_cache_read_tokens(None), 40);
 }

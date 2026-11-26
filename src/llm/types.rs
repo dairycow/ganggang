@@ -199,9 +199,9 @@ pub struct CompletionTokensDetails {
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct PromptTokensDetails {
-    /// The OpenAI-style cache-read figure: a part of `prompt_tokens`.
+    /// Prefix-cache hits, as OpenAI, OpenRouter and Zhipu report them.
     #[serde(default)]
-    pub cached_tokens: Option<u32>,
+    pub cached_tokens: u32,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -220,29 +220,32 @@ pub struct Usage {
     /// them; folded into `prompt_tokens`, never added on top.
     #[serde(default)]
     pub cache_read_tokens: u32,
-    /// OpenAI-style `prompt_tokens_details`; read into
-    /// `cache_read_tokens` by [`folded`](Self::folded).
+    /// The same figure under the OpenAI-compatible detail object.
     #[serde(default)]
     pub prompt_tokens_details: Option<PromptTokensDetails>,
+    /// The same figure as DeepSeek reports it.
+    #[serde(default)]
+    pub prompt_cache_hit_tokens: u32,
 }
 
 impl Usage {
-    /// The usage with its cache reads in one place: a top-level
-    /// `cache_read_tokens` when the provider sends one, else the
-    /// `prompt_tokens_details.cached_tokens` an OpenAI-compatible provider
-    /// sends. Applied where a usage is taken off the wire, so every reader
-    /// (`cache NN%`, `/session info`, the print-mode summary) sees one field.
-    pub fn folded(mut self) -> Self {
-        let nested = self
-            .prompt_tokens_details
-            .as_ref()
-            .and_then(|d| d.cached_tokens);
-        if self.cache_read_tokens == 0
-            && let Some(nested) = nested
-        {
-            self.cache_read_tokens = nested;
-        }
-        self
+    /// Cache-read tokens from whichever field the provider filled in:
+    /// `cache_read_tokens` (the Anthropic adapter),
+    /// `prompt_tokens_details.cached_tokens`, `prompt_cache_hit_tokens`,
+    /// then a local server's `timings.cache_n`. Clamped to `prompt_tokens`.
+    pub fn effective_cache_read_tokens(&self, timings: Option<&Timings>) -> u32 {
+        [
+            self.cache_read_tokens,
+            self.prompt_tokens_details
+                .as_ref()
+                .map_or(0, |d| d.cached_tokens),
+            self.prompt_cache_hit_tokens,
+            timings.and_then(|t| t.cache_n).unwrap_or(0),
+        ]
+        .into_iter()
+        .find(|tokens| *tokens > 0)
+        .unwrap_or(0)
+        .min(self.prompt_tokens)
     }
 
     /// Reasoning tokens reported either top-level or nested under
@@ -292,6 +295,54 @@ pub struct StreamOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_read_tokens_come_from_whichever_field_the_provider_used() {
+        let usage = |json: &str| -> Usage { serde_json::from_str(json).unwrap() };
+        // OpenAI, OpenRouter and Zhipu.
+        let openai = usage(
+            r#"{"prompt_tokens":100,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":64}}"#,
+        );
+        assert_eq!(
+            openai
+                .prompt_tokens_details
+                .as_ref()
+                .map(|d| d.cached_tokens),
+            Some(64)
+        );
+        assert_eq!(openai.effective_cache_read_tokens(None), 64);
+        // DeepSeek.
+        let deepseek = usage(
+            r#"{"prompt_tokens":100,"completion_tokens":5,"prompt_cache_hit_tokens":90,"prompt_cache_miss_tokens":10}"#,
+        );
+        assert_eq!(deepseek.effective_cache_read_tokens(None), 90);
+        // A field the provider left out reads as absent.
+        let bare = usage(r#"{"prompt_tokens":100,"completion_tokens":5}"#);
+        assert_eq!(bare.effective_cache_read_tokens(None), 0);
+    }
+
+    #[test]
+    fn cache_read_tokens_fall_back_to_timings_and_clamp_to_the_prompt() {
+        let mut usage = Usage {
+            prompt_tokens: 100,
+            ..Usage::default()
+        };
+        let timings = Timings {
+            cache_n: Some(70),
+            ..Timings::default()
+        };
+        assert_eq!(usage.effective_cache_read_tokens(Some(&timings)), 70);
+
+        // A wire field wins over the timings.
+        usage.prompt_cache_hit_tokens = 20;
+        assert_eq!(usage.effective_cache_read_tokens(Some(&timings)), 20);
+
+        // Never more than the prompt.
+        usage.prompt_cache_hit_tokens = 0;
+        usage.cache_read_tokens = 500;
+        assert_eq!(usage.effective_cache_read_tokens(None), 100);
+        assert_eq!(Usage::default().effective_cache_read_tokens(None), 0);
+    }
 
     #[test]
     fn serializes_a_request() {

@@ -198,6 +198,32 @@ fn compaction_and_thinking_render() {
     assert!(html.contains("the story so far"), "summary present");
 }
 
+/// A run's recorded error renders as its own marked block, escaped like
+/// every other kind of text.
+#[test]
+fn an_error_entry_renders_marked_and_escaped() {
+    let entries = vec![
+        msg("e1", None, user("hi")),
+        Entry::Error {
+            id: "e2".into(),
+            parent_id: Some("e1".into()),
+            timestamp: "2026-11-26T00:00:00Z".into(),
+            error: HOSTILE.into(),
+        },
+    ];
+    let html = render_html(&header(), &entries);
+    assert!(
+        html.contains("<div class=\"error\" title=\"2026-11-26T00:00:00Z\"><pre>✗ "),
+        "{html}"
+    );
+    assert!(
+        html.contains("<pre>✗ &lt;/script&gt;"),
+        "the error text is escaped: {html}"
+    );
+    assert!(!html.contains(HOSTILE), "raw hostile text must not survive");
+    assert!(html.contains(".error {"), "the block is styled");
+}
+
 #[test]
 fn the_document_is_self_contained() {
     let html = render_html(&header(), &[msg("e1", None, user("hi"))]);

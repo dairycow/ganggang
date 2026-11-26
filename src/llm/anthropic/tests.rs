@@ -1,11 +1,12 @@
 mod abort;
+mod retry;
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::stream::AnthropicAssembler;
 use super::{build_request, messages_url, parse_response};
@@ -83,7 +84,14 @@ fn build_request_extracts_system_converts_tools_and_merges_user_turns() {
     let req = build_request("claude-haiku-5-5", &messages, 4096, &tools, true);
     assert_eq!(req["model"], "claude-haiku-5-5");
     assert_eq!(req["max_tokens"], 4096);
-    assert_eq!(req["system"], "sys 1");
+    assert_eq!(
+        req["system"],
+        json!([{
+            "type": "text",
+            "text": "sys 1",
+            "cache_control": { "type": "ephemeral" }
+        }])
+    );
     assert_eq!(req["stream"], true);
     assert_eq!(req["tools"][0]["name"], "read");
     assert_eq!(
@@ -101,6 +109,86 @@ fn build_request_extracts_system_converts_tools_and_merges_user_turns() {
     assert_eq!(msgs[2]["role"], "user");
     assert_eq!(msgs[2]["content"][0]["type"], "tool_result");
     assert_eq!(msgs[2]["content"][1]["is_error"], true);
+    assert_eq!(
+        msgs[2]["content"][1]["cache_control"],
+        json!({ "type": "ephemeral" })
+    );
+    assert_eq!(
+        req["tools"][0]["cache_control"],
+        json!({ "type": "ephemeral" })
+    );
+}
+
+/// Three breakpoints, no more: the system prompt, the last tool and the
+/// last block of the last `user` message. Everything else stays unmarked.
+#[test]
+fn build_request_marks_three_cache_breakpoints() {
+    let message = |role: &str, content: &str| ChatMessage {
+        role: role.into(),
+        content: Some(content.into()),
+        ..Default::default()
+    };
+    let call = |id: &str| ChatMessage {
+        role: "tool".into(),
+        content: Some("result".into()),
+        tool_call_id: Some(id.into()),
+        ..Default::default()
+    };
+    let messages = vec![
+        message("system", "sys"),
+        message("user", "question"),
+        ChatMessage {
+            role: "assistant".into(),
+            content: Some("looking".into()),
+            tool_calls: vec![
+                ToolCall::function("c1".into(), "read".into(), "{}".into()),
+                ToolCall::function("c2".into(), "grep".into(), "{}".into()),
+            ],
+            ..Default::default()
+        },
+        call("c1"),
+        call("c2"),
+    ];
+    let tool = |name: &str| {
+        json!({
+            "type": "function",
+            "function": { "name": name, "parameters": { "type": "object" } }
+        })
+    };
+    let req = build_request("m", &messages, 1024, &[tool("read"), tool("grep")], false);
+    let marked = json!({ "type": "ephemeral" });
+
+    assert_eq!(req["system"][0]["cache_control"], marked);
+    assert_eq!(req["tools"][1]["cache_control"], marked);
+    assert!(req["tools"][0].get("cache_control").is_none());
+    let msgs = req["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 3, "user, assistant, tool results");
+    assert_eq!(msgs[2]["role"], "user");
+    assert_eq!(msgs[2]["content"][1]["cache_control"], marked);
+    assert!(msgs[2]["content"][0].get("cache_control").is_none());
+    assert!(msgs[1]["content"][0].get("cache_control").is_none());
+    assert!(msgs[0]["content"][0].get("cache_control").is_none());
+    assert!(msgs.iter().all(|m| m.get("cache_control").is_none()));
+
+    // The count over the whole body.
+    fn count(value: &Value) -> usize {
+        match value {
+            Value::Object(map) => {
+                usize::from(map.contains_key("cache_control"))
+                    + map.values().map(count).sum::<usize>()
+            }
+            Value::Array(items) => items.iter().map(count).sum(),
+            _ => 0,
+        }
+    }
+    assert_eq!(count(&req), 3);
+
+    // Nothing to mark: no system prompt, no tools, and a request that
+    // ends on an assistant message.
+    let bare = build_request("m", &messages[2..3], 1024, &[], false);
+    assert!(bare.get("system").is_none());
+    assert!(bare.get("tools").is_none());
+    assert_eq!(count(&bare), 0);
 }
 
 #[test]
@@ -179,6 +267,9 @@ fn assembler_folds_thinking_text_and_split_tool_json() {
     assert_eq!(u.cache_read_tokens, 8);
 }
 
+/// Headers and the three ways a stream can go wrong: the truncated one
+/// fails on its first attempt here (retries are off, so the script stays
+/// three connections long; `tests::retry` covers the retried case).
 #[tokio::test]
 async fn anthropic_client_sends_headers_and_handles_sse_errors() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -226,7 +317,8 @@ async fn anthropic_client_sends_headers_and_handles_sse_errors() {
         .unwrap()
         .with_api(ApiKind::AnthropicMessages)
         .with_auth(AuthStyle::Auto)
-        .with_api_key(Some("secret-k".into()));
+        .with_api_key(Some("secret-k".into()))
+        .with_retry(0);
 
     let outcome = client
         .send_stream("claude-haiku-5-5", &[], 64, &[], &never_abort(), |_| {
@@ -269,7 +361,8 @@ async fn anthropic_client_sends_headers_and_handles_sse_errors() {
 
 /// The same salvage rule as the OpenAI stream (GAP 2): a body cut before
 /// `message_stop` keeps what it assembled and reports `complete: false`
-/// with the usage seen so far; a cut that assembled nothing still errors.
+/// with the usage seen so far; a cut that assembled nothing still fails
+/// (retries are off here, so it fails on its first attempt).
 #[tokio::test]
 async fn an_anthropic_stream_cut_mid_text_is_salvaged() {
     let body = concat!(
@@ -288,7 +381,8 @@ async fn an_anthropic_stream_cut_mid_text_is_salvaged() {
     ]);
     let client = LlmClient::new(&server.base_url)
         .unwrap()
-        .with_api(ApiKind::AnthropicMessages);
+        .with_api(ApiKind::AnthropicMessages)
+        .with_retry(0);
 
     let outcome = client
         .send_stream("claude-haiku-5-5", &[], 64, &[], &never_abort(), |_| {
@@ -322,23 +416,42 @@ async fn an_anthropic_stream_cut_mid_text_is_salvaged() {
     );
 }
 
-/// Serves one SSE body per connection, then closes — a clean EOF standing
-/// in for a server that died mid-generation.
+/// Serves one response per connection, then closes: a clean EOF standing
+/// in for a server that died mid-generation. Connections are counted, so a
+/// script can assert how many attempts a call made.
 struct CutServer {
     base_url: String,
+    attempts: Arc<AtomicUsize>,
 }
 
 impl CutServer {
+    /// One SSE body per connection, with the stream's response head in
+    /// front of it.
     fn spawn(bodies: Vec<String>) -> Self {
+        let responses = bodies
+            .into_iter()
+            .map(|body| format!("{SSE_HEAD}{body}"))
+            .collect();
+        Self::serve(responses)
+    }
+
+    /// Whole raw HTTP responses, exactly as given: for scripts about the
+    /// transport, where the framing is the point.
+    fn spawn_raw(responses: Vec<String>) -> Self {
+        Self::serve(responses)
+    }
+
+    fn serve(responses: Vec<String>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counted = attempts.clone();
         std::thread::spawn(move || {
-            for body in bodies {
+            for response in responses {
                 let (mut stream, _) = listener.accept().unwrap();
                 read_anthropic_request_head(&mut stream);
-                let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
-                stream.write_all(head.as_bytes()).unwrap();
-                for piece in body.as_bytes().chunks(7) {
+                counted.fetch_add(1, Ordering::SeqCst);
+                for piece in response.as_bytes().chunks(7) {
                     stream.write_all(piece).unwrap();
                 }
                 drop(stream);
@@ -346,9 +459,15 @@ impl CutServer {
         });
         Self {
             base_url: format!("http://{addr}"),
+            attempts,
         }
     }
 }
+
+/// The framing of a stream response this module scripts: the head, and
+/// `Connection: close` so every attempt is its own connection.
+const SSE_HEAD: &str =
+    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
 
 fn read_anthropic_request_head(stream: &mut std::net::TcpStream) {
     let mut buf = Vec::new();

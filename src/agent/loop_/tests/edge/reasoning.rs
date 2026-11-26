@@ -1,7 +1,8 @@
 //! Thought-only truncation scripts: a `length` turn that spent the whole
 //! `max_tokens` on reasoning has no partial to continue, so the loop asks
-//! for the same turn again with reasoning off, visibly, and keeps it off
-//! for the rest of the run.
+//! for the same turn again with reasoning off, visibly. The first turn in
+//! a row is retried on its own; the second keeps reasoning off for the
+//! rest of the run.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -18,8 +19,10 @@ use crate::agent::{Agent, hooks::Hooks};
 use crate::events::AgentEvent;
 use crate::llm::client::LlmClient;
 
-/// The warning a retried thought-only turn earns.
-const ASKED_AGAIN: &str = "response truncated by max_tokens=512 with nothing but reasoning; asking again with reasoning off, which stays off for the rest of this run";
+/// The warning the first thought-only turn in a row earns.
+const ASKED_AGAIN: &str = "response truncated by max_tokens=512 with nothing but reasoning; asking again with reasoning off for this turn";
+/// The warning the second thought-only turn back to back earns.
+const LATCHED: &str = "response truncated by max_tokens=512 with nothing but reasoning again; asking again with reasoning off, which stays off for the rest of this run";
 /// The warning a thought-only turn earns when no retry is left to make.
 const STOPPED: &str = "response truncated by max_tokens=512 before producing visible output; stopping instead of continuing";
 
@@ -166,10 +169,10 @@ async fn a_streamed_thought_only_truncation_is_asked_again_without_reasoning() {
     );
 }
 
-/// Reasoning stays off for the rest of the run: the tool turn after the
-/// retry, and the answer after it, both go out with `none`.
+/// The retry is scoped to its turn: the tool turn after it, and the
+/// answer after that, both go out with the endpoint's settings again.
 #[tokio::test]
-async fn reasoning_stays_off_for_the_rest_of_the_run() {
+async fn reasoning_returns_to_the_configured_effort_after_one_thought_only_turn() {
     let server = FakeServer::spawn(vec![
         thought_only_length_response("thinking"),
         tool_call_response(&[("call_1", "echo", r#"{"text":"x"}"#)]),
@@ -185,20 +188,145 @@ async fn reasoning_stays_off_for_the_rest_of_the_run() {
     assert_eq!(requests.len(), 3);
     assert!(requests[0].get("reasoning_effort").is_none());
     assert_eq!(requests[1]["reasoning_effort"], "none");
-    assert_eq!(requests[2]["reasoning_effort"], "none");
+    assert!(
+        requests[2].get("reasoning_effort").is_none(),
+        "the turn after the retry is back as configured: {}",
+        requests[2]
+    );
+    assert_eq!(warned(&event_values(&events)), vec![ASKED_AGAIN]);
     assert_eq!(
         event_values(&events).last().unwrap(),
         &json!({"type": "run_ended", "turns": 3})
     );
 }
 
-/// The run is the scope: the next run starts with the endpoint's settings.
+/// Two thought-only turns back to back: the second retry latches, and
+/// every request after it in the run goes out with `none`.
+#[tokio::test]
+async fn two_thought_only_turns_in_a_row_keep_reasoning_off_for_the_run() {
+    let server = FakeServer::spawn(vec![
+        thought_only_length_response("thinking"),
+        tool_call_response(&[("call_1", "echo", r#"{"text":"x"}"#)]),
+        thought_only_length_response("still thinking"),
+        tool_call_response(&[("call_2", "echo", r#"{"text":"y"}"#)]),
+        text_response("done"),
+    ]);
+    let mut registry = Registry::new();
+    registry.register(Box::new(Echo));
+
+    let (result, _, events) = drive(&server.base_url, registry, "hi").await;
+    assert!(result.is_ok(), "{result:?}");
+
+    let requests = server.requests.lock().unwrap().clone();
+    let efforts: Vec<String> = requests
+        .iter()
+        .map(|r| {
+            r.get("reasoning_effort").map_or("configured".into(), |v| {
+                v.as_str().unwrap_or_default().to_string()
+            })
+        })
+        .collect();
+    assert_eq!(
+        efforts,
+        vec!["configured", "none", "configured", "none", "none"],
+        "the turn between the two cuts goes as configured; the latch holds after the second"
+    );
+    assert_eq!(
+        warned(&event_values(&events)),
+        vec![ASKED_AGAIN, LATCHED],
+        "{events:?}"
+    );
+    assert_eq!(
+        event_values(&events).last().unwrap(),
+        &json!({"type": "run_ended", "turns": 5})
+    );
+}
+
+/// A complete turn that needed no retry ends the run of thought-only
+/// cuts: the next one is a first again, retried on its own.
+#[tokio::test]
+async fn a_complete_turn_between_thought_only_cuts_starts_the_count_again() {
+    let server = FakeServer::spawn(vec![
+        thought_only_length_response("thinking"),
+        tool_call_response(&[("call_1", "echo", r#"{"text":"x"}"#)]),
+        tool_call_response(&[("call_2", "echo", r#"{"text":"y"}"#)]),
+        thought_only_length_response("thinking"),
+        tool_call_response(&[("call_3", "echo", r#"{"text":"z"}"#)]),
+        text_response("done"),
+    ]);
+    let mut registry = Registry::new();
+    registry.register(Box::new(Echo));
+
+    let (result, _, events) = drive(&server.base_url, registry, "hi").await;
+    assert!(result.is_ok(), "{result:?}");
+
+    let requests = server.requests.lock().unwrap().clone();
+    let efforts: Vec<String> = requests
+        .iter()
+        .map(|r| {
+            r.get("reasoning_effort").map_or("configured".into(), |v| {
+                v.as_str().unwrap_or_default().to_string()
+            })
+        })
+        .collect();
+    assert_eq!(
+        efforts,
+        vec![
+            "configured",
+            "none",
+            "configured",
+            "configured",
+            "none",
+            "configured"
+        ],
+        "neither retry latches: {efforts:?}"
+    );
+    assert_eq!(
+        warned(&event_values(&events)),
+        vec![ASKED_AGAIN, ASKED_AGAIN],
+        "{events:?}"
+    );
+}
+
+/// A retry that is thought-only too has nothing left to switch off: the
+/// run stops the way a thought-only turn with reasoning already off does.
+#[tokio::test]
+async fn a_retry_that_is_thought_only_again_ends_the_run() {
+    let server = FakeServer::spawn(vec![
+        thought_only_length_response("thinking"),
+        thought_only_length_response("thinking, even with reasoning off"),
+    ]);
+
+    let (result, _, events) = drive(&server.base_url, Registry::new(), "hi").await;
+    assert!(result.is_ok(), "{result:?}");
+
+    assert_eq!(
+        warned(&event_values(&events)),
+        vec![ASKED_AGAIN, STOPPED],
+        "{events:?}"
+    );
+    assert_eq!(
+        server.requests.lock().unwrap().len(),
+        2,
+        "the same request is not made a third time"
+    );
+    assert_eq!(
+        event_values(&events).last().unwrap(),
+        &json!({"type": "run_ended", "turns": 2})
+    );
+}
+
+/// The run is the scope of the latch: the next run starts with the
+/// endpoint's settings.
 #[tokio::test]
 async fn the_next_run_asks_with_the_configured_reasoning_again() {
     let server = FakeServer::spawn(vec![
         thought_only_length_response("thinking"),
-        text_response("first"),
         tool_call_response(&[("call_1", "echo", r#"{"text":"x"}"#)]),
+        thought_only_length_response("thinking"),
+        tool_call_response(&[("call_2", "echo", r#"{"text":"y"}"#)]),
+        text_response("first"),
+        tool_call_response(&[("call_3", "echo", r#"{"text":"z"}"#)]),
         text_response("second"),
     ]);
     let mut registry = Registry::new();
@@ -214,15 +342,18 @@ async fn the_next_run_asks_with_the_configured_reasoning_again() {
     }
 
     let requests = server.requests.lock().unwrap().clone();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 7);
     assert!(requests[0].get("reasoning_effort").is_none());
     assert_eq!(requests[1]["reasoning_effort"], "none");
+    assert!(requests[2].get("reasoning_effort").is_none());
+    assert_eq!(requests[3]["reasoning_effort"], "none");
+    assert_eq!(requests[4]["reasoning_effort"], "none");
     assert!(
-        requests[2].get("reasoning_effort").is_none(),
+        requests[5].get("reasoning_effort").is_none(),
         "the second run starts as configured: {}",
-        requests[2]
+        requests[5]
     );
-    assert!(requests[3].get("reasoning_effort").is_none());
+    assert!(requests[6].get("reasoning_effort").is_none());
 }
 
 /// An endpoint already on `none` has nothing to switch off: a model that

@@ -261,6 +261,7 @@ pub(super) fn messages_of(entry: &Entry) -> &Message {
     match entry {
         Entry::Message { message, .. } => message,
         Entry::Compaction { .. } => unreachable!("compaction is M6; no entries here"),
+        Entry::Error { .. } => unreachable!("an error entry is not a message"),
     }
 }
 

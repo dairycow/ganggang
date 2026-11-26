@@ -1,8 +1,11 @@
 //! Streaming client tests: the request half of a stream retries like any
-//! request, the body half never does, and a body cut mid-answer is
-//! salvage rather than loss (GAP 2).
+//! other request, and so does a stream that fails before it shows
+//! anything; a body cut after a delta does not, and is salvage rather
+//! than loss (GAP 2).
 
+use std::future::Future;
 use std::io::Write as _;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -234,6 +237,253 @@ async fn a_stop_request_ends_a_long_retry_after_wait() {
     assert!(
         format!("{err:#}").contains("aborted by user"),
         "the stop request, not the 429, is the verdict: {err:#}"
+    );
+    assert_eq!(
+        server.attempts.load(Ordering::SeqCst),
+        1,
+        "no retry was made"
+    );
+}
+
+// ---------------------------------------------- pre-output stream retries
+
+/// The framing of a stream response this file scripts: the head, and
+/// `Connection: close` so every attempt is its own connection.
+const SSE_HEAD: &str =
+    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+
+/// The role echo a stream opens with: empty content, nothing a caller sees.
+const ROLE_ECHO: &str =
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n";
+
+/// The callback `send_stream` takes: one boxed future per delta.
+type OnDelta = Box<dyn FnMut(stream::Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>>;
+
+/// A complete streamed answer, as one raw response.
+fn sse_response(text: &str) -> String {
+    format!("{SSE_HEAD}{}", sse(text))
+}
+
+/// A 200 that ends after its role echo: no `[DONE]`, nothing assembled. The
+/// shape of a server that died before the model produced anything.
+fn empty_stream() -> String {
+    format!("{SSE_HEAD}{ROLE_ECHO}")
+}
+
+/// A 200 whose body claims more bytes than arrive: the read fails with a
+/// transport error instead of a clean EOF, as a reset connection would.
+fn truncated(body: &str) -> String {
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 4096\r\n\
+         Connection: close\r\n\r\n{body}"
+    )
+}
+
+/// The deltas a stream delivered, shared with its callback.
+type Deltas = Arc<Mutex<Vec<stream::Delta>>>;
+
+/// A delta sink for a stream test: the shared list and the callback that
+/// appends to it, so a test can prove nothing was delivered twice.
+fn sink() -> (Deltas, OnDelta) {
+    let deltas: Deltas = Arc::new(Mutex::new(Vec::new()));
+    let shared = deltas.clone();
+    let on_delta: OnDelta = Box::new(move |delta| {
+        let sink = shared.clone();
+        Box::pin(async move { sink.lock().unwrap().push(delta) })
+    });
+    (deltas, on_delta)
+}
+
+/// A 200 whose body ends before it delivers anything is worth another
+/// attempt: nothing was shown, so nothing is repeated. The next stream
+/// completes, its text arrives exactly once, and the retry is one notice.
+#[tokio::test]
+async fn an_empty_stream_is_retried_and_the_next_one_completes() {
+    let server = Scripted::spawn(vec![empty_stream(), sse_response("streamed")]);
+    let client = server.client();
+    let (deltas, on_delta) = sink();
+    let outcome = client
+        .send_stream("m", &[], 64, &[], &never_abort(), on_delta)
+        .await
+        .unwrap();
+    assert!(outcome.complete, "the second attempt reached [DONE]");
+    assert_eq!(
+        outcome.response.choices[0].message.content.as_deref(),
+        Some("streamed")
+    );
+    assert_eq!(
+        *deltas.lock().unwrap(),
+        vec![stream::Delta::Text("streamed".into())],
+        "nothing from the failed attempt, and the text once"
+    );
+    assert_eq!(server.attempts.load(Ordering::SeqCst), 2);
+    let notices = client.take_notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].contains("retry 1 of 5"), "{}", notices[0]);
+}
+
+/// The same for a read that fails outright before the first delta: the
+/// wire's doing, retried like a dropped connection before the head.
+#[tokio::test]
+async fn a_read_error_before_the_first_delta_is_retried() {
+    let server = Scripted::spawn(vec![
+        truncated(": keep-alive\n\n"),
+        sse_response("second try"),
+    ]);
+    let client = server.client();
+    let (deltas, on_delta) = sink();
+    let outcome = client
+        .send_stream("m", &[], 64, &[], &never_abort(), on_delta)
+        .await
+        .unwrap();
+    assert!(outcome.complete);
+    assert_eq!(
+        outcome.response.choices[0].message.content.as_deref(),
+        Some("second try")
+    );
+    assert_eq!(
+        *deltas.lock().unwrap(),
+        vec![stream::Delta::Text("second try".into())]
+    );
+    assert_eq!(server.attempts.load(Ordering::SeqCst), 2);
+    let notices = client.take_notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(
+        notices[0].contains("retry 1 of 5") && notices[0].contains("before any output"),
+        "{}",
+        notices[0]
+    );
+}
+
+/// After a delta has gone out, the same failure stands as an error: the
+/// partial was already shown, and another attempt would show it again.
+#[tokio::test]
+async fn a_read_error_after_a_delta_is_not_retried() {
+    let server = Scripted::spawn(vec![
+        truncated("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"half\"}}]}\n\n"),
+        sse_response("never asked for"),
+    ]);
+    let client = server.client();
+    let (deltas, on_delta) = sink();
+    let err = client
+        .send_stream("m", &[], 64, &[], &never_abort(), on_delta)
+        .await
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("reading SSE stream"), "{err:#}");
+    assert_eq!(
+        *deltas.lock().unwrap(),
+        vec![stream::Delta::Text("half".into())],
+        "the delta reached the caller exactly once"
+    );
+    assert_eq!(server.attempts.load(Ordering::SeqCst), 1, "no retry");
+    assert!(client.take_notices().is_empty());
+}
+
+/// The budget is one for the whole call: a retry spent on the response
+/// head is one the stream cannot have.
+#[tokio::test]
+async fn the_head_and_the_stream_share_one_budget() {
+    let server = Scripted::spawn(vec![
+        http("500 Internal Server Error", "", "nope"),
+        empty_stream(),
+        sse_response("never asked for"),
+    ]);
+    let client = server.client().with_retry(1);
+    let err = client
+        .send_stream("m", &[], 64, &[], &never_abort(), |_| Box::pin(async {}))
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("without [DONE]"),
+        "the last failure is the stream's: {err:#}"
+    );
+    assert_eq!(
+        server.attempts.load(Ordering::SeqCst),
+        2,
+        "the first attempt and one retry, whichever half needed it"
+    );
+    let notices = client.take_notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].contains("retry 1 of 1"), "{}", notices[0]);
+}
+
+/// Empty every time: the retries stop at `max_retries`, each leaves a
+/// notice, and the caller gets the last failure.
+#[tokio::test]
+async fn empty_streams_stop_at_the_budget() {
+    let server = Scripted::spawn(vec![empty_stream(), empty_stream(), empty_stream()]);
+    let client = server.client().with_retry(2);
+    let err = client
+        .send_stream("m", &[], 64, &[], &never_abort(), |_| Box::pin(async {}))
+        .await
+        .unwrap_err();
+    let rendered = format!("{err:#}");
+    assert!(
+        rendered.contains("without [DONE]") && rendered.contains("assembled nothing"),
+        "{rendered}"
+    );
+    assert_eq!(server.attempts.load(Ordering::SeqCst), 3);
+    let notices = client.take_notices();
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    assert!(notices[1].contains("retry 2 of 2"), "{}", notices[1]);
+}
+
+/// A chunk that does not parse is the provider's answer to the request:
+/// asked again it comes back the same, so there is no retry.
+#[tokio::test]
+async fn a_malformed_chunk_is_not_retried() {
+    let server = Scripted::spawn(vec![
+        format!("{SSE_HEAD}data: {{not json at all\n\ndata: [DONE]\n\n"),
+        sse_response("never asked for"),
+    ]);
+    let client = server.client();
+    let err = client
+        .send_stream("m", &[], 64, &[], &never_abort(), |_| Box::pin(async {}))
+        .await
+        .unwrap_err();
+    let rendered = format!("{err:#}");
+    assert!(
+        rendered.contains("parsing SSE chunk") && rendered.contains("{not json"),
+        "{rendered}"
+    );
+    assert_eq!(server.attempts.load(Ordering::SeqCst), 1, "no retry");
+    assert!(client.take_notices().is_empty());
+}
+
+/// The wait before a stream retry belongs to the stop request too: a stop
+/// that lands in it ends the call as the user's, and the retry is never
+/// made.
+#[tokio::test]
+async fn a_stop_request_ends_the_wait_before_a_stream_retry() {
+    let server = Scripted::spawn(vec![empty_stream(), sse_response("never asked for")]);
+    let client = LlmClient::new(&server.base_url)
+        .unwrap()
+        .with_retry_delay(Duration::from_secs(30));
+    let flag = Arc::new(AtomicBool::new(false));
+    let setter = {
+        let flag = flag.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            flag.store(true, Ordering::SeqCst);
+        })
+    };
+    let started = std::time::Instant::now();
+    let err = tokio::time::timeout(
+        Duration::from_secs(5),
+        client.send_stream("m", &[], 64, &[], &flag, |_| Box::pin(async {})),
+    )
+    .await
+    .expect("the wait must end on the stop request, not on the backoff")
+    .unwrap_err();
+    setter.join().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "the backoff was sat out: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        format!("{err:#}").contains("aborted by user"),
+        "the stop request, not the empty stream, is the verdict: {err:#}"
     );
     assert_eq!(
         server.attempts.load(Ordering::SeqCst),

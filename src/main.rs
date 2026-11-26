@@ -118,6 +118,11 @@ struct Cli {
     #[arg(long = "max-turns", value_name = "N")]
     max_turns: Option<u32>,
 
+    /// Maximum wall-clock seconds per run (0 disables). Soft wrap-up nudge at 80% of budget.
+    /// A nested run cannot exceed its parent's.
+    #[arg(long = "max-seconds", value_name = "SECS")]
+    max_seconds: Option<u64>,
+
     /// Persist and/or resume this exact session JSONL file path.
     #[arg(
         long = "session-file",
@@ -263,6 +268,7 @@ async fn main() -> anyhow::Result<()> {
         cfg.apply_cli(cli.provider.as_deref(), cli.model.as_deref())?;
         cfg.apply_reasoning_cli(cli.reasoning_effort.as_deref(), cli.thinking_budget);
         cfg.apply_max_turns_cli(cli.max_turns);
+        cfg.apply_max_seconds_cli(cli.max_seconds);
         let mut endpoint = cfg.active_endpoint();
         endpoint.require_auth()?;
         crate::llm::health::maybe_probe_local_health(&mut endpoint).await;
@@ -511,8 +517,10 @@ async fn open_agent(
     cfg.apply_cli(cli.provider.as_deref(), model.as_deref())?;
     cfg.apply_reasoning_cli(cli.reasoning_effort.as_deref(), cli.thinking_budget);
     cfg.apply_max_turns_cli(cli.max_turns);
+    cfg.apply_max_seconds_cli(cli.max_seconds);
     if let Some(nest) = &nested_boot {
         cfg.max_turns = nest.effective_max_turns(cfg.max_turns);
+        cfg.max_seconds = nest.effective_max_seconds(cfg.max_seconds);
     }
     let mut endpoint = cfg.active_endpoint();
     endpoint.require_auth()?;
@@ -599,6 +607,7 @@ fn boot_and_factory(
             reasoning_effort: None,
             thinking_budget: None,
             max_turns: None,
+            max_seconds: None,
             session_file: None,
         };
         assemble_boot(BootOpts {
@@ -696,6 +705,7 @@ fn build_agent(
         model: Some(endpoint.label()),
         tool_cap: Some(allowlist.clone()),
         max_turns_cap: cfg.max_turns,
+        max_seconds_cap: cfg.max_seconds,
         hooks_off: hooks.disabled(),
     }
     .shared();
@@ -720,6 +730,7 @@ fn build_agent(
     .with_replay_reasoning(endpoint.replay_reasoning)
     .with_compact_threshold(endpoint.compact_threshold_tokens)
     .with_max_turns(cfg.max_turns)
+    .with_max_seconds(cfg.max_seconds)
     .with_model_label(endpoint.label())
     .with_parent_env(nest))
 }
@@ -894,6 +905,8 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(w2.max_turns, Some(40));
+        let w3 = parse(&["--max-seconds", "0", "-p", "hi"]).unwrap();
+        assert_eq!(w3.max_seconds, Some(0));
         assert_eq!(
             w2.session_file.as_deref(),
             Some(std::path::Path::new("/tmp/s.jsonl"))

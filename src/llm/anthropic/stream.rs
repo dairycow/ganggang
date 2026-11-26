@@ -1,9 +1,10 @@
 //! SSE decoding for Anthropic Messages (`/v1/messages`) streaming responses
 //! — the same salvage contract as [`crate::llm::stream`]: a body that ends
 //! before `message_stop` comes back with what assembled and
-//! `complete: false`, and only an empty partial is an error. A stop request
-//! is the other way a read ends: polled while waiting for the next
-//! fragment, answered with the partial and `aborted: true`.
+//! `complete: false`, and only an empty partial fails, as
+//! [`RetryableStream`]: nothing was shown, so the client asks again. A
+//! stop request is the other way a read ends: polled while waiting for the
+//! next fragment, answered with the partial and `aborted: true`.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -14,7 +15,9 @@ use anyhow::Context;
 use serde_json::Value;
 
 use super::map_stop_reason;
-use crate::llm::stream::{Delta, LineBuffer, StreamOutcome, salvageable, until_abort};
+use crate::llm::stream::{
+    Delta, LineBuffer, RetryableStream, StreamOutcome, salvageable, until_abort,
+};
 use crate::llm::types::{ChatMessage, ChatResponse, Choice, ToolCall, Usage};
 
 #[derive(Default)]
@@ -181,6 +184,13 @@ impl AnthropicAssembler {
         Ok(deltas)
     }
 
+    /// Whether a tool call is being assembled: it reaches no `on_delta`,
+    /// yet a cut after it is salvage (the call exists) rather than a
+    /// retry (which would assemble it twice).
+    fn has_tool_calls(&self) -> bool {
+        !self.tool_uses.is_empty()
+    }
+
     pub(super) fn finish(self) -> ChatResponse {
         let tool_calls = self
             .tool_uses
@@ -236,10 +246,13 @@ impl AnthropicAssembler {
 pub(crate) async fn drain_sse(
     mut response: reqwest::Response,
     abort: &AtomicBool,
-    mut on_delta: impl FnMut(Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
+    on_delta: &mut impl FnMut(Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
 ) -> anyhow::Result<StreamOutcome> {
     let mut lines = LineBuffer::new();
     let mut assembler = AnthropicAssembler::default();
+    // Set with the first delta delivered: from there on the caller has
+    // seen part of the answer, and nothing is asked for again.
+    let mut emitted_any = false;
     let mut current_event: Option<String> = None;
     let mut done = false;
     let mut aborted = false;
@@ -249,7 +262,17 @@ pub(crate) async fn drain_sse(
             aborted = true;
             break;
         };
-        let Some(bytes) = bytes.context("reading Anthropic SSE stream")? else {
+        // A read that fails before anything was shown is the wire's doing:
+        // the request is worth making again. After a delta went out, or
+        // with a tool call half assembled, the error stands.
+        let bytes = match bytes.context("reading Anthropic SSE stream") {
+            Ok(bytes) => bytes,
+            Err(err) if !emitted_any && !assembler.has_tool_calls() => {
+                return Err(RetryableStream(err).into());
+            }
+            Err(err) => return Err(err),
+        };
+        let Some(bytes) = bytes else {
             break;
         };
         for line in lines.feed(&bytes) {
@@ -280,19 +303,20 @@ pub(crate) async fn drain_sse(
                 break;
             }
             for delta in assembler.feed(current_event.as_deref(), &val)? {
+                emitted_any = true;
                 on_delta(delta).await;
             }
         }
     }
 
     let assembled = assembler.finish();
-    if !(done || aborted) {
-        anyhow::ensure!(
-            salvageable(&assembled),
+    if !(done || aborted) && !(emitted_any || salvageable(&assembled)) {
+        return Err(RetryableStream(anyhow::anyhow!(
             "Anthropic SSE stream ended without message_stop and assembled nothing — the \
              connection was cut before the model produced anything (nothing to salvage; \
              retry the run)"
-        );
+        ))
+        .into());
     }
     Ok(StreamOutcome {
         response: assembled,

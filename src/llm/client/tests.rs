@@ -348,7 +348,7 @@ async fn each_retry_leaves_one_notice_for_the_caller() {
         "{}",
         notices[0]
     );
-    assert!(notices[0].contains("retry 1 of 3"), "{}", notices[0]);
+    assert!(notices[0].contains("retry 1 of 5"), "{}", notices[0]);
     assert!(
         client.take_notices().is_empty(),
         "a notice is handed over once"

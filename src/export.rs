@@ -86,8 +86,9 @@ header { border-bottom: 1px solid #3A4047; padding-bottom: .75rem;
 h1 { font-size: 1rem; margin: 0 0 .25rem; color: #E9E3D7; }
 .mark { color: #D94B4B; }
 .meta { color: #98A0A6; font-size: .8rem; }
-.user, .assistant, .tool, .compaction { margin: 1rem 0; }
+.user, .assistant, .tool, .compaction, .error { margin: 1rem 0; }
 .user { border-left: 3px solid #D94B4B; padding: .25rem 0 .25rem .75rem; }
+.error { border-left: 3px double #D94B4B; padding: .25rem 0 .25rem .75rem; }
 .assistant { border-left: 3px solid #3A4047; padding: .25rem 0 .25rem .75rem; }
 .tool { border-left: 3px solid #3A4047; padding: .25rem 0 .25rem .75rem; }
 .compaction { border-left: 3px dashed #D9A441; color: #98A0A6;
@@ -223,6 +224,15 @@ pub fn render_html(header: &SessionHeader, entries: &[Entry]) -> String {
                      <details><summary>summary</summary><pre>{}</pre></details></div>\n",
                     esc(summary),
                     ts = esc(timestamp)
+                ));
+            }
+            Entry::Error {
+                error, timestamp, ..
+            } => {
+                body.push_str(&format!(
+                    "<div class=\"error\" title=\"{ts}\"><pre>✗ {err}</pre></div>\n",
+                    ts = esc(timestamp),
+                    err = esc(error),
                 ));
             }
         }

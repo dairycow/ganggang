@@ -10,7 +10,8 @@ impl Transcript {
     /// Seed from persisted entries (resume). Tool results attach to their
     /// calls with the ✓/✗ the disk knows; persisted thinking replays as
     /// one block before its text (the live stream's order); compaction
-    /// entries render as a note.
+    /// entries render as a note, and a run's recorded error as its
+    /// failure line.
     pub fn extend_from_entries(&mut self, entries: &[Entry]) {
         let results: Vec<(&str, &str, bool)> = entries
             .iter()
@@ -109,6 +110,9 @@ impl Transcript {
                 Entry::Compaction { .. } => {
                     self.push_info("— earlier history compacted —");
                 }
+                // A run that failed leaves its error behind: replayed as
+                // the failure line the live run ended with.
+                Entry::Error { error, .. } => self.push_failure(error),
             }
         }
     }

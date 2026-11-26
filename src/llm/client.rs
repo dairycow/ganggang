@@ -266,9 +266,12 @@ impl LlmClient {
     ///
     /// Retrying follows the same rules as [`LlmClient::send`] for the
     /// request itself: a 500 before a single byte of SSE is worth another
-    /// attempt. Once the response head is in, the error is returned as it
-    /// is — replaying a stream that already delivered a delta would show
-    /// the user the same text twice (§17: never silently duplicate output).
+    /// attempt, and so is a stream that fails before it delivers anything
+    /// (a dropped connection, a body that ends empty). Both draw on one
+    /// budget. Once a delta has been delivered the stream is never
+    /// replayed: a cut answer comes back salvaged and a failed read as an
+    /// error, since a second attempt would show the user the same text
+    /// twice (§17: never silently duplicate output).
     /// A stop request ends the retry loop outright: the user asked for no
     /// more requests, and none is made.
     pub async fn send_stream(
@@ -365,21 +368,43 @@ impl LlmClient {
     }
 
     /// Send one built streaming request and assemble its answer.
+    ///
+    /// The retry loop spans the response head and the stream's first
+    /// output: a head that fails, or a stream that fails having shown
+    /// nothing ([`stream::RetryableStream`]), spends the same budget, so
+    /// `max_retries` bounds the retries of one call whichever half they
+    /// came from. Every attempt replays the same bytes
+    /// ([`attempt::replay`]). A stream that showed anything comes back
+    /// salvaged or fails for good, so nothing the caller has seen is ever
+    /// delivered twice.
     async fn drain_stream(
         &self,
         url: &str,
         request: reqwest::Request,
         abort: &AtomicBool,
-        on_delta: impl FnMut(stream::Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
+        mut on_delta: impl FnMut(stream::Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
     ) -> anyhow::Result<StreamOutcome> {
-        // The stop request is part of the send: it ends the wait for the
-        // response head and rules out a retry.
-        let response = self.attempts(url, request, Some(abort)).await?;
-        match self.api {
-            ApiKind::OpenAiCompletions => stream::drain_sse(response, abort, on_delta).await,
-            ApiKind::AnthropicMessages => {
-                anthropic::stream::drain_sse(response, abort, on_delta).await
+        let mut nth = 0u32;
+        loop {
+            // The stop request is part of the send: it ends the wait for
+            // the response head and rules out a retry.
+            let response = self.attempts(url, &request, Some(abort), &mut nth).await?;
+            let drained = match self.api {
+                ApiKind::OpenAiCompletions => {
+                    stream::drain_sse(response, abort, &mut on_delta).await
+                }
+                ApiKind::AnthropicMessages => {
+                    anthropic::stream::drain_sse(response, abort, &mut on_delta).await
+                }
+            };
+            let error = match drained {
+                Ok(outcome) => return Ok(outcome),
+                Err(error) => error,
+            };
+            if !is_retryable_stream(&error) {
+                return Err(error);
             }
+            self.retry_stream(error, &mut nth, url, abort).await?;
         }
     }
 }
@@ -389,7 +414,7 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// The summarize call's output cap: a continuation summary is short, and a
 /// large `max_tokens` is what makes a small request slow.
-const SUMMARY_MAX_TOKENS: u32 = 4096;
+pub(crate) const SUMMARY_MAX_TOKENS: u32 = 4096;
 /// The summarize call's thinking cap, for endpoints that budget it in tokens.
 const SUMMARY_REASONING_BUDGET_TOKENS: u32 = 512;
 /// Configured reasoning efforts worth pulling down for a summarize call.
@@ -422,6 +447,12 @@ pub fn is_refusal(error: &anyhow::Error) -> bool {
     error.downcast_ref::<Refused>().is_some()
 }
 
+/// Whether a failed stream is worth another attempt: it failed before it
+/// showed anything, and says so in its type.
+fn is_retryable_stream(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<stream::RetryableStream>().is_some()
+}
+
 fn is_opencode_url(base_url: &str) -> bool {
     let Some((_, rest)) = base_url.split_once("://") else {
         return false;
@@ -434,8 +465,9 @@ fn is_opencode_url(base_url: &str) -> bool {
     host == "opencode.ai" || host.ends_with(".opencode.ai")
 }
 
-/// Streaming retry tests: the request half retries, the body half never
-/// does, and a cut body is salvage rather than loss (GAP 2).
+/// Streaming retry tests: the request half retries like any other, and
+/// so does a stream that fails before it shows anything; a body cut after
+/// a delta does not, and is salvage rather than loss (GAP 2).
 #[cfg(test)]
 mod stream_tests;
 

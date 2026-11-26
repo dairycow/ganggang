@@ -20,21 +20,24 @@ impl LlmClient {
         url: &str,
         request: reqwest::Request,
     ) -> anyhow::Result<reqwest::Response> {
-        self.attempts(url, request, None).await
+        self.attempts(url, &request, None, &mut 0).await
     }
 
-    /// The retry loop both call paths share. `abort` is the streaming
-    /// path's stop request: it ends the wait for the response head and the
-    /// wait before a retry with [`ABORTED`], and rules out another
-    /// attempt. `None` is the non-streaming path, whose caller races the
-    /// whole call against the same flag instead.
+    /// The retry loop for the response head, on both call paths. `nth`
+    /// is the number of retries this call has spent so far and is advanced
+    /// here, so a caller that also retries the stream
+    /// ([`Self::retry_stream`]) shares one budget with it. `abort` is the
+    /// streaming path's stop request: it ends the wait for the response
+    /// head and the wait before a retry with [`ABORTED`], and rules out
+    /// another attempt. `None` is the non-streaming path, whose caller
+    /// races the whole call against the same flag instead.
     pub(super) async fn attempts(
         &self,
         url: &str,
-        request: reqwest::Request,
+        request: &reqwest::Request,
         abort: Option<&AtomicBool>,
+        nth: &mut u32,
     ) -> anyhow::Result<reqwest::Response> {
-        let mut nth = 0u32;
         loop {
             let outcome = match abort {
                 // A stop request is honoured before the attempt: a request
@@ -46,39 +49,76 @@ impl LlmClient {
                 // request. Dropping the future cancels the in-flight
                 // request, so the connection closes and the wait ends.
                 Some(flag) => {
-                    let attempt = self.attempt(url, replay(&request)?);
+                    let attempt = self.attempt(url, replay(request)?);
                     match stream::until_abort(flag, attempt).await {
                         Some(outcome) => outcome,
                         None => return Err(anyhow::anyhow!(ABORTED)),
                     }
                 }
-                None => self.attempt(url, replay(&request)?).await,
+                None => self.attempt(url, replay(request)?).await,
             };
             match outcome {
                 Ok(response) => return Ok(response),
-                Err(failure) => {
-                    let Some(wait) = self.retry_in(&failure, nth, url) else {
-                        return Err(failure.error);
-                    };
-                    // The wait before a retry belongs to the stop request
-                    // too: a `Retry-After` can be half a minute, and the
-                    // user who asked for no more requests should not sit
-                    // it out.
-                    match abort {
-                        Some(flag) => {
-                            if stream::until_abort(flag, tokio::time::sleep(wait))
-                                .await
-                                .is_none()
-                            {
-                                return Err(anyhow::anyhow!(ABORTED));
-                            }
-                        }
-                        None => tokio::time::sleep(wait).await,
-                    }
-                    nth += 1;
-                }
+                Err(failure) => self.wait_to_retry(failure, nth, url, abort).await?,
             }
         }
+    }
+
+    /// A stream that failed before it showed anything: another attempt on
+    /// the same terms as a failed response head (the notice, the wait and
+    /// the shared budget), or the error itself when nothing is left.
+    pub(super) async fn retry_stream(
+        &self,
+        error: anyhow::Error,
+        nth: &mut u32,
+        url: &str,
+        abort: &AtomicBool,
+    ) -> anyhow::Result<()> {
+        let failure = Failure {
+            retry: Verdict::Transport,
+            reason: "stream ended before any output".to_string(),
+            error,
+        };
+        self.wait_to_retry(failure, nth, url, Some(abort)).await
+    }
+
+    /// The decision and the wait behind every retry, whichever half of the
+    /// call failed: `Err` ends the call with the failure itself, or with
+    /// [`ABORTED`] once the stop request rules out another attempt.
+    /// Otherwise a notice is left for the caller, the wait is sat out and
+    /// `nth` counts the retry about to be made.
+    ///
+    /// The wait belongs to the stop request too: a `Retry-After` can be
+    /// half a minute, and the user who asked for no more requests should
+    /// not sit it out.
+    async fn wait_to_retry(
+        &self,
+        failure: Failure,
+        nth: &mut u32,
+        url: &str,
+        abort: Option<&AtomicBool>,
+    ) -> anyhow::Result<()> {
+        // Asked before the notice, so a stop request never announces a
+        // retry it forbids.
+        if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return Err(anyhow::anyhow!(ABORTED));
+        }
+        let Some(wait) = self.retry_in(&failure, *nth, url) else {
+            return Err(failure.error);
+        };
+        match abort {
+            Some(flag) => {
+                if stream::until_abort(flag, tokio::time::sleep(wait))
+                    .await
+                    .is_none()
+                {
+                    return Err(anyhow::anyhow!(ABORTED));
+                }
+            }
+            None => tokio::time::sleep(wait).await,
+        }
+        *nth += 1;
+        Ok(())
     }
 
     /// One HTTP attempt: send, and classify the response head. Bodies are
@@ -138,7 +178,7 @@ impl LlmClient {
     }
 
     /// The retry decision for one failed attempt: `None` ends the call,
-    /// otherwise the wait before the retry — and a line for the user, kept
+    /// otherwise the wait before the retry, and a line for the user, kept
     /// until the caller asks for it, that says what failed and what is
     /// being done about it.
     fn retry_in(&self, failure: &Failure, nth: u32, url: &str) -> Option<Duration> {

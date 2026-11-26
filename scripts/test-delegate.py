@@ -122,6 +122,32 @@ class DelegateTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("-m") + 1], "provider/model")
         self.assertEqual(argv[argv.index("--tools") + 1], "read,grep")
         self.assertEqual(argv[argv.index("--max-turns") + 1], "5")
+        self.assertNotIn("--max-seconds", argv)
+
+    def test_a_timeout_gives_the_job_a_time_budget_ten_seconds_short(self):
+        # The budget ends the run before the watchdog terms the job, so the
+        # answer reaches NAME.out. A `sleep` that waits at most 2 s stands
+        # in: the watchdog's `sleep 60` outlives the job, and would hold
+        # this test's pipe open until it ended.
+        shim = self.root / "bin" / "sleep"
+        shim.write_text('#!/usr/bin/env bash\nd=$1; (( d > 2 )) && d=2\nexec /bin/sleep "$d"\n', encoding="utf-8")
+        shim.chmod(0o755)
+        proc = self.delegate(
+            "--job", "a", "--prompt", str(self.prompt), "--timeout", "60",
+            "--dir", str(self.root / "jobs"),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        argv = self.argv()
+        self.assertEqual(argv[argv.index("--max-seconds") + 1], "50")
+
+    def test_a_short_timeout_sets_no_time_budget(self):
+        # Too short to leave room for a wrap-up: twenty seconds is the least.
+        proc = self.delegate(
+            "--job", "a", "--prompt", str(self.prompt), "--timeout", "1",
+            env=self.env(STUB_MODE="empty"),
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertNotIn("--max-seconds", self.argv())
 
     def test_a_job_without_an_answer_says_so(self):
         proc = self.delegate(

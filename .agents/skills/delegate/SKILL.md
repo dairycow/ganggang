@@ -40,7 +40,7 @@ Jobs in one `bash` call share a directory. Each job writes `NAME.prompt.md`, `NA
 | `--model SPEC` | A `provider/model`. Default: this run's model |
 | `--tools LIST` | Comma-separated, a subset of this run's tools. Default: this run's tools |
 | `--max-turns N` | The job's turn budget, at most this run's |
-| `--timeout SECS` | Stops the job after `SECS` |
+| `--timeout SECS` | Stops the job after `SECS`. From 20 s up, the job also gets a time budget 10 s short of it, so it writes its answer before the stop |
 
 ## Reading the result
 

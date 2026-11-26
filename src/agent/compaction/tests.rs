@@ -60,7 +60,12 @@ fn reserve_and_keep_recent_scale_with_the_window() {
 
     assert_eq!(effective_reserve(32_768, RESERVE), 12_288);
     assert_eq!(compact_line(32_768, None, RESERVE), 20_480);
-    assert_eq!(effective_keep_recent(32_768, None, RESERVE), 10_240);
+    assert_eq!(effective_keep_recent(32_768, None, RESERVE), 6_826);
+
+    // A 65k window: the line is 40,960, and a third of it leaves the
+    // rest of the window free for the turns after a compaction.
+    assert_eq!(compact_line(65_536, None, RESERVE), 40_960);
+    assert_eq!(effective_keep_recent(65_536, None, RESERVE), 13_653);
 
     assert_eq!(effective_reserve(262_144, RESERVE), 24_576);
     assert_eq!(compact_line(262_144, Some(65_536), RESERVE), 65_536);
@@ -69,8 +74,8 @@ fn reserve_and_keep_recent_scale_with_the_window() {
         20_000
     );
 
-    // A threshold below the ceiling still caps the kept budget at half.
-    assert_eq!(effective_keep_recent(131_072, Some(10_000), RESERVE), 5_000);
+    // A threshold below the ceiling still caps the kept budget at a third.
+    assert_eq!(effective_keep_recent(131_072, Some(10_000), RESERVE), 3_333);
 }
 
 /// A request that asks for more completion tokens than [`RESERVE`] needs
@@ -206,6 +211,29 @@ fn entry_estimates_measure_own_text_only() {
         serde_json::to_value(&compacted).unwrap()["firstKeptId"],
         json!("a1")
     );
+
+    // An error entry is never sent, so however long it adds nothing: not
+    // to the walk, and not to the count of entries appended since the last
+    // usage.
+    let failed = Entry::Error {
+        id: "e9".into(),
+        parent_id: None,
+        timestamp: String::new(),
+        error: "e".repeat(400),
+    };
+    assert_eq!(entry_token_estimate_with(&failed, true), 0);
+    let measured = msg_entry(
+        "a2",
+        Role::Assistant,
+        "answer",
+        Some(Usage {
+            prompt_tokens: 100,
+            completion_tokens: 10,
+            total_tokens: 110,
+            ..Usage::default()
+        }),
+    );
+    assert_eq!(context_tokens_of(&[measured, failed]), Some(110));
 }
 
 // ---------------------------------------------------------- cut point
@@ -516,6 +544,7 @@ async fn summarize_grounds_the_prompt_in_cwd_and_uses_the_cheap_budget() {
         &client,
         "test-model",
         16384,
+        131_072,
         std::path::Path::new("/repo/root"),
         &dropped,
         None,
@@ -535,4 +564,172 @@ async fn summarize_grounds_the_prompt_in_cwd_and_uses_the_cheap_budget() {
     assert!(body.contains(r#""max_tokens":4096"#), "{body}");
     assert!(body.contains(r#""reasoning_effort":"low""#), "{body}");
     assert!(body.contains(r#""reasoning_budget_tokens":512"#), "{body}");
+}
+
+// ------------------------------------------- bounded summary transcript
+
+fn user(text: &str) -> ChatMessage {
+    ChatMessage {
+        role: "user".into(),
+        content: Some(text.into()),
+        ..ChatMessage::default()
+    }
+}
+
+fn tool_result(id: &str, text: &str) -> ChatMessage {
+    ChatMessage {
+        role: "tool".into(),
+        content: Some(text.into()),
+        tool_call_id: Some(id.into()),
+        ..ChatMessage::default()
+    }
+}
+
+const OMITTED: &str = "\n[... 1000 chars omitted ...]\n";
+
+/// A long tool result keeps its head and tail with a note between; a short
+/// one is carried whole. Three-byte characters, so a cut on a byte that is
+/// not a boundary would panic here.
+#[test]
+fn long_tool_results_are_capped_in_the_transcript() {
+    let text: String = "漢字".repeat(2_500);
+    let transcript = super::summarize::format_transcript_for_summary(&[
+        user("look at this"),
+        tool_result("call_1", &text),
+        tool_result("call_2", "small"),
+    ]);
+    let section = transcript
+        .split("Tool result (call_1):\n")
+        .nth(1)
+        .unwrap()
+        .split("\n\nTool result (call_2)")
+        .next()
+        .unwrap();
+    let head: String = text.chars().take(1_500).collect();
+    let tail: String = text.chars().skip(2_500).collect();
+    assert_eq!(section, format!("{head}{OMITTED}{tail}"));
+    assert!(transcript.ends_with("Tool result (call_2):\nsmall"));
+}
+
+/// A transcript past the window's budget keeps its leading quarter and
+/// its newest three-quarters, with a note naming what went missing, and
+/// the result fits the budget.
+#[test]
+fn the_transcript_is_cut_to_the_window_budget() {
+    // (10,240 - 6,144) * 3
+    let budget = super::summarize::transcript_budget(10_240);
+    assert_eq!(budget, 12_288);
+    let old: String = "é".repeat(30_000);
+    let wire = [user("original request"), user(&old), user("the newest")];
+    let transcript = super::summarize::bounded_transcript(&wire, 10_240);
+
+    let len = transcript.chars().count();
+    assert!(len <= budget, "{len} > {budget}");
+    let note_start = transcript.find("\n\n[... ").expect("the note");
+    let note_end = transcript.find(" ...]\n\n").unwrap() + " ...]\n\n".len();
+    let note = &transcript[note_start..note_end];
+    let (lead, newest) = transcript.split_once(note).unwrap();
+    assert!(lead.starts_with("User:\noriginal request"), "{lead}");
+    assert!(newest.ends_with("User:\nthe newest"), "{newest}");
+    // The kept body splits a quarter to the lead and three quarters to
+    // the newest; only the note sits outside it.
+    let kept = lead.chars().count() + newest.chars().count();
+    assert_eq!(
+        lead.chars().count(),
+        kept / 4,
+        "a leading quarter of the kept body"
+    );
+    assert_eq!(
+        kept + note.chars().count(),
+        budget,
+        "the cut fills the budget"
+    );
+    let omitted = 30_000
+        + 3 * "User:\n".chars().count()
+        + 2 * "\n\n".chars().count()
+        + "original request".chars().count()
+        + "the newest".chars().count()
+        - len
+        + note.chars().count();
+    assert_eq!(
+        note,
+        format!(
+            "\n\n[... {omitted} chars of older transcript omitted to fit summary window ...]\n\n"
+        )
+    );
+}
+
+/// A transcript inside the budget is carried whole, and a window with no
+/// room to spare still carries a short one.
+#[test]
+fn short_transcripts_and_small_windows() {
+    let wire = [user("short")];
+    assert_eq!(
+        super::summarize::bounded_transcript(&wire, 10_240),
+        "User:\nshort"
+    );
+    assert_eq!(super::summarize::transcript_budget(0), 4_096);
+    assert_eq!(super::summarize::transcript_budget(6_144), 4_096);
+    assert_eq!(super::summarize::transcript_budget(7_144), 4_096);
+    assert_eq!(super::summarize::transcript_budget(8_144), 6_000);
+    let long: String = "x".repeat(5_000);
+    let cut = super::summarize::bounded_transcript(&[user(&long)], 0);
+    assert!(cut.chars().count() <= 4_096);
+    assert!(cut.contains("chars of older transcript omitted to fit summary window"));
+}
+
+/// The request itself carries the bounded transcript: the window is
+/// passed through to the summariser.
+#[tokio::test]
+async fn summarize_sends_a_transcript_the_window_fits() {
+    use std::sync::atomic::AtomicBool;
+
+    let probe = Probe::spawn();
+    let client = crate::llm::client::LlmClient::new(&probe.base_url).unwrap();
+    let dropped = [
+        user("ORIGINAL-REQUEST"),
+        tool_result("call_1", &"x".repeat(20_000)),
+        user("NEWEST-MESSAGE"),
+    ];
+    let summary = super::summarize::summarize(
+        &client,
+        "test-model",
+        16384,
+        10_240,
+        std::path::Path::new("/repo/root"),
+        &dropped,
+        None,
+        &std::sync::Arc::new(AtomicBool::new(false)),
+    )
+    .await
+    .expect("summary")
+    .expect("content");
+    assert_eq!(summary, "a summary");
+
+    let body = probe.request_body();
+    let prompt =
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    let transcript = prompt
+        .split("<conversation>\n")
+        .nth(1)
+        .unwrap()
+        .split("\n</conversation>")
+        .next()
+        .unwrap();
+    assert!(
+        transcript.starts_with("User:\nORIGINAL-REQUEST"),
+        "{transcript}"
+    );
+    assert!(
+        transcript.ends_with("User:\nNEWEST-MESSAGE"),
+        "{transcript}"
+    );
+    assert!(
+        transcript.chars().count() <= 12_288,
+        "{} chars went out",
+        transcript.chars().count()
+    );
 }

@@ -2,15 +2,18 @@
 //! truncation and empty-content warnings — where the loop must degrade
 //! visibly and keep running (§9, §17). The truncated-turn scripts (a
 //! `length` finish, a cut stream, the continuation budget) are in
-//! [`continuation`], and the ones for a turn that was nothing but
-//! reasoning in [`reasoning`]: same contract, their own files, per the
-//! module budget.
+//! [`continuation`] and [`budget`], and the ones for a turn that was
+//! nothing but reasoning in [`reasoning`]: same contract, their own files,
+//! per the module budget.
 
+mod budget;
 mod cancel;
 mod continuation;
+mod failure;
 mod reasoning;
 mod retry;
 mod stream_abort;
+mod time_budget;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;

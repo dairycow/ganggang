@@ -14,13 +14,34 @@ use ratatui::text::{Line as UiLine, Span};
 
 use super::theme::Palette;
 
-/// Spinner frames, one per 100 ms tick: a small block square orbiting the
-/// cell clockwise. Block glyphs rather than Braille, so every monospace
-/// font has them and none draws a box. The crest frame, first of the
-/// four, is the one drawn in scarlet by [`Footer::spinner_colour`].
-pub const SPINNER: [char; 4] = ['▘', '▝', '▗', '▖'];
-/// The frame where the square is at the top of its orbit: the gang-gang's
-/// crest, raised. Once a turn the spinner flashes scarlet.
+/// The mark's frames, one per [`crate::tui::tick::PERIOD`] tick: the
+/// gang-gang's two wings, each one cell, beating the same two cells the
+/// name takes up at rest. The left wing leads the beat and the right one
+/// follows it by a half beat, so the pair looks like it is turning in the
+/// middle rather than two marks trading places.
+///
+/// The turn of the mark: one pair of wings per frame, up and over and
+/// down and up again. Left wing first in each entry, so the mark reads
+/// `◤◤ ◤◥ ◥◤ ◣◢ ◣◢ ◤◤` — the two wings rise together, the beat is one
+/// frame, and the descent is held a frame so it reads as a pause rather
+/// than a snap. Six beats, about 600 ms at the period.
+///
+/// The glyphs are black triangles, not the block halves: `▘▝▗▖` draw as
+/// shading in a proportional cell, where `◤◥` is a shape, and a wing that
+/// reads as a wing is the whole point of this mark.
+///
+/// Not the name: `gg` sits in the same two cells when nothing is running,
+/// and the mark is the only thing that moves while the turn does.
+pub const WINGS: [(&str, &str); 6] = [
+    ("◤", "◤"),
+    ("◤", "◥"),
+    ("◥", "◤"),
+    ("◣", "◢"),
+    ("◣", "◢"),
+    ("◤", "◤"),
+];
+/// The frame where the left wing is at its highest: the gang-gang's
+/// crest, raised. Once a turn the mark flashes scarlet.
 pub const CREST_FRAME: usize = 0;
 
 /// The context percentage at which the footer's number turns gold, and
@@ -163,18 +184,13 @@ impl Footer {
     /// Advance the spinner one frame. Called from the event loop's timer
     /// arm only while [`spinning`](Self::spinning).
     pub fn tick(&mut self) {
-        self.frame = (self.frame + 1) % SPINNER.len();
+        self.frame = (self.frame + 1) % WINGS.len();
     }
 
-    /// The spinner frame the footer is showing.
-    pub fn spinner(&self) -> char {
-        SPINNER[self.frame % SPINNER.len()]
-    }
-
-    /// The spinner's colour while a run works: scarlet on the crest frame,
-    /// the cheek's orange-red the rest of the orbit.
-    pub fn spinner_colour(&self, palette: &Palette) -> ratatui::style::Color {
-        if self.frame % SPINNER.len() == CREST_FRAME {
+    /// The colour the mark's wings take while a run works: the crest on
+    /// the first frame, the cheek's orange-red the rest of the turn.
+    pub fn mark_colour(&self, palette: &Palette) -> ratatui::style::Color {
+        if self.frame % WINGS.len() == CREST_FRAME {
             palette.accent
         } else {
             palette.accent_soft
@@ -225,11 +241,35 @@ impl Footer {
             .join("")
     }
 
-    /// e.g. `gg …/projects/ganggang qwen3.8 medium ↑305 ↓81 ctx 4% ▘ working`,
+    /// e.g. `gg …/projects/ganggang qwen3.8 medium ↑305 ↓81 ctx 4% ◤◤ working`,
     /// and with the last turn's cache hit rate, `… ctx 4% cache 87% …`;
     /// with the throughput figures the backend reports,
-    /// `… ↑305 ↓81 ctx 4% 62.4 t/s think 45% ⠋ working`.
+    /// `… ↑305 ↓81 ctx 4% 62.4 t/s think 45% ◤◤ working`.
     ///
+    /// The two cells at the start of the footer: the name when idle, the
+    /// wings of the run's frame while a run works.
+    ///
+    /// The same width both ways, so nothing behind the mark moves while
+    /// the turn turns — the name gives way to the wings and the fields
+    /// after them stay put.
+    pub fn mark(&self) -> String {
+        if self.spinning() {
+            Self::mark_cells(self.frame)
+        } else {
+            Self::MARK_NAME.to_string()
+        }
+    }
+
+    /// The two cells of the frame the run is on: the wing pair, and the
+    /// first frame is the crest.
+    fn mark_cells(frame: usize) -> String {
+        let (left, right) = WINGS[frame % WINGS.len()];
+        format!("{left}{right}")
+    }
+
+    /// The name the mark spells at rest.
+    pub const MARK_NAME: &str = "gg";
+
     /// One row of spans, each already carrying the style its role means:
     /// the mark in the crest, the location in pale grey, the model in body
     /// text, the thinking level in muted, the totals in muted, the context
@@ -238,10 +278,19 @@ impl Footer {
     /// — ready, a turning spinner and `working`, or `stopping…`.
     pub fn spans(&self, palette: &Palette) -> UiLine<'static> {
         let muted = Style::new().fg(palette.muted);
+        // The mark: the name at rest, one wing cell of the run's frame
+        // while it works. Two cells either way, so nothing behind it moves
+        // while a turn turns.
         let mut spans: Vec<Span<'static>> = vec![
             Span::styled(
-                "gg",
-                Style::new().fg(palette.accent).add_modifier(Modifier::BOLD),
+                self.mark(),
+                Style::new()
+                    .fg(if self.spinning() {
+                        self.mark_colour(palette)
+                    } else {
+                        palette.accent
+                    })
+                    .add_modifier(Modifier::BOLD),
             ),
             field(muted),
             Span::styled(self.cwd_short.clone(), muted),
@@ -296,7 +345,10 @@ impl Footer {
         }
         if self.stopping {
             return vec![
-                Span::styled(self.spinner().to_string(), Style::new().fg(palette.accent)),
+                Span::styled(
+                    Self::mark_cells(CREST_FRAME),
+                    Style::new().fg(palette.accent),
+                ),
                 Span::styled(
                     " stopping…",
                     Style::new().fg(palette.accent).add_modifier(Modifier::BOLD),
@@ -305,8 +357,8 @@ impl Footer {
         }
         vec![
             Span::styled(
-                self.spinner().to_string(),
-                Style::new().fg(self.spinner_colour(palette)),
+                Self::mark_cells(self.frame),
+                Style::new().fg(self.mark_colour(palette)),
             ),
             Span::styled(" working", Style::new().fg(palette.accent_soft)),
         ]

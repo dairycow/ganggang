@@ -15,7 +15,9 @@ use super::super::{
     Echo, Registry, drive, drive_streaming, drive_with_abort, event_values, messages_of,
 };
 use crate::agent::Agent;
-use crate::agent::loop_::cut::{CONTINUE_INSTRUCTION as CONTINUE, MAX_CONTINUATIONS};
+use crate::agent::loop_::cut::{
+    CONTINUE_INSTRUCTION as CONTINUE, CONTINUE_TOOL_INSTRUCTION as CONTINUE_TOOL, MAX_CONTINUATIONS,
+};
 use crate::agent::session::Role;
 use crate::llm::client::LlmClient;
 
@@ -163,7 +165,12 @@ async fn a_length_truncation_never_runs_its_tool_calls_but_stays_replay_safe() {
         tool_result.content.as_deref(),
         Some("not executed: response was truncated")
     );
-    assert_eq!(messages_of(&entries[3]).content.as_deref(), Some(CONTINUE));
+    assert_eq!(
+        messages_of(&entries[3]).content.as_deref(),
+        Some(CONTINUE_TOOL),
+        "a cut tool call is asked for in pieces, not merely continued"
+    );
+    assert_ne!(CONTINUE_TOOL, CONTINUE);
 
     // And the next request really replays the pair: a call with an answer.
     let requests = server.requests.lock().unwrap().clone();
