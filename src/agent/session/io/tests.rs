@@ -695,3 +695,24 @@ fn with_parent_applies_to_the_header_line_that_will_be_written() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn with_parent_refuses_a_store_that_has_already_appended() {
+    let root = tmp_root("parent-after-append");
+    let cwd = Path::new("/proj/parent-after-append");
+    let mut store = SessionStore::create_under(&root, cwd, "m").unwrap();
+    store
+        .append(&entry_message(Some("x"), vec![], None, false))
+        .unwrap();
+    let err = match store.with_parent(Some("p-3".to_string())) {
+        Err(e) => e,
+        Ok(_) => panic!("with_parent after an append must fail"),
+    };
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("with_parent must be called before the first append"),
+        "error must name the precondition: {message}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

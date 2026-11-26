@@ -73,7 +73,7 @@ pub trait Tool: Send + Sync {
     fn execute<'a>(&'a self, args: &'a Value, cancel: &'a Cancel) -> BoxFuture<'a, ToolResult>;
 
     /// Run one call with the run's full context. The default delegates to
-    /// [`execute`] with the ctx's stop request, so tools that need no events
+    /// [`Self::execute`] with the ctx's stop request, so tools that need no events
     /// or call id are untouched; a tool that observes the run (the `task`
     /// tool) overrides it.
     fn execute_with<'a>(&'a self, args: &'a Value, ctx: &'a ToolCtx) -> BoxFuture<'a, ToolResult> {
@@ -129,13 +129,11 @@ impl Registry {
             .collect()
     }
 
-    /// Execute one call. A stop request already in effect answers without
-    /// touching the tool; unparseable arguments (checked first), unknown
-    /// names, and field-level argument problems are error *results* — the
-    /// model can read them and retry. The loop's dispatch paths use
-    /// [`dispatch_with`]; this bare form (stop request only) is kept for
-    /// callers that have no run context (tests, the TUI's `!` shell).
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Execute one call with the user's stop request only (the test-only
+    /// form): tools that observe the run get an empty context. The
+    /// production loop's dispatch paths use [`dispatch_with`], which hands
+    /// the run's full context to the tool.
+    #[cfg(test)]
     pub async fn dispatch(&self, call: &ToolCall, cancel: &Cancel) -> ToolResult {
         if let Some(detail) = &call.args_error {
             return ToolResult::err(format!("arguments were not valid JSON: {detail}"));
@@ -157,8 +155,8 @@ impl Registry {
 
     /// Execute one call with the run's full context: tools that observe the
     /// run (the `task` tool's nested events) get the call id and the event
-    /// sender instead of a bare stop request. The same rules as
-    /// [`dispatch`] apply, so the two paths stay one behaviour.
+    /// sender instead of a bare stop request. The same rules as the test-only
+    /// `dispatch` apply, so the two paths stay one behaviour.
     pub async fn dispatch_with(&self, call: &ToolCall, ctx: &ToolCtx) -> ToolResult {
         if let Some(detail) = &call.args_error {
             return ToolResult::err(format!("arguments were not valid JSON: {detail}"));
@@ -175,12 +173,10 @@ impl Registry {
         tool.execute_with(&call.args, ctx).await
     }
 
-    /// Execute a slice of calls concurrently (bounded at 8 in-flight),
-    /// returning results in the exact original call order. Every call gets
-    /// the user's stop request: one that has not started when it lands is
-    /// answered without running, and one already running sees it through
-    /// the same [`Cancel`] a sequential call would.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// The test-only parallel form: the stop request only, every call
+    /// getting an empty context. The production loop's dispatch paths use
+    /// [`dispatch_parallel_with`].
+    #[cfg(test)]
     pub async fn dispatch_parallel(&self, calls: &[ToolCall], cancel: &Cancel) -> Vec<ToolResult> {
         let ctx = ToolCtx::none(cancel);
         self.dispatch_parallel_with(calls, &ctx).await
@@ -195,7 +191,6 @@ impl Registry {
         ctx: &ToolCtx,
     ) -> Vec<ToolResult> {
         let events = ctx.events.clone();
-        let session_id = ctx.session_id.clone();
         let sem = Arc::new(tokio::sync::Semaphore::new(8));
         let mut set = tokio::task::JoinSet::new();
         for (idx, call) in calls.iter().enumerate() {
@@ -214,7 +209,6 @@ impl Registry {
             let cancel = ctx.cancel.clone();
             let call_id = call.id.clone();
             let events = events.clone();
-            let session_id = session_id.clone();
             let rejection = unknown_args(tool.as_ref(), call);
             set.spawn(async move {
                 let _permit = sem.acquire_owned().await;
@@ -228,7 +222,6 @@ impl Registry {
                     cancel,
                     events,
                     call_id,
-                    session_id,
                 };
                 let res = tool.execute_with(&args, &ctx).await;
                 (idx, res)
@@ -290,9 +283,10 @@ pub(crate) fn parse_args<T: DeserializeOwned>(args: &Value) -> Result<T, String>
 
 pub(crate) const PRUNED_DIRS: &[&str] = &[".git", "target", "node_modules"];
 
-/// Names of the default registry's tools, in advertisement order. The
-/// config allowlist and hook matchers validate against this canonical
-/// list; registration and this constant move together (pinned by test).
+/// Names of the default registry's tools, in advertisement order.
+/// Validation of the config allowlist and hook matchers goes through
+/// [`is_known_name`] — this list plus `task` — and this constant stays
+/// pinned to the registration order by test.
 pub(crate) const NAMES: &[&str] = &[
     "read", "bash", "edit", "write", "grep", "find", "ls", "outline",
 ];

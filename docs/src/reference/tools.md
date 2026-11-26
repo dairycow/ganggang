@@ -103,7 +103,7 @@ Run a subagent: a fresh-context agent with its own session and its own tool regi
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `max_turns` | integer | no | Optional turn budget for the subagent (default: the run's max_turns) |
+| `max_turns` | integer | no | Optional turn budget for the subagent; can only lower the run's max_turns, never raise it (default: the run's max_turns) |
 | `model` | string | no | Optional provider/model to run the subagent on (default: the run's model) |
 | `prompt` | string | yes | What the subagent should do, self-contained: it starts with a fresh context |
-| `tools` | array of string | no | Optional tool allowlist for the subagent (default: the run's tool set) |
+| `tools` | array of string | no | Optional tool allowlist for the subagent; a subset of the run's tool set only (default: the run's tool set) |

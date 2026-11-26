@@ -139,13 +139,12 @@ impl Agent {
                     // A call the user stopped while it ran is not an
                     // execution a `post_tool` hook should observe — the
                     // same rule as a call that never executed. The ctx
-                    // carries the run's event stream and session id, so a
-                    // tool that observes the run (task) sees them.
+                    // carries the run's event stream, so a tool that
+                    // observes the run (task) sees it.
                     let ctx = ToolCtx {
                         cancel: cancel.clone(),
                         events: Some(events.clone()),
                         call_id: call.id.clone(),
-                        session_id: session_id.map(str::to_string),
                     };
                     let result = self.tools.dispatch_with(call, &ctx).await;
                     let executed = call.args_error.is_none() && !self.abort.load(Ordering::Acquire);
@@ -257,7 +256,6 @@ impl Agent {
                                         cancel: cancel.clone(),
                                         events: Some(events.clone()),
                                         call_id: call.id.clone(),
-                                        session_id: session_id.map(str::to_string),
                                     },
                                 )
                                 .await,
@@ -299,13 +297,12 @@ impl Agent {
             Vec::new()
         } else {
             // One ctx per call (its own id) is built inside the spawned
-            // tasks; this base ctx carries the shared stop request, event
-            // sender, and session id.
+            // tasks; this base ctx carries the shared stop request and
+            // event sender.
             let ctx = ToolCtx {
                 cancel: cancel.clone(),
                 events: Some(events.clone()),
                 call_id: String::new(),
-                session_id: session_id.map(str::to_string),
             };
             let fut = self.tools.dispatch_parallel_with(&runnable_calls, &ctx);
             tokio::select! {

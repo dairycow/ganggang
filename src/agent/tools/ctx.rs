@@ -4,9 +4,10 @@
 //! needs nothing beyond its arguments and the stop request. A tool that
 //! *observes* the run (the `task` tool, which streams a nested agent's
 //! events into the parent's event channel) needs the call's id and the
-//! sender. `ToolCtx` carries all three; the [`Tool::execute_with`] default
-//! throws the context away, so ordinary tools keep the bare [`execute`]
-//! surface.
+//! sender. `ToolCtx` carries the stop request, the event stream, and the
+//! call id; the [`crate::agent::tools::Tool::execute_with`] default
+//! throws the context away, so ordinary tools keep the bare
+//! [`crate::agent::tools::Tool::execute`] surface.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -52,7 +53,6 @@ pub struct ToolCtx {
     pub cancel: Cancel,
     pub events: Option<tokio::sync::mpsc::Sender<crate::events::AgentEvent>>,
     pub call_id: String,
-    pub session_id: Option<String>,
 }
 
 impl ToolCtx {
@@ -63,7 +63,6 @@ impl ToolCtx {
             cancel: cancel.clone(),
             events: None,
             call_id: String::new(),
-            session_id: None,
         }
     }
 }

@@ -3,6 +3,9 @@
 //! and the request's declarations.
 use super::*;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
+
+use crate::events::AgentEvent;
 
 struct Echo;
 
@@ -221,4 +224,144 @@ async fn grep_rejects_unknown_flags_with_valid_parameter_list() {
     assert!(res.output.contains("\"-i\""), "{}", res.output);
     assert!(res.output.contains("case_insensitive"), "{}", res.output);
     assert!(res.output.contains("context"), "{}", res.output);
+}
+
+// ------------------------------------------------- the run context (dispatch_with)
+
+/// What the production dispatch paths hand a tool: the stop request, the
+/// run's event stream, and the id of the call that is running.
+///
+/// `execute` errors, so the `None`-context path is always visible; the
+/// default `execute_with` would delegate to it, while this override records
+/// the ctx and answers cleanly.
+type Seen = (String, bool);
+
+struct RecordCtx(Arc<Mutex<Vec<Seen>>>);
+
+impl Tool for RecordCtx {
+    fn name(&self) -> &'static str {
+        "record"
+    }
+
+    fn description(&self) -> &'static str {
+        "record the context the dispatch path handed over"
+    }
+
+    fn schema(&self) -> Value {
+        serde_json::json!({"type": "object", "properties": {}})
+    }
+
+    fn execute<'a>(&'a self, _args: &'a Value, _cancel: &'a Cancel) -> BoxFuture<'a, ToolResult> {
+        Box::pin(async move { ToolResult::err("bare execute must not run here".into()) })
+    }
+
+    fn execute_with<'a>(&'a self, _args: &'a Value, ctx: &'a ToolCtx) -> BoxFuture<'a, ToolResult> {
+        let seen = self.0.clone();
+        Box::pin(async move {
+            seen.lock()
+                .unwrap()
+                .push((ctx.call_id.clone(), ctx.events.is_some()));
+            ToolResult::ok("recorded".into())
+        })
+    }
+}
+
+/// A real event stream: the production shape the loop uses (a tokio
+/// mpsc Sender), without an await in the test body. The tool only
+/// inspects `events.is_some()`, so a dropped receiver is fine.
+fn event_stream() -> ToolCtx {
+    let (tx, _rx) = tokio::sync::mpsc::channel::<AgentEvent>(16);
+    ToolCtx {
+        cancel: Cancel::none(),
+        events: Some(tx),
+        call_id: "call_9".into(),
+    }
+}
+
+/// The sequential production path: the tool sees the call's own id and the
+/// run's event stream, not a bare stop request.
+#[tokio::test]
+async fn dispatch_with_hands_the_tool_the_call_id_and_the_event_stream() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = Registry::new();
+    registry.register(Box::new(RecordCtx(seen.clone())));
+
+    let result = registry
+        .dispatch_with(&call("record", serde_json::json!({})), &event_stream())
+        .await;
+    assert!(!result.is_error, "{}", result.output);
+    assert_eq!(*seen.lock().unwrap(), vec![("call_9".to_string(), true)]);
+}
+
+/// The parallel production path: the base ctx's placeholder id must not
+/// leak into the spawned tasks — each tool sees the id of the call it is
+/// running, and results keep the calls' order.
+#[tokio::test]
+async fn dispatch_parallel_with_builds_one_ctx_per_call_inside_the_spawned_task() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = Registry::new();
+    registry.register(Box::new(RecordCtx(seen.clone())));
+    let base = ToolCtx {
+        call_id: "base".into(),
+        ..event_stream()
+    };
+    let calls = vec![
+        ToolCall {
+            id: "call_a".into(),
+            ..call("record", serde_json::json!({}))
+        },
+        ToolCall {
+            id: "call_b".into(),
+            ..call("record", serde_json::json!({}))
+        },
+    ];
+
+    let results = registry.dispatch_parallel_with(&calls, &base).await;
+    let outputs: Vec<&str> = results.iter().map(|r| r.output.as_str()).collect();
+    assert_eq!(
+        outputs,
+        ["recorded", "recorded"],
+        "results keep call order: {results:?}"
+    );
+    let mut ids: Vec<String> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec!["call_a".to_string(), "call_b".to_string()],
+        "each spawned task saw its own call, not the base ctx's"
+    );
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|(_, has_events)| *has_events),
+        "every call saw the run's event stream"
+    );
+}
+
+/// A stop request already in effect answers the production sequential path
+/// without running the tool — the same rule as the test-only dispatch, and
+/// the tool must see nothing.
+#[tokio::test]
+async fn dispatch_with_aborts_without_running_a_cancelled_tool() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = Registry::new();
+    registry.register(Box::new(RecordCtx(seen.clone())));
+    let cancel = Cancel::new(Arc::new(AtomicBool::new(true)));
+    let ctx = ToolCtx {
+        cancel: cancel.clone(),
+        ..event_stream()
+    };
+
+    let result = registry
+        .dispatch_with(&call("record", serde_json::json!({})), &ctx)
+        .await;
+    assert!(result.is_error);
+    assert_eq!(result.output, "aborted by user");
+    assert!(seen.lock().unwrap().is_empty(), "the cancelled tool ran");
 }

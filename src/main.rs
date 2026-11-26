@@ -26,7 +26,9 @@ use clap::Parser;
 
 use crate::agent::Agent;
 use crate::agent::tools::default_registry;
-use crate::agent::tools::task::{AgentRunner, SubagentFactory, TaskTool};
+use crate::agent::tools::task::{
+    AgentRunner, SubagentFactory, TaskTool, effective_max_turns, narrow_tools,
+};
 use crate::llm::client::LlmClient;
 use crate::printers::Printer;
 
@@ -608,14 +610,9 @@ impl SubagentFactory for ConfigSubagentFactory {
             .with_retry(self.cfg.max_retries)
             .with_request_timeout(self.cfg.request_timeout_secs);
         let mut registry = default_registry(self.cwd.clone(), self.cfg.bash_timeout_secs);
-        let requested = req
-            .tools
-            .clone()
-            .unwrap_or_else(|| self.parent_tools.clone());
-        anyhow::ensure!(
-            !requested.iter().any(|t| t == "task"),
-            "subagents cannot spawn subagents (task is one level deep)"
-        );
+        // The call may narrow the run's allowlist but never widen it, and
+        // never take `task` back: a subagent is one level deep.
+        let requested = narrow_tools(req.tools.clone(), &self.parent_tools)?;
         let names: Vec<&str> = registry.tools().iter().map(|t| t.name()).collect();
         let allowlist = config::resolve_tools(Some(requested), Vec::new(), &names)?;
         registry.retain(|t| allowlist.iter().any(|n| n == t.name()));
@@ -643,7 +640,7 @@ impl SubagentFactory for ConfigSubagentFactory {
         .with_replay_reasoning(endpoint.replay_reasoning)
         .with_compact_threshold(endpoint.compact_threshold_tokens)
         .with_model_label(endpoint.label())
-        .with_max_turns(req.max_turns.or(self.cfg.max_turns));
+        .with_max_turns(effective_max_turns(req.max_turns, self.cfg.max_turns)?);
         Ok(agent)
     }
 }
@@ -797,8 +794,13 @@ fn open_session_for(
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{Cli, ConfigSubagentFactory};
+    use crate::agent::hooks::Hooks;
+    use crate::agent::tools::task::{SubagentFactory, TaskRequest};
+    use crate::config::Config;
     use clap::Parser;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
 
     fn parse(args: &[&str]) -> Result<Cli, String> {
         Cli::try_parse_from(std::iter::once("gg").chain(args.iter().copied()))
@@ -865,5 +867,43 @@ mod tests {
         );
         assert!(parse(&["--session-file", "/tmp/s.jsonl", "-c", "-p", "hi"]).is_err());
         assert!(parse(&["--session-file", "/tmp/s.jsonl", "--no-session", "-p", "hi"]).is_err());
+    }
+
+    /// The production factory's one-level rule: a call may narrow the run's
+    /// allowlist but never widen it, and the run's `max_turns` caps the
+    /// request's — the child ends up with exactly the requested subset and
+    /// the capped budget.
+    #[test]
+    fn the_subagent_factory_narrows_the_tools_and_caps_the_turns() {
+        let mut cfg = Config::default();
+        cfg.max_turns = Some(7);
+        let factory = ConfigSubagentFactory {
+            cfg,
+            endpoint: Config::default().active_endpoint(),
+            cwd: std::env::temp_dir(),
+            abort: Arc::new(AtomicBool::new(false)),
+            hooks: Hooks::default(),
+            parent_session: None,
+            parent_tools: vec!["read".into(), "bash".into()],
+        };
+        let agent = factory
+            .build(&TaskRequest {
+                prompt: "p".into(),
+                model: None,
+                tools: Some(vec!["bash".into()]),
+                max_turns: Some(999),
+            })
+            .unwrap();
+        let names: Vec<&str> = agent.tools.tools().iter().map(|t| t.name()).collect();
+        assert_eq!(
+            names,
+            vec!["bash"],
+            "the child gets the requested subset only"
+        );
+        assert_eq!(
+            agent.max_turns,
+            Some(7),
+            "the run's cap wins over the request"
+        );
     }
 }

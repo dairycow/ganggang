@@ -24,6 +24,52 @@ pub struct TaskRequest {
     pub max_turns: Option<u32>,
 }
 
+/// Narrows the requested subagent tool allowlist to the parent run's
+/// resolved allowlist: a subagent never gets a tool the parent cannot use.
+/// `None` inherits the parent list; a name outside it fails the call. `task`
+/// is always rejected, so subagents stay one level deep. Duplicate names
+/// collapse to their first occurrence.
+pub fn narrow_tools(
+    requested: Option<Vec<String>>,
+    parent: &[String],
+) -> anyhow::Result<Vec<String>> {
+    let Some(requested) = requested else {
+        return Ok(parent.to_vec());
+    };
+    for name in &requested {
+        if name == "task" {
+            anyhow::bail!("subagents cannot spawn subagents (task is one level deep)");
+        }
+        if !parent.iter().any(|p| p == name) {
+            anyhow::bail!("subagent tool {name} is not in the run's tool allowlist");
+        }
+    }
+    let mut out = Vec::new();
+    for name in requested {
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    Ok(out)
+}
+
+/// The turn budget a subagent runs with: the run's `max_turns` is a ceiling,
+/// so a request can only lower it. A request of zero is rejected: it would
+/// otherwise be silently dropped and lift the run's cap.
+pub fn effective_max_turns(
+    requested: Option<u32>,
+    run: Option<u32>,
+) -> anyhow::Result<Option<u32>> {
+    if requested == Some(0) {
+        anyhow::bail!("max_turns must be at least 1");
+    }
+    Ok(match (requested, run) {
+        (Some(r), Some(cap)) => Some(r.min(cap)),
+        (Some(r), None) => Some(r),
+        (None, _) => run,
+    })
+}
+
 /// What a finished subagent reports back: its final answer plus the run's
 /// accounting.
 pub struct TaskOutcome {
@@ -44,7 +90,7 @@ pub trait SubagentRunner: Send + Sync {
     ) -> BoxFuture<'a, anyhow::Result<TaskOutcome>>;
 }
 
-/// Builds the nested [`Agent`] a [`TaskRequest`] runs on.
+/// Builds the nested [`crate::agent::Agent`] a [`TaskRequest`] runs on.
 pub trait SubagentFactory: Send + Sync {
     fn build(&self, req: &TaskRequest) -> anyhow::Result<crate::agent::Agent>;
 }
@@ -75,7 +121,10 @@ impl SubagentRunner for AgentRunner {
             // it works.
             let (done_tx, done_rx) = tokio::sync::oneshot::channel();
             let handle = tokio::task::spawn(async move {
-                let result = agent.run(req.prompt, &mut child_tx).await;
+                // The child shares the parent's stop flag: `run_nested`
+                // honors a stop latched before the child started instead
+                // of erasing the parent's abort request.
+                let result = agent.run_nested(req.prompt, &mut child_tx).await;
                 let _ = done_tx.send((result, agent));
             });
             // Dropping this future (the user stopped the parent run)
@@ -213,8 +262,8 @@ impl Tool for TaskTool {
             "properties": {
                 "prompt": {"type": "string", "description": "What the subagent should do, self-contained: it starts with a fresh context"},
                 "model": {"type": "string", "description": "Optional provider/model to run the subagent on (default: the run's model)"},
-                "tools": {"type": "array", "items": {"type": "string"}, "description": "Optional tool allowlist for the subagent (default: the run's tool set)"},
-                "max_turns": {"type": "integer", "description": "Optional turn budget for the subagent (default: the run's max_turns)"}
+                "tools": {"type": "array", "items": {"type": "string"}, "description": "Optional tool allowlist for the subagent; a subset of the run's tool set only (default: the run's tool set)"},
+                "max_turns": {"type": "integer", "minimum": 1, "description": "Optional turn budget for the subagent; can only lower the run's max_turns, never raise it (default: the run's max_turns)"}
             },
             "required": ["prompt"]
         })
@@ -245,6 +294,9 @@ impl Tool for TaskTool {
             let Some(prompt) = args.prompt.filter(|p| !p.trim().is_empty()) else {
                 return ToolResult::err("invalid arguments: prompt must not be empty".into());
             };
+            if args.max_turns == Some(0) {
+                return ToolResult::err("invalid arguments: max_turns must be at least 1".into());
+            }
             let req = TaskRequest {
                 prompt,
                 model: args.model,
@@ -253,29 +305,34 @@ impl Tool for TaskTool {
             };
             let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentEvent>(64);
             // Forward the child's events into the parent's stream, tagged
-            // with this call's id. If the parent channel closes, drain and
-            // drop.
-            if let Some(parent) = &ctx.events {
-                let parent = parent.clone();
+            // with this call's id. The forwarder runs inline with the
+            // runner (not on a detached task), so the tool result returns
+            // only after the last event is in the parent's buffer. If the
+            // parent channel closes, keep draining and drop: the child must
+            // never block on a full channel, and a closed parent still lets
+            // the run finish.
+            let forward = async move {
+                let parent = ctx.events.clone();
                 let call_id = ctx.call_id.clone();
-                tokio::spawn(async move {
-                    while let Some(event) = rx.recv().await {
-                        if parent
+                let mut open = parent.is_some();
+                while let Some(event) = rx.recv().await {
+                    if !open {
+                        continue;
+                    }
+                    if let Some(parent) = &parent
+                        && parent
                             .send(AgentEvent::Subtask {
                                 task_id: call_id.clone(),
                                 event: Box::new(event),
                             })
                             .await
                             .is_err()
-                        {
-                            break;
-                        }
+                    {
+                        open = false;
                     }
-                });
-            } else {
-                tokio::spawn(async move { while rx.recv().await.is_some() {} });
-            }
-            let outcome = self.runner.run(req, tx).await;
+                }
+            };
+            let (outcome, _) = tokio::join!(self.runner.run(req, tx), forward);
             if ctx.cancel.is_cancelled() {
                 return ToolResult::err("aborted by user".into());
             }
