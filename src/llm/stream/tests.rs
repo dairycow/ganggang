@@ -191,6 +191,29 @@ fn continuation_fragments_carry_id_and_name_semantics() {
     assert_eq!(call.function.arguments, r#"{"command":"echo"}"#);
 }
 
+/// The first chunk is one chutes streamed from `Qwen/Qwen3.8-27B-TEE`,
+/// verbatim: every key the model left unfilled arrives as `null`,
+/// `tool_calls` included. That `null` used to fail the parse and end the
+/// run. The two after it cover the same rule for `choices` and `delta`.
+#[test]
+fn null_fields_read_as_absent() {
+    let lines = [
+        r#"{"id":"f1331185519e48d098fa752811cdcda2","object":"chat.completion.chunk","created":1795666639,"model":"Qwen/Qwen3.8-27B-TEE","choices":[{"index":0,"delta":{"role":null,"content":"\n\n","reasoning_content":null,"tool_calls":null},"logprobs":null,"finish_reason":null,"matched_stop":null}],"usage":{"prompt_tokens":3135,"total_tokens":3177,"completion_tokens":42,"prompt_tokens_details":null,"reasoning_tokens":41}}"#,
+        r#"{"choices":null,"usage":null}"#,
+        r#"{"choices":[{"index":0,"delta":null,"finish_reason":"stop"}],"usage":null}"#,
+    ];
+    let mut asm = Assembler::default();
+    for line in lines {
+        asm.feed(serde_json::from_str(line).unwrap());
+    }
+    let resp = asm.finish();
+    let choice = &resp.choices[0];
+    assert_eq!(choice.finish_reason.as_deref(), Some("stop"));
+    assert_eq!(choice.message.content.as_deref(), Some("\n\n"));
+    assert!(choice.message.tool_calls.is_empty());
+    assert_eq!(resp.usage.map(|u| u.total_tokens), Some(3177));
+}
+
 mod abort;
 
 // ------------------------------------------------- end-to-end over a socket

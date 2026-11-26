@@ -1,15 +1,16 @@
 //! The wire shape of one SSE chunk from an OpenAI-compatible stream: what
 //! the assembler folds. Permissive on purpose — providers add fields, omit
 //! others, and send `delta: {}` on the chunk that only carries a finish
-//! reason (`#[serde(default)]` everywhere, so none of it is an error).
+//! reason (`#[serde(default)]` everywhere, so none of it is an error). A key
+//! sent as `null` reads as absent too, the same as one left out.
 
 use serde::Deserialize;
 
-use super::super::types::{Timings, Usage};
+use super::super::types::{Timings, Usage, default_if_null};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct StreamChunk {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "default_if_null")]
     pub(super) choices: Vec<StreamChoice>,
     #[serde(default)]
     pub(super) usage: Option<Usage>,
@@ -21,7 +22,7 @@ pub(super) struct StreamChunk {
 pub(super) struct StreamChoice {
     #[serde(default)]
     pub(super) index: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "default_if_null")]
     pub(super) delta: StreamDelta,
     #[serde(default)]
     pub(super) finish_reason: Option<String>,
@@ -35,7 +36,7 @@ pub(super) struct StreamDelta {
     pub(super) reasoning_content: Option<String>,
     #[serde(default)]
     pub(super) reasoning: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "default_if_null")]
     pub(super) tool_calls: Vec<StreamToolCall>,
 }
 #[derive(Debug, Deserialize)]

@@ -17,7 +17,7 @@
 //!   runtime:      Rust type vs JSON shape mismatches. Rust CANNOT check that
 //!                 `Vec<String>` matches an array of objects. Hence: tests.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -113,7 +113,11 @@ pub struct ChatMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
     // Only present on assistant messages that ask for a tool.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "default_if_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub tool_calls: Vec<ToolCall>,
     // Only present on role:"tool" messages: links this result back to the
     // ToolCall it is answering. Without it, providers reject the request.
@@ -133,6 +137,19 @@ pub struct ChatMessage {
     // Never serialized on the OpenAI wire.
     #[serde(skip)]
     pub is_error: bool,
+}
+
+/// `#[serde(default)]` covers a key the provider left out. Some providers
+/// send the key with `null` in its place instead (chutes' Qwen streams
+/// write `"tool_calls": null` into every delta that has no call), which
+/// serde reads as a type error. As a field's `deserialize_with`, next to
+/// `default`, this reads `null` as absent too.
+pub(crate) fn default_if_null<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 fn default_tool_type() -> String {
@@ -487,6 +504,20 @@ mod tests {
                 .unwrap();
         assert_eq!(msg.reasoning.as_deref(), Some("thought"));
         assert_eq!(msg.reasoning_content, None);
+    }
+
+    /// The non-streaming reply carries the same `"tool_calls": null` as
+    /// the stream's deltas do (chutes' Qwen models): it reads as no call,
+    /// where it used to fail the whole response with a type error.
+    #[test]
+    fn a_null_tool_calls_field_reads_as_no_calls() {
+        let resp: ChatResponse = serde_json::from_str(
+            r#"{"choices":[{"message":{"role":"assistant","content":"pong","tool_calls":null},"finish_reason":"stop"}],"usage":null}"#,
+        )
+        .unwrap();
+        let message = &resp.choices[0].message;
+        assert!(message.tool_calls.is_empty());
+        assert_eq!(message.content.as_deref(), Some("pong"));
     }
 
     #[test]
