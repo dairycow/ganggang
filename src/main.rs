@@ -26,6 +26,7 @@ use clap::Parser;
 
 use crate::agent::Agent;
 use crate::agent::tools::default_registry;
+use crate::agent::tools::task::{AgentRunner, SubagentFactory, TaskTool};
 use crate::llm::client::LlmClient;
 use crate::printers::Printer;
 
@@ -581,6 +582,72 @@ fn assemble_boot(
     })
 }
 
+/// Builds the in-process subagent a `task` call runs: the run's config and
+/// endpoint (unless `req.model` switches it), the run's tool registry (the
+/// `task` tool itself is one level deep only), and, when the run keeps a
+/// session, a child session file linked to the parent's.
+struct ConfigSubagentFactory {
+    cfg: config::Config,
+    endpoint: config::Endpoint,
+    cwd: std::path::PathBuf,
+    abort: Arc<AtomicBool>,
+    hooks: agent::hooks::Hooks,
+    parent_session: Option<String>,
+    /// The run's resolved tool allowlist: a subagent inherits it unless the
+    /// call names its own. `task` is filtered out by the child registry.
+    parent_tools: Vec<String>,
+}
+
+impl SubagentFactory for ConfigSubagentFactory {
+    fn build(&self, req: &crate::agent::tools::task::TaskRequest) -> anyhow::Result<Agent> {
+        let endpoint = match &req.model {
+            Some(spec) => self.cfg.resolve_switch_with_discovered(spec, &[])?,
+            None => self.endpoint.clone(),
+        };
+        let client = LlmClient::from_endpoint(&endpoint)?
+            .with_retry(self.cfg.max_retries)
+            .with_request_timeout(self.cfg.request_timeout_secs);
+        let mut registry = default_registry(self.cwd.clone(), self.cfg.bash_timeout_secs);
+        let requested = req
+            .tools
+            .clone()
+            .unwrap_or_else(|| self.parent_tools.clone());
+        anyhow::ensure!(
+            !requested.iter().any(|t| t == "task"),
+            "subagents cannot spawn subagents (task is one level deep)"
+        );
+        let names: Vec<&str> = registry.tools().iter().map(|t| t.name()).collect();
+        let allowlist = config::resolve_tools(Some(requested), Vec::new(), &names)?;
+        registry.retain(|t| allowlist.iter().any(|n| n == t.name()));
+        // The child registry is the default set: `task` is never
+        // re-registered, so subagents are one level deep only.
+        let store = match &self.parent_session {
+            Some(parent) => Some(
+                agent::session::io::SessionStore::create(&self.cwd, &endpoint.model)?
+                    .with_parent(Some(parent.clone()))?,
+            ),
+            None => None,
+        };
+        let agent = Agent::new(
+            client,
+            registry,
+            endpoint.model.clone(),
+            endpoint.max_tokens,
+            self.abort.clone(),
+            self.cwd.clone(),
+            store,
+            true,
+            endpoint.context_window,
+            self.hooks.clone(),
+        )
+        .with_replay_reasoning(endpoint.replay_reasoning)
+        .with_compact_threshold(endpoint.compact_threshold_tokens)
+        .with_model_label(endpoint.label())
+        .with_max_turns(req.max_turns.or(self.cfg.max_turns));
+        Ok(agent)
+    }
+}
+
 /// Agent construction, shared by every boot: config, client, registry
 /// filtered by the allowlist, cwd, and the already-resolved store.
 fn build_agent(
@@ -596,15 +663,26 @@ fn build_agent(
         .with_retry(cfg.max_retries)
         .with_request_timeout(cfg.request_timeout_secs);
     let mut registry = default_registry(cwd.to_path_buf(), cfg.bash_timeout_secs);
-    let allowlist = config::resolve_tools(
-        cli.tools.clone(),
-        cfg.tools.clone(),
-        &registry
-            .tools()
+    // The allowlist names every tool the boot registry offers: the default
+    // set plus `task`, which is registered below. Resolving it first lets a
+    // subagent inherit the run's effective allowlist.
+    let mut names: Vec<&str> = registry.tools().iter().map(|t| t.name()).collect();
+    names.push("task");
+    let allowlist = config::resolve_tools(cli.tools.clone(), cfg.tools.clone(), &names)?;
+    let factory = Arc::new(ConfigSubagentFactory {
+        cfg: cfg.clone(),
+        endpoint: endpoint.clone(),
+        cwd: cwd.to_path_buf(),
+        abort: abort.clone(),
+        hooks: hooks.clone(),
+        parent_session: store.as_ref().map(|s| s.id().to_string()),
+        parent_tools: allowlist
             .iter()
-            .map(|t| t.name())
-            .collect::<Vec<_>>(),
-    )?;
+            .filter(|name| name.as_str() != "task")
+            .cloned()
+            .collect(),
+    });
+    registry.register(Box::new(TaskTool::new(Arc::new(AgentRunner::new(factory)))));
     registry.retain(|t| allowlist.iter().any(|n| n == t.name()));
 
     Ok(Agent::new(

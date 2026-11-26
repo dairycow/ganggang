@@ -2,6 +2,7 @@
 //! parallel, with and without a stop request), the canonical name list,
 //! and the request's declarations.
 use super::*;
+use std::sync::atomic::AtomicBool;
 
 struct Echo;
 

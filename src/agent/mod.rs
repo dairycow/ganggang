@@ -216,6 +216,12 @@ impl Agent {
         }
     }
 
+    /// The session id the hooks and the `task` summary report, or `None`
+    /// when the run keeps no session (`--no-session`).
+    pub fn store_id(&self) -> Option<&str> {
+        self.store.as_ref().map(|store| store.id())
+    }
+
     /// The session's header record — the line JSON mode echoes before
     /// its event stream (§15). `Ok(None)` when the run keeps no session;
     /// a read failure is the caller's diagnostic to report (JSON mode

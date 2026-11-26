@@ -40,6 +40,10 @@ pub struct SessionHeader {
     pub timestamp: String,
     pub cwd: String,
     pub model: String,
+    /// The session that spawned this one (`task` tool subagents); absent
+    /// for a top-level run. Optional so older files load unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
 }
 
 impl SessionHeader {
@@ -51,6 +55,7 @@ impl SessionHeader {
             timestamp: super::now_iso(),
             cwd: cwd.display().to_string(),
             model: model.to_string(),
+            parent_id: None,
         }
     }
 }
@@ -158,6 +163,19 @@ impl SessionStore {
     /// The session header's uuid — the hook payload's `session_id` (§22).
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Link this session to the one that spawned it (`task` subagents).
+    /// Applies to a fresh store before its first append: the header is
+    /// re-serialized in memory and the file has not materialized yet, so
+    /// no written line needs rewriting. A reopened store (whose header
+    /// lives on disk) must not use this.
+    pub fn with_parent(mut self, parent: Option<String>) -> anyhow::Result<Self> {
+        let mut header: SessionHeader =
+            serde_json::from_str(&self.header_line).context("re-parsing the in-memory header")?;
+        header.parent_id = parent;
+        self.header_line = serde_json::to_string(&header).context("serializing session header")?;
+        Ok(self)
     }
 
     /// The header line as JSON — the record JSON mode echoes before the

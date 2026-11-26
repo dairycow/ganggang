@@ -24,7 +24,7 @@ max_tokens = 16384
 bash_timeout_secs = 30
 max_retries = 3
 request_timeout_secs = 600
-tools = ["read", "bash", "edit", "write", "grep", "find", "ls", "outline"]
+tools = ["read", "bash", "edit", "write", "grep", "find", "ls", "outline", "task"]
 
 [providers.strata]
 base_url = "http://127.0.0.1:8080/v1"

@@ -219,6 +219,15 @@ impl Printer {
                 }
             }
             AgentEvent::Warned { message } => vec![format!("warning: {message}")],
+            // A nested run's event, tagged with the `task` call that
+            // started it: name the child's tool calls and its warnings,
+            // indented under the parent's. Nested text, turns, and ends
+            // are the subagent's own; the parent already knows its state.
+            AgentEvent::Subtask { event, .. } => match event.as_ref() {
+                AgentEvent::ToolCallStarted { name, .. } => vec![format!("  \u{21b3} {name}")],
+                AgentEvent::Warned { message } => vec![format!("  \u{21b3} warning: {message}")],
+                _ => Vec::new(),
+            },
         }
     }
 

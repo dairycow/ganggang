@@ -3,11 +3,8 @@
 //! Tools are plain values in and out. A failed tool is a *value* (`is_error`)
 //! fed back to the model — only transport and session IO may abort a run.
 
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -16,6 +13,7 @@ use super::session::ToolCall;
 
 // bash is pub(crate): the TUI's `!` shell shares its bounded runner.
 pub(crate) mod bash;
+pub(crate) mod ctx;
 mod edit;
 mod find;
 mod grep;
@@ -23,6 +21,7 @@ mod ls;
 mod outline;
 mod path;
 mod read;
+pub(crate) mod task;
 mod write;
 
 pub(crate) use path::{display, display_relative, resolve_path, resolve_walk_root};
@@ -51,37 +50,7 @@ impl ToolResult {
     }
 }
 
-/// Boxed future for `dyn` tool execution. `async fn` in traits is stable but
-/// not dyn-compatible, and this alias costs less than an `async-trait`
-/// dependency.
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-/// The user's stop request, handed to every tool call.
-///
-/// An `Arc<AtomicBool>` wrapper over the loop's abort flag: a tool whose
-/// action can run a long time (a shell command, a directory walk) polls it
-/// and stops, so Esc is not dead until the next call boundary. The check is
-/// one acquire load — it pairs with the loop's release store, so a tool on
-/// another thread sees a stop request as soon as it is made — and it is
-/// cheap enough to repeat inside a walk.
-#[derive(Clone)]
-pub struct Cancel(Arc<AtomicBool>);
-
-impl Cancel {
-    pub fn new(flag: Arc<AtomicBool>) -> Self {
-        Self(flag)
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
-
-    /// A flag nothing ever sets, for a caller that must supply a [`Cancel`]
-    /// but has no cancellation path of its own (the TUI's `!` shell).
-    pub fn none() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
-    }
-}
+pub use ctx::{BoxFuture, Cancel, ToolCtx};
 
 pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
@@ -102,6 +71,14 @@ pub trait Tool: Send + Sync {
     /// answering with an error result that says it was aborted. It lives as
     /// long as the call's future, so a tool may hold it across an await.
     fn execute<'a>(&'a self, args: &'a Value, cancel: &'a Cancel) -> BoxFuture<'a, ToolResult>;
+
+    /// Run one call with the run's full context. The default delegates to
+    /// [`execute`] with the ctx's stop request, so tools that need no events
+    /// or call id are untouched; a tool that observes the run (the `task`
+    /// tool) overrides it.
+    fn execute_with<'a>(&'a self, args: &'a Value, ctx: &'a ToolCtx) -> BoxFuture<'a, ToolResult> {
+        self.execute(args, &ctx.cancel)
+    }
 }
 
 /// Ordered tool set. Order of registration is the order of advertisement.
@@ -155,7 +132,10 @@ impl Registry {
     /// Execute one call. A stop request already in effect answers without
     /// touching the tool; unparseable arguments (checked first), unknown
     /// names, and field-level argument problems are error *results* — the
-    /// model can read them and retry.
+    /// model can read them and retry. The loop's dispatch paths use
+    /// [`dispatch_with`]; this bare form (stop request only) is kept for
+    /// callers that have no run context (tests, the TUI's `!` shell).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn dispatch(&self, call: &ToolCall, cancel: &Cancel) -> ToolResult {
         if let Some(detail) = &call.args_error {
             return ToolResult::err(format!("arguments were not valid JSON: {detail}"));
@@ -171,7 +151,28 @@ impl Registry {
         if let Some(rejection) = unknown_args(tool.as_ref(), call) {
             return rejection;
         }
-        tool.execute(&call.args, cancel).await
+        let ctx = ToolCtx::none(cancel);
+        tool.execute_with(&call.args, &ctx).await
+    }
+
+    /// Execute one call with the run's full context: tools that observe the
+    /// run (the `task` tool's nested events) get the call id and the event
+    /// sender instead of a bare stop request. The same rules as
+    /// [`dispatch`] apply, so the two paths stay one behaviour.
+    pub async fn dispatch_with(&self, call: &ToolCall, ctx: &ToolCtx) -> ToolResult {
+        if let Some(detail) = &call.args_error {
+            return ToolResult::err(format!("arguments were not valid JSON: {detail}"));
+        }
+        let Some(tool) = self.0.iter().find(|t| t.name() == call.name) else {
+            return ToolResult::err(format!("unknown tool: {}", call.name));
+        };
+        if ctx.cancel.is_cancelled() {
+            return ToolResult::err("aborted by user".into());
+        }
+        if let Some(rejection) = unknown_args(tool.as_ref(), call) {
+            return rejection;
+        }
+        tool.execute_with(&call.args, ctx).await
     }
 
     /// Execute a slice of calls concurrently (bounded at 8 in-flight),
@@ -179,7 +180,22 @@ impl Registry {
     /// the user's stop request: one that has not started when it lands is
     /// answered without running, and one already running sees it through
     /// the same [`Cancel`] a sequential call would.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn dispatch_parallel(&self, calls: &[ToolCall], cancel: &Cancel) -> Vec<ToolResult> {
+        let ctx = ToolCtx::none(cancel);
+        self.dispatch_parallel_with(calls, &ctx).await
+    }
+
+    /// The parallel dispatch with the run's full context: one ctx per call
+    /// (its own `call_id`, the shared stop request and event sender), built
+    /// inside the spawned task so a tool sees the call it is running.
+    pub async fn dispatch_parallel_with(
+        &self,
+        calls: &[ToolCall],
+        ctx: &ToolCtx,
+    ) -> Vec<ToolResult> {
+        let events = ctx.events.clone();
+        let session_id = ctx.session_id.clone();
         let sem = Arc::new(tokio::sync::Semaphore::new(8));
         let mut set = tokio::task::JoinSet::new();
         for (idx, call) in calls.iter().enumerate() {
@@ -195,7 +211,10 @@ impl Registry {
             };
             let args = call.args.clone();
             let sem = sem.clone();
-            let cancel = cancel.clone();
+            let cancel = ctx.cancel.clone();
+            let call_id = call.id.clone();
+            let events = events.clone();
+            let session_id = session_id.clone();
             let rejection = unknown_args(tool.as_ref(), call);
             set.spawn(async move {
                 let _permit = sem.acquire_owned().await;
@@ -205,7 +224,13 @@ impl Registry {
                 if let Some(rejection) = rejection {
                     return (idx, rejection);
                 }
-                let res = tool.execute(&args, &cancel).await;
+                let ctx = ToolCtx {
+                    cancel,
+                    events,
+                    call_id,
+                    session_id,
+                };
+                let res = tool.execute_with(&args, &ctx).await;
                 (idx, res)
             });
         }
@@ -271,6 +296,12 @@ pub(crate) const PRUNED_DIRS: &[&str] = &[".git", "target", "node_modules"];
 pub(crate) const NAMES: &[&str] = &[
     "read", "bash", "edit", "write", "grep", "find", "ls", "outline",
 ];
+
+/// Every tool name the boot registry can advertise: the default registry's
+/// tools plus `task`, which the boot path registers separately.
+pub(crate) fn is_known_name(name: &str) -> bool {
+    NAMES.contains(&name) || name == "task"
+}
 
 /// The default tool set, anchored at the session cwd. The `--tools` flag and
 /// config allowlist filter this registry (M2.11).
