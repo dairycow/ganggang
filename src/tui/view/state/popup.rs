@@ -5,9 +5,11 @@
 //! kept next to the popup that reads it.
 
 impl crate::tui::view::State {
-    /// The live suggestion list for what the composer holds.
+    /// The live suggestion list for what the composer holds: the
+    /// built-ins the word could become — the skill and model lists are
+    /// the list's own, opened by their triggers.
     pub fn suggestions(&self) -> Vec<crate::tui::suggest::Suggestion> {
-        crate::tui::suggest::suggestions(self.editor.text(), &self.skills)
+        crate::tui::suggest::suggestions(self.editor.text())
     }
 
     /// Whether the popup should draw: a bare command word that matches

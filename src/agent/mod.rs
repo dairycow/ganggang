@@ -172,7 +172,7 @@ impl Agent {
         )
     }
 
-    /// The discovered skills, in discovery order: what the TUI's `/skill:`
+    /// The discovered skills, in discovery order: what the TUI's `/skill`
     /// rows render after a `/reload`.
     pub fn skills(&self) -> &[skills::Skill] {
         &self.skills

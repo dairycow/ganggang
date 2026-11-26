@@ -325,7 +325,7 @@ fn frontmatter_name_is_authoritative_over_the_directory_name() {
 #[test]
 fn disabled_skills_remain_in_the_discovered_set() {
     // §11: disable-model-invocation hides a skill from ADVERTISING only —
-    // discovery keeps it so /skill:<name> forcing still works (M4).
+    // discovery keeps it so /skill <name> forcing still works (M4).
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join(".agents").join("skills").join("priv");
     std::fs::create_dir_all(&dir).unwrap();

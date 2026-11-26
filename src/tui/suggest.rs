@@ -1,13 +1,12 @@
 //! Slash-command suggestions (§15 amendment): while the composer holds
 //! a bare command word — first char `/`, no whitespace yet — a filtered
 //! list of everything that word could become floats above the editor:
-//! the built-ins and, once `/skill:` is typed, one row per skill. Pure,
+//! the built-ins. Pure,
 //! like [`classify_submission`](super::commands::classify_submission): the
 //! same catalog the submit path matches against, so the list can never
 //! advertise a command that does not run. The row-to-`UiLine` builders
 //! live here too — the popup's whole look, in the popup's module.
 
-use crate::agent::skills::Skill;
 use crate::config::providers::CatalogRow;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line as UiLine, Span};
@@ -68,7 +67,7 @@ pub(crate) const BUILTINS: &[(&str, &str, &str)] = &[
     ),
     ("/context", "", "show the assembled system prompt"),
     ("/hooks", "", "list loaded hooks"),
-    ("/skill:", "<name> [args]", "run a skill now"),
+    ("/skill", " <name> [args]", "run a skill now"),
     (
         "/model",
         " [provider/model]",
@@ -91,53 +90,27 @@ pub fn active(text: &str) -> bool {
     text.starts_with('/') && !text.chars().any(char::is_whitespace)
 }
 
-/// The suggestions for the composer's current text, in catalog order:
-/// built-ins, then (once `/skill:` is typed) per-skill rows. Empty when
-/// the popup should not show.
-pub fn suggestions(text: &str, skills: &[Skill]) -> Vec<Suggestion> {
-    if !active(text) {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    if let Some(prefix) = text.strip_prefix("/skill:") {
-        // The colon is typed: the generic row gives way to one row per
-        // matching skill, named by what follows the colon. A skill name
-        // with whitespace is skipped — the submit path splits at the
-        // first space, so such a row could never run (and the popup
-        // itself closes on whitespace, so it could not even be typed).
-        for skill in skills {
-            if skill.name.starts_with(prefix) && !skill.name.chars().any(char::is_whitespace) {
-                let mut description = skill.description.clone();
-                if skill.disable_model_invocation {
-                    description.push_str(" · manual only");
-                }
-                out.push(Suggestion {
-                    label: format!("/skill:{}", skill.name),
-                    completion: format!("/skill:{} ", skill.name),
-                    description,
-                });
-            }
-        }
-        return out;
-    }
-    for (name, args_hint, description) in BUILTINS {
-        if name.starts_with(text) {
-            out.push(Suggestion {
-                label: format!("{name}{args_hint}"),
-                // Every command completes with a trailing space, ready
-                // for arguments — except the generic `/skill:` row,
-                // which completes to the colon: the name is still to
-                // come, and a space there would close the popup.
-                completion: if *name == "/skill:" {
-                    (*name).to_string()
-                } else {
-                    format!("{name} ")
-                },
-                description: (*description).to_string(),
-            });
-        }
-    }
-    out
+/// The built-in suggestions for the composer's current text, in catalog
+/// order. The three list commands are rows while they are still being
+/// typed (`/ses` suggests `/session`), and stop being one once typed in
+/// full: the list is open then, and the popup never shows over a list.
+/// Empty when the popup should not show.
+pub fn suggestions(text: &str) -> Vec<Suggestion> {
+    let out: Vec<Suggestion> = BUILTINS
+        .iter()
+        .filter(|(name, _, _)| name.starts_with(text))
+        .filter(|(name, _, _)| {
+            !(matches!(*name, "/session" | "/model" | "/skill") && *name == text)
+        })
+        .map(|(name, args_hint, description)| Suggestion {
+            label: format!("{name}{args_hint}"),
+            // Every command completes with a trailing space, ready for
+            // arguments.
+            completion: format!("{name} "),
+            description: (*description).to_string(),
+        })
+        .collect();
+    if active(text) { out } else { Vec::new() }
 }
 
 /// One popup row as the terminal sees it: the command first, the

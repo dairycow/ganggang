@@ -70,7 +70,7 @@ pub struct State {
     context_window: u64,
     last_context_tokens: u64,
     /// The discovery sets the suggestion popup lists from (§15
-    /// amendment): skills for `/skill:<name>` rows. Shared read-only
+    /// amendment): the rows of the `/skill` list. Shared read-only
     /// with the command handler.
     skills: Arc<Vec<crate::agent::skills::Skill>>,
     /// The model rows the `/model` popup lists from, and the active
@@ -174,13 +174,41 @@ impl State {
         self.skills.clone()
     }
 
-    /// Replace the skill set (a `/reload` or a swapped agent) and reset
-    /// the popup's selection: the highlighted row and filter are stale
-    /// against a new list.
+    /// Replace the skill set (a `/reload` or a swapped agent). While the
+    /// `/skill` list is open the rows are its new rows: the user's filter
+    /// is kept, and the highlight stays on the skill it stood on, or
+    /// returns to the list's default when that skill is gone. The
+    /// suggestion popup lists built-ins only, so nothing of its is
+    /// touched.
     pub fn set_skills(&mut self, skills: Arc<Vec<crate::agent::skills::Skill>>) {
         self.skills = skills;
-        self.suggest_selected = 0;
-        self.suggest_filter.clear();
+        if self
+            .picker
+            .as_ref()
+            .is_some_and(|open| open.list == crate::tui::picker::List::Skills)
+        {
+            let was_on = self
+                .picker_matches()
+                .get(self.picker.as_ref().map_or(0, |open| open.selected))
+                .and_then(|row| row.label().map(str::to_string));
+            let keep_filter = self
+                .picker
+                .as_ref()
+                .map_or_else(String::new, |open| open.filter.clone());
+            self.picker = Some(self.skill_list());
+            if let Some(pick) = self.picker.as_mut() {
+                pick.filter = keep_filter;
+            }
+            if let Some(was) = was_on.as_ref() {
+                let at = self
+                    .picker_matches()
+                    .iter()
+                    .position(|row| row.label() == Some(was.as_str()));
+                if let (Some(at), Some(pick)) = (at, self.picker.as_mut()) {
+                    pick.selected = at;
+                }
+            }
+        }
     }
 
     /// Replace the model rows the `/model` list is built from. While the
@@ -238,10 +266,5 @@ impl State {
             .into_iter()
             .map(|l| l.text)
             .collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn suggest_selected_for_test(&self) -> usize {
-        self.suggest_selected
     }
 }

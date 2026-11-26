@@ -357,18 +357,18 @@ fn suggestion_popup_tracks_the_composer() {
     state.suggest_next();
     state.editor.set_text("/sk");
     state.complete_suggestion();
-    assert_eq!(state.editor.text(), "/skill:");
-
-    // The skill colon expands one row per matching skill.
-    state.editor.set_text("/skill:p");
     assert_eq!(
-        state
-            .suggestions()
-            .iter()
-            .map(|s| s.label.clone())
-            .collect::<Vec<_>>(),
-        vec!["/skill:pdf-tools"]
+        state.editor.text(),
+        "/skill ",
+        "the skill row completes with a space: the name is its argument"
     );
+
+    // The skill command typed in full opens the skill list instead, with
+    // the popup gone: the rows are the list's, not the popup's.
+    state.editor.set_text("/skill");
+    state.sync_picker();
+    assert!(state.picker_open(), "the list is open");
+    assert!(!state.suggest_open(), "no popup over a list");
 
     // Selection cannot run off either end — and with the popup closed
     // (here: the completed text carries a space), the popup keys are
@@ -390,9 +390,8 @@ fn suggestion_popup_tracks_the_composer() {
     assert_eq!(state.editor.text(), "/quit ", "last row");
 }
 
-/// A `/reload` (or a swapped agent) replaces the skill set the popup
-/// lists from: the `/skill:` rows rebuild from the new set and the
-/// selection resets to the top row.
+/// A `/reload` (or a swapped agent) replaces the skill set the `/skill`
+/// list is built from: its rows rebuild from the new set.
 #[test]
 fn set_skills_rebuilds_the_skill_rows() {
     use crate::agent::skills::Skill;
@@ -406,8 +405,10 @@ fn set_skills_rebuilds_the_skill_rows() {
         Arc::new(Vec::new()),
         History::default(),
     );
-    state.editor.set_text("/skill:");
-    assert_eq!(state.suggestions().len(), 0, "no skills, no rows");
+    state.editor.set_text("/skill");
+    state.sync_picker();
+    assert!(state.picker_open(), "the list is open");
+    assert!(state.picker_matches().is_empty(), "no skills, no rows");
     state.set_skills(Arc::new(vec![Skill {
         name: "late-skill".into(),
         description: "added by a reload".into(),
@@ -417,14 +418,13 @@ fn set_skills_rebuilds_the_skill_rows() {
     }]));
     assert_eq!(
         state
-            .suggestions()
+            .picker_matches()
             .iter()
-            .map(|s| s.label.clone())
+            .map(|row| row_label(row).to_string())
             .collect::<Vec<_>>(),
-        vec!["/skill:late-skill"],
+        vec!["late-skill"],
         "the new skill is listed"
     );
-    assert_eq!(state.suggest_selected_for_test(), 0, "the selection resets");
 }
 
 fn model_choice(
@@ -593,14 +593,16 @@ async fn reloaded_event_swaps_skills_and_reports_counts() {
     )
     .await;
     assert!(keep, "a reload reply does not end the loop");
-    state.editor.set_text("/skill:");
+    state.editor.set_text("/skill");
+    state.sync_picker();
     assert_eq!(
         state
-            .suggestions()
+            .picker_matches()
             .iter()
-            .map(|s| s.label.clone())
+            .map(|row| row_label(row).to_string())
             .collect::<Vec<_>>(),
-        vec!["/skill:reloaded-skill"]
+        vec!["reloaded-skill"],
+        "the list is built from the reloaded set"
     );
     let transcript = state.line_texts_for_test().join("\n");
     assert!(
@@ -954,6 +956,7 @@ fn row_label(row: &Row) -> &str {
             Action::Info => "info",
         },
         Row::Model { suggestion, .. } => &suggestion.label,
+        Row::Skill { suggestion, .. } => &suggestion.label,
     }
 }
 
@@ -1175,6 +1178,7 @@ fn the_cached_listing_is_the_lists_rows() {
                 Row::Session(session) => session.id.as_str(),
                 Row::Action(_) => "",
                 Row::Model { suggestion, .. } => suggestion.label.as_str(),
+                Row::Skill { .. } => "",
             })
             .collect::<Vec<_>>(),
         ["00000000", "00000001", "00000002", "00000000", "00000001"],
@@ -1241,6 +1245,7 @@ fn tab_narrows_the_list_to_this_directory_and_widens_it_back() {
             Row::Session(session) => session.project.as_deref().unwrap_or(""),
             Row::Action(_) => "",
             Row::Model { suggestion, .. } => suggestion.label.as_str(),
+            Row::Skill { .. } => "",
         })
         .collect();
     assert_eq!(directories, ["~/repo/.worktrees/wt01"]);

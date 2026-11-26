@@ -47,6 +47,10 @@ pub enum Command {
     Context,
     /// List loaded user-level hooks (§22), or say why there are none.
     Hooks,
+    /// `/skill <name> [args]` runs a skill: `name` is the first word
+    /// after the command, `args` the rest. A skill name with whitespace
+    /// cannot be named this way — the command splits at the first space —
+    /// so the list only offers names that can run.
     Skill {
         name: String,
         args: String,
@@ -102,11 +106,21 @@ pub fn classify_submission(text: &str) -> Submission {
             "reload" => Command::Reload,
             "hooks" => Command::Hooks,
             "quit" | "exit" => Command::Quit,
-            _ if head.starts_with("skill:") => Command::Skill {
-                name: head["skill:".len()..].trim().to_string(),
-                args: arg,
-            },
-            _ => Command::Unknown(head.to_string()),
+            _ => {
+                match head {
+                    "skill" => {
+                        // The name is the first word of the argument, the
+                        // args the rest: `name` is trimmed by `splitn`,
+                        // and `args` is trimmed where it is taken.
+                        let mut words = arg.splitn(2, char::is_whitespace);
+                        Command::Skill {
+                            name: words.next().unwrap_or("").to_string(),
+                            args: words.next().unwrap_or("").trim().to_string(),
+                        }
+                    }
+                    _ => Command::Unknown(head.to_string()),
+                }
+            }
         });
     }
     Submission::Plain(text.to_string())
@@ -126,7 +140,7 @@ impl Command {
 
 /// The valid commands, for unknown-command feedback.
 pub fn known_commands() -> &'static str {
-    "/new /compact [instructions] /session [filter|copy|info] /context /hooks /skill:<name> [args] /model [provider/model] /think [effort|off|default] [budget] /reload /quit"
+    "/new /compact [instructions] /session [filter|copy|info] /context /hooks /skill <name> [args] /model [provider/model] /think [effort|off|default] [budget] /reload /quit"
 }
 
 /// Everything a command needs to act: view state, the agent channels, the
@@ -229,7 +243,7 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
         Command::Skill { name, args } => {
             let Some(skill) = skills.iter().find(|s| s.name == name) else {
                 state.push_warning(&format!(
-                    "no skill named {name:?}; type /skill: to list skills"
+                    "no skill named {name:?}; type /skill to list skills"
                 ));
                 return Ok(false);
             };
@@ -300,7 +314,7 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
         }
         Command::Unknown(name) => {
             if name == "skills" {
-                state.push_warning("/skills was removed: type /skill: to list skills");
+                state.push_warning("/skills was removed: type /skill to list skills");
             } else {
                 state.push_warning(&format!(
                     "unknown command /{name} — valid: {}",

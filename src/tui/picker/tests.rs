@@ -51,6 +51,7 @@ fn ids<'a>(rows: &[&'a Row]) -> Vec<&'a str> {
             Row::Session(session) => session.id.as_str(),
             Row::Action(_) => "",
             Row::Model { suggestion, .. } => suggestion.label.as_str(),
+            Row::Skill { suggestion, .. } => suggestion.label.as_str(),
         })
         .collect()
 }
@@ -783,7 +784,7 @@ mod state_tests {
     use crate::tui::view::State;
 
     /// A view for the state's tests: no environment read is a test read.
-    fn view() -> State {
+    pub(super) fn view() -> State {
         State::with_palette(
             std::path::Path::new("/tmp/x"),
             "m",
@@ -806,7 +807,7 @@ mod state_tests {
         state.sync_picker();
     }
 
-    fn names(state: &State) -> Vec<String> {
+    pub(super) fn names(state: &State) -> Vec<String> {
         state
             .picker_matches()
             .iter()
@@ -817,11 +818,12 @@ mod state_tests {
                     Action::Info => "info".to_string(),
                 },
                 Row::Model { suggestion, .. } => suggestion.label.clone(),
+                Row::Skill { suggestion, .. } => suggestion.label.clone(),
             })
             .collect()
     }
 
-    fn highlighted(state: &State) -> usize {
+    pub(super) fn highlighted(state: &State) -> usize {
         state.picker.as_ref().map_or(0, |pick| pick.selected)
     }
 
@@ -1485,6 +1487,250 @@ mod trigger_tests {
             of("/model glm fix"),
             Some((List::Models, "glm fix".into())),
             "and its filter is the rest of the line, as the session list's"
+        );
+    }
+}
+
+/// The skill list's rows and their strings: one per skill whose name
+/// has no whitespace, each with its completion and the `manual only`
+/// mark where the skill is hidden from the model's prompt.
+mod skill_tests {
+    use super::state_tests::{highlighted, names};
+    use super::*;
+    use crate::agent::skills::Skill;
+    use crate::tui::theme::TRUECOLOR;
+    use crate::tui::view::State;
+
+    /// The `/skill` trigger's parts, as `(filter, args)` where one is.
+    fn skill_of(text: &str) -> Option<(String, String)> {
+        trigger(text).map(|t| (t.filter, t.args))
+    }
+
+    fn skill(name: &str, description: &str, manual: bool) -> Skill {
+        Skill {
+            name: name.into(),
+            description: description.into(),
+            disable_model_invocation: manual,
+            path: std::path::PathBuf::from(format!("/s/{name}.md")),
+            instructions: "do it".into(),
+        }
+    }
+
+    /// A view for the skill list's tests: the skill set is the list's
+    /// own, in place before the list opens.
+    fn view_with(skills: Vec<Skill>) -> State {
+        let mut state = State::with_palette(
+            std::path::Path::new("/tmp/x"),
+            "m",
+            131_072,
+            std::sync::Arc::new(Vec::new()),
+            History::default(),
+            TRUECOLOR,
+        );
+        state.set_skills(std::sync::Arc::new(skills));
+        state
+    }
+
+    /// The trigger splits the first word into the filter and the
+    /// rest into the arguments; the bare command is both empty, and
+    /// a different word is no trigger.
+    #[test]
+    fn the_skill_trigger_splits_name_and_arguments() {
+        assert_eq!(
+            skill_of("/skill"),
+            Some((String::new(), String::new())),
+            "the bare command: no filter, no arguments"
+        );
+        assert_eq!(
+            skill_of("/skill rel"),
+            Some(("rel".into(), String::new())),
+            "the first word is the filter, no arguments yet"
+        );
+        assert_eq!(
+            skill_of("/skill self-improve --last 10"),
+            Some(("self-improve".into(), "--last 10".into())),
+            "the filter word and the arguments, both trimmed"
+        );
+        assert_eq!(
+            skill_of("/skill  a   b c"),
+            Some(("a".into(), "b c".into())),
+            "the whitespace between the words does not matter"
+        );
+        assert_eq!(skill_of("/skillx"), None, "a different word");
+        assert_eq!(skill_of("/skill:"), None, "the colon form is gone");
+    }
+
+    /// One row per skill whose name has no whitespace: the label is
+    /// the name, the completion `/skill <name> `, and the
+    /// description carries the `· manual only` mark where set. A
+    /// whitespace-named skill is absent — the typed command splits
+    /// at the first space, so such a row could never run.
+    #[test]
+    fn the_skill_rows_are_the_skills_that_can_run() {
+        let mut state = view_with(vec![
+            skill("release", "cut a release", false),
+            skill("self improve", "spaces", false),
+            skill("docs", "tidy the docs", true),
+        ]);
+        state.editor.set_text("/skill");
+        state.sync_picker();
+        assert!(state.picker_open(), "the bare command opens the skill list");
+        assert_eq!(
+            names(&state),
+            ["release", "docs"],
+            "each runnable skill once, in the state's order"
+        );
+        let rows = state.picker_matches();
+        let release = rows
+            .iter()
+            .find(|row| row.label() == Some("release"))
+            .unwrap();
+        let suggestion = match release {
+            Row::Skill { suggestion, .. } => suggestion,
+            _ => panic!("the row is a skill row"),
+        };
+        assert_eq!(suggestion.completion, "/skill release ");
+        assert_eq!(suggestion.description, "cut a release");
+        let docs = rows.iter().find(|row| row.label() == Some("docs")).unwrap();
+        let suggestion = match docs {
+            Row::Skill { suggestion, .. } => suggestion,
+            _ => panic!("the row is a skill row"),
+        };
+        assert_eq!(
+            suggestion.description, "tidy the docs · manual only",
+            "the manual-only mark"
+        );
+    }
+
+    /// The filter is a word that must appear in the name or the
+    /// description; the arguments do not filter at all.
+    #[test]
+    fn a_description_word_filters_and_the_arguments_do_not() {
+        let mut state = view_with(vec![
+            skill("release", "cut a release", false),
+            skill("docs", "tidy the docs", true),
+        ]);
+        state.editor.set_text("/skill tidy");
+        state.sync_picker();
+        assert_eq!(names(&state), ["docs"], "a word from the description");
+        state.editor.set_text("/skill tidy --last 10");
+        state.sync_picker();
+        assert_eq!(names(&state), ["docs"], "the arguments are not a filter");
+    }
+
+    /// `picker_action()` on the highlighted skill row is its
+    /// completion plus the typed arguments; `picker_tab` writes the
+    /// same, and the list stays.
+    #[test]
+    fn the_skill_row_runs_its_command_and_tab_writes_it() {
+        let mut state = view_with(vec![skill("self-improve", "improve", false)]);
+        state.editor.set_text("/skill");
+        state.sync_picker();
+        assert_eq!(
+            state.picker_action(),
+            Some(Pick::Command("/skill self-improve ".into())),
+            "no arguments: the completion stands alone"
+        );
+        state.editor.set_text("/skill self-improve --last 10");
+        state.sync_picker();
+        assert_eq!(
+            state.picker_action(),
+            Some(Pick::Command("/skill self-improve --last 10".into())),
+            "the arguments ride along"
+        );
+        state.picker_tab();
+        assert_eq!(state.editor.text(), "/skill self-improve --last 10");
+        assert!(state.picker_open(), "the list stays on the completion");
+        assert_eq!(
+            state.picker_matches().len(),
+            1,
+            "the completion is the filter's own text: it keeps one row"
+        );
+    }
+
+    /// A changed filter is a new list — the highlight returns to the
+    /// first row; changing only the arguments keeps the highlight.
+    #[test]
+    fn a_changed_filter_resets_the_highlight_but_the_arguments_do_not() {
+        let mut state = view_with(vec![
+            skill("release", "cut a release", false),
+            skill("self-improve", "improve", false),
+            skill("docs", "tidy the docs", true),
+            skill("notes", "tidy the notes", true),
+        ]);
+        state.editor.set_text("/skill");
+        state.sync_picker();
+        state.picker_next();
+        state.picker_next();
+        assert_eq!(highlighted(&state), 2, "standing on docs");
+        state.editor.set_text("/skill tidy");
+        state.sync_picker();
+        assert!(
+            names(&state) == ["docs", "notes"],
+            "the filter keeps the two tidy skills"
+        );
+        assert_eq!(
+            highlighted(&state),
+            0,
+            "a changed filter: a new list, the first row"
+        );
+        state.picker_next();
+        assert_eq!(highlighted(&state), 1, "moved on the new list");
+        state.editor.set_text("/skill tidy --last 10");
+        state.sync_picker();
+        assert_eq!(
+            highlighted(&state),
+            1,
+            "changed arguments: not a new list, the highlight stays"
+        );
+    }
+
+    /// Rows that arrive while the list is open (a `set_skills`
+    /// refresh) keep the highlight on the skill it stood on, by
+    /// name, and give back the list's default when it is gone.
+    #[test]
+    fn a_refresh_keeps_the_highlight_on_the_same_skill() {
+        let mut state = view_with(vec![skill("a", "one", false), skill("b", "two", false)]);
+        state.editor.set_text("/skill");
+        state.sync_picker();
+        state.picker_next();
+        assert_eq!(highlighted(&state), 1, "standing on b");
+
+        // A reordered and grown set: b is still in it.
+        state.set_skills(std::sync::Arc::new(vec![
+            skill("c", "three", false),
+            skill("a", "one", false),
+            skill("b", "two", false),
+        ]));
+        assert!(state.picker_open(), "the list stays on the new rows");
+        assert_eq!(
+            names(&state),
+            ["c", "a", "b"],
+            "the new rows, in their order"
+        );
+        assert_eq!(highlighted(&state), 2, "the skill it stood on, by name");
+
+        // It is gone: the default again.
+        state.set_skills(std::sync::Arc::new(vec![skill("a", "one", false)]));
+        assert!(state.picker_open(), "still open");
+        assert_eq!(highlighted(&state), 0, "the skill is gone: the default");
+    }
+
+    /// The panel's last row of the skill list: how to drive it.
+    #[test]
+    fn the_skill_list_s_hint_row_says_runs_and_completes() {
+        let mut state = view_with(vec![skill("release", "cut a release", false)]);
+        state.editor.set_text("/skill");
+        state.sync_picker();
+        let line = crate::tui::picker::hint_row(&TRUECOLOR, 80, state.picker_hint_keys(), None);
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(
+            text, " ↑↓ move · type filters · Enter runs · Tab completes · Esc clears",
+            "the hint row reads as the rule says"
         );
     }
 }

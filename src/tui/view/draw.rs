@@ -75,7 +75,11 @@ pub fn render(frame: &mut Frame, state: &mut State) {
         Paragraph::new(state.footer.spans(&palette)).style(Style::new().bg(palette.surface)),
         areas.footer,
     );
-    // The two popups share one patch of screen, and the picker has the
+    // The list follows the composer's text: sync it before anything reads
+    // it, so a trigger typed in full opens its list on this frame and
+    // the popup never flashes under it.
+    state.sync_picker();
+    // The two popups share one patch of screen, and the list has the
     // composer while it is open: it is the one that draws.
     if state.picker_open() {
         draw_picker(frame, state, areas);

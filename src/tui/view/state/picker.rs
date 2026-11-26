@@ -53,8 +53,27 @@ impl crate::tui::view::State {
         crate::tui::picker::Picker::for_models(rows)
     }
 
+    /// The `/skill` list's rows, built from the state's skill set: one
+    /// row per skill whose name has no whitespace (the typed command
+    /// splits at the first space), in the state's order.
+    pub(crate) fn skill_list(&self) -> Picker {
+        let rows = self
+            .skills
+            .iter()
+            .filter(|skill| !skill.name.chars().any(char::is_whitespace))
+            .map(|skill| {
+                let suggestion = crate::tui::picker::skill_row(skill);
+                let search =
+                    format!("{} {}", suggestion.label, suggestion.description).to_lowercase();
+                crate::tui::picker::Row::Skill { suggestion, search }
+            })
+            .collect();
+        crate::tui::picker::Picker::for_skills(rows)
+    }
+
     /// Open this trigger's list: the sessions from the listing cache, the
-    /// models from the state's rows; on the trigger's filter.
+    /// models from the state's rows, the skills from the state's skill
+    /// set; on the trigger's filter.
     fn open_picker(&mut self) {
         let Some(trigger) = trigger(self.editor.text()) else {
             return;
@@ -62,6 +81,7 @@ impl crate::tui::view::State {
         let mut pick = match trigger.list {
             crate::tui::picker::List::Sessions => self.session_list(),
             crate::tui::picker::List::Models => self.model_list(),
+            crate::tui::picker::List::Skills => self.skill_list(),
         };
         let filter = trigger.filter.clone();
         let selected = self.default_row(&trigger, &pick);
@@ -123,6 +143,8 @@ impl crate::tui::view::State {
             }
             rows.extend(pick.rows().iter().map(|row| Row::Session(row.clone())));
         } else {
+            // The `/model` and `/skill` lists have no matching action
+            // rows: their rows stand as they were built.
             rows.extend(pick.model_rows().iter().cloned());
         }
         matching(&rows, &pick.filter).into_iter().cloned().collect()
@@ -142,6 +164,9 @@ impl crate::tui::view::State {
             Some(pick) if pick.list == List::Models => crate::tui::picker::HintKeys::Complete {
                 enter: "Enter switches",
             },
+            Some(pick) if pick.list == List::Skills => crate::tui::picker::HintKeys::Complete {
+                enter: "Enter runs",
+            },
             _ => crate::tui::picker::HintKeys::Complete {
                 enter: "Enter opens",
             },
@@ -150,7 +175,8 @@ impl crate::tui::view::State {
 
     /// Why the open list has no row to show, as its panel's own row
     /// says it: the session list's reasons where it is the sessions,
-    /// the model list's where it is the models.
+    /// the model list's where it is the models, the skill list's where
+    /// it is the skills.
     pub fn picker_empty_reason(&self) -> String {
         let Some(pick) = self.picker.as_ref() else {
             return String::new();
@@ -161,6 +187,13 @@ impl crate::tui::view::State {
                 "no models to pick".to_string()
             } else {
                 format!("no model matches {filter:?}")
+            }
+        } else if pick.list == List::Skills {
+            let filter = pick.filter.trim();
+            if filter.is_empty() {
+                "no skills found".to_string()
+            } else {
+                format!("no skill matches {filter:?}")
             }
         } else {
             self.session_empty_reason()
@@ -329,6 +362,13 @@ impl crate::tui::view::State {
                 Action::Info => Some(Pick::Info),
             },
             Row::Model { suggestion, .. } => Some(Pick::Command(suggestion.completion.clone())),
+            Row::Skill { suggestion, .. } => {
+                // The trigger the composer's text still gives: the list
+                // is open, so it does, and its arguments are the typed
+                // ones.
+                let args = trigger(self.editor.text()).map_or(String::new(), |t| t.args);
+                Some(Pick::Command(format!("{}{}", suggestion.completion, args)))
+            }
         }
     }
 
@@ -342,15 +382,20 @@ impl crate::tui::view::State {
         }
     }
 
-    /// Tab in the `/model` list: the highlighted row's completion in the
-    /// composer, the list open still: `provider/model` is the filter's
-    /// own text, and the list stays where it was.
+    /// Tab in the `/model` or `/skill` list: the highlighted row's
+    /// completion in the composer, the list open still — `provider/model`
+    /// is the filter's own text, and `/skill <name> ` leaves the typed
+    /// arguments after the name, ready to be completed further.
     pub fn picker_tab(&mut self) {
         let Some(text) = self
             .picker_matches()
             .get(self.picker.as_ref().map_or(0, |pick| pick.selected))
             .and_then(|row| match row {
                 Row::Model { suggestion, .. } => Some(suggestion.completion.clone()),
+                Row::Skill { suggestion, .. } => {
+                    let args = trigger(self.editor.text()).map_or(String::new(), |t| t.args);
+                    Some(format!("{}{}", suggestion.completion, args))
+                }
                 _ => None,
             })
         else {

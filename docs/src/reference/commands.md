@@ -11,7 +11,7 @@ Generated from the command catalogue that drives the `/` suggestion popup.
 | `/session` | [filter\|copy\|info] | pick a saved session, copy its path, or show session info |
 | `/context` |  | show the assembled system prompt |
 | `/hooks` |  | list loaded hooks |
-| `/skill:` | &lt;name> [args] | run a skill now |
+| `/skill` | &lt;name> [args] | run a skill now |
 | `/model` | [provider/model] | list or switch provider and model |
 | `/think` | [effort\|off\|default] [budget] | show or set thinking effort and budget |
 | `/reload` |  | reload AGENTS.md and skills from disk |

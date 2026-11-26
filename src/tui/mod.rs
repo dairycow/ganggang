@@ -87,7 +87,7 @@ pub type Factory = Arc<
 
 /// The discovery sets the TUI renders lists from, shared read-only with
 /// the command handler. The Agent discovers its own copy of the skills
-/// (same cwd, same result); `/skill:`, `/hooks` and `/model`
+/// (same cwd, same result); `/skill`, `/hooks` and `/model`
 /// all answer without a round-trip to the agent task.
 pub struct Discovered {
     pub skills: Arc<Vec<Skill>>,
@@ -474,16 +474,15 @@ pub async fn run(
                             }
                         }
                         // Tab in the list: every directory's sessions, or
-                        // this directory's.
+                        // this directory's; the highlighted row's
+                        // completion in the `/model` and `/skill` lists.
                         KeyAction::SuggestComplete if state.picker_open() && !state.busy => {
-                            if state
-                                .picker
-                                .as_ref()
-                                .is_some_and(|pick| pick.list == crate::tui::picker::List::Models)
-                            {
-                                state.picker_tab()
-                            } else {
-                                state.toggle_session_scope()
+                            match state.picker.as_ref().map(|pick| pick.list) {
+                                Some(
+                                    crate::tui::picker::List::Models
+                                    | crate::tui::picker::List::Skills,
+                                ) => state.picker_tab(),
+                                _ => state.toggle_session_scope(),
                             }
                         }
                         // Submissions land between runs: the text stays

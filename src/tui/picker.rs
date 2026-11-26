@@ -11,6 +11,7 @@ use ratatui::text::{Line as UiLine, Span};
 use super::suggest::{ModelChoice, Suggestion, suggestion_row, take_chars};
 use super::theme::Palette;
 use crate::agent::session::io::SessionFile;
+use crate::agent::skills::Skill;
 
 use self::sessions::{SessionRow, row_line};
 
@@ -24,6 +25,7 @@ pub(in crate::tui) mod tests;
 pub enum List {
     Sessions,
     Models,
+    Skills,
 }
 
 /// The session listing a `/session` list is built from: the last scan's
@@ -72,22 +74,37 @@ impl SessionListing {
 pub struct Trigger {
     pub list: List,
     pub filter: String,
+    /// The arguments typed after the filter word: `/skill` only, empty
+    /// otherwise.
+    pub args: String,
 }
 
-/// `text`'s first word is `/session` or `/model`: the list it opens, with
-/// the rest of the line, trimmed, as its filter. Nothing else is a
-/// trigger: `/sessionx`, `/modelx` and a plain prompt open nothing.
+/// `text`'s first word is `/session`, `/model` or `/skill`: the list it
+/// opens, with the rest of the line, trimmed, as its filter. For
+/// `/skill` the filter is the first word of the rest and the remainder
+/// the arguments the picked skill runs with. Nothing else is a trigger:
+/// `/sessionx`, `/modelx`, `/skillx` and a plain prompt open nothing.
 pub(in crate::tui) fn trigger(text: &str) -> Option<Trigger> {
     let (head, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     match head {
         "/session" => Some(Trigger {
             list: List::Sessions,
             filter: rest.trim().to_string(),
+            args: String::new(),
         }),
         "/model" => Some(Trigger {
             list: List::Models,
             filter: rest.trim().to_string(),
+            args: String::new(),
         }),
+        "/skill" => {
+            let mut words = rest.trim_start().splitn(2, char::is_whitespace);
+            Some(Trigger {
+                list: List::Skills,
+                filter: words.next().unwrap_or("").to_string(),
+                args: words.next().unwrap_or("").trim().to_string(),
+            })
+        }
         _ => None,
     }
 }
@@ -154,6 +171,23 @@ pub fn model_row(m: &ModelChoice, active_label: &str) -> Suggestion {
     }
 }
 
+/// One skill row of the `/skill` list, as the popup's row builders draw
+/// it: the name, the description with a `· manual only` mark when the
+/// skill is hidden from the model's own system prompt, and a
+/// `/skill <name> ` completion (a trailing space: the arguments are still
+/// to come).
+pub fn skill_row(skill: &Skill) -> Suggestion {
+    let mut description = skill.description.clone();
+    if skill.disable_model_invocation {
+        description.push_str(" · manual only");
+    }
+    Suggestion {
+        label: skill.name.clone(),
+        completion: format!("/skill {} ", skill.name),
+        description,
+    }
+}
+
 /// One row of the list, with its own text a filter has to appear in.
 /// The session rows' is their [`SessionRow::haystack`]; the action
 /// rows' is their label; a model row's is its label and description.
@@ -171,6 +205,13 @@ pub enum Row {
         suggestion: Suggestion,
         search: String,
     },
+    /// A skill row: the suggestion as the popup's row builders draw it
+    /// (its search text is its name and description), and its completion
+    /// is `/skill <name> `.
+    Skill {
+        suggestion: Suggestion,
+        search: String,
+    },
 }
 
 impl Row {
@@ -180,17 +221,19 @@ impl Row {
             Row::Session(row) => &row.haystack,
             Row::Action(action) => action.label(),
             Row::Model { search, .. } => search,
+            Row::Skill { search, .. } => search,
         }
     }
 
     /// The row's first string: the `provider/model` of a model row, the
-    /// action's label, `None` for a session (its many strings have no
-    /// single first one). What the `/model` list's highlight is kept on,
-    /// across a changed listing.
+    /// action's label, a skill's name, `None` for a session (its many
+    /// strings have no single first one). What a list's highlight is
+    /// kept on, across a changed listing.
     pub fn label(&self) -> Option<&str> {
         match self {
             Row::Model { suggestion, .. } => Some(&suggestion.label),
             Row::Action(action) => Some(action.label()),
+            Row::Skill { suggestion, .. } => Some(&suggestion.label),
             Row::Session(_) => None,
         }
     }
@@ -201,6 +244,7 @@ impl Row {
             Row::Session(row) => row_line(palette, row, selected, width),
             Row::Action(action) => suggestion_row(palette, &action_row(*action), selected, width),
             Row::Model { suggestion, .. } => suggestion_row(palette, suggestion, selected, width),
+            Row::Skill { suggestion, .. } => suggestion_row(palette, suggestion, selected, width),
         }
     }
 
@@ -211,6 +255,9 @@ impl Row {
             (Row::Session(a), Row::Session(b)) => a.session.path == b.session.path,
             (Row::Action(a), Row::Action(b)) => a == b,
             (Row::Model { suggestion: a, .. }, Row::Model { suggestion: b, .. }) => {
+                a.label == b.label
+            }
+            (Row::Skill { suggestion: a, .. }, Row::Skill { suggestion: b, .. }) => {
                 a.label == b.label
             }
             _ => false,
@@ -227,7 +274,8 @@ pub enum Pick {
     CopyPath,
     /// Show the current session's path, model, entries and tokens.
     Info,
-    /// Run the highlighted row's command: `/model provider/model`.
+    /// Run the highlighted row's command: `/model provider/model` or
+    /// `/skill <name> [args]`.
     Command(String),
 }
 
@@ -258,8 +306,8 @@ pub struct Picker {
     /// when the list closes. `None` until one fails, and cleared by a
     /// scope change or a changed filter, which are a new list.
     pub error: Option<String>,
-    /// This directory's sessions, newest first. The `/model` list's
-    /// rows are stored as [`Row`]s in their own place: here is empty.
+    /// This directory's sessions, newest first. The `/model` and `/skill`
+    /// lists have no stored rows: here is empty for them.
     here: Vec<SessionRow>,
     /// Every directory's sessions, newest first, this directory's
     /// included. Empty for the `/model` list.
@@ -300,6 +348,16 @@ impl Picker {
     /// The `/model` list over its `rows`: no session rows, the first row
     /// highlighted, no filter, no error.
     pub fn for_models(rows: Vec<Row>) -> Self {
+        Self::for_rows(rows, List::Models)
+    }
+
+    /// The `/skill` list over its `rows`: no session rows, the first row
+    /// highlighted, no filter, no error.
+    pub fn for_skills(rows: Vec<Row>) -> Self {
+        Self::for_rows(rows, List::Skills)
+    }
+
+    fn for_rows(rows: Vec<Row>, list: List) -> Self {
         Self {
             here: Vec::new(),
             everywhere: Vec::new(),
@@ -307,7 +365,7 @@ impl Picker {
             selected: 0,
             filter: String::new(),
             error: None,
-            list: List::Models,
+            list,
             model_rows: rows,
         }
     }
@@ -326,14 +384,14 @@ impl Picker {
         }
     }
 
-    /// The `/model` list's rows in view, in the state's order; empty
-    /// for the session list.
+    /// The `/model` list's rows in view, in the state's order; the
+    /// `/skill` list's the same. Empty for the session list.
     pub fn model_rows(&self) -> &[Row] {
         &self.model_rows
     }
 
     /// The session rows in view, in listing order. Empty for the
-    /// `/model` list.
+    /// `/model` and `/skill` lists.
     pub fn rows(&self) -> &[SessionRow] {
         if self.all_directories {
             &self.everywhere

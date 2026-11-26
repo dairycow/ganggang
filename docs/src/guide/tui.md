@@ -8,18 +8,18 @@ If stdin is not a terminal and no prompt is given, `gg` exits with an error; use
 
 | Key | Action |
 |---|---|
-| `Enter` | Send the message; in an open list, act on the highlighted row: open the session or run its `copy path` or `info` row, or switch to the model |
+| `Enter` | Send the message; in an open list, act on the highlighted row: open the session or run its `copy path` or `info` row, switch to the model, or run the skill |
 | `Alt+Enter`, `Ctrl+J` | Newline (`Shift+Enter` too, where the terminal reports modified keys) |
 | `Backspace` | Delete before the cursor |
 | `←` / `→` | Move the cursor |
 | `Ctrl+←` / `Ctrl+→` | Move the cursor by word |
-| `↑` / `↓` | Navigate the `/` suggestion list or the `/session` or `/model` list while one is open; otherwise recall prompts while the composer is empty or single-line, or move between its lines |
-| `Ctrl+P` / `Ctrl+N` | Recall the previous / next prompt, whatever the composer holds, unless the suggestion list or the `/session` or `/model` list is open |
+| `↑` / `↓` | Navigate the `/` suggestion list or the `/session`, `/model` or `/skill` list while one is open; otherwise recall prompts while the composer is empty or single-line, or move between its lines |
+| `Ctrl+P` / `Ctrl+N` | Recall the previous / next prompt, whatever the composer holds, unless the suggestion list or the `/session`, `/model` or `/skill` list is open |
 | `Ctrl+A`, `Home` | Start of line |
 | `Ctrl+E`, `End` | End of line |
 | `Ctrl+K` | Kill to end of line |
 | `Ctrl+U` | Kill to start of line |
-| `Tab` | Complete the highlighted `/` suggestion; in the `/session` list, switch between every directory's sessions and the current directory's; in the `/model` list, complete the highlighted `provider/model` |
+| `Tab` | Complete the highlighted `/` suggestion; in the `/session` list, switch between every directory's sessions and the current directory's; in the `/model` and `/skill` lists, complete the highlighted row's command |
 | `Esc` | Stop the run in flight: an in-flight stream is cut and a running tool is killed; what had arrived is kept. Idle, it clears the line and closes the open list when one is, and otherwise does nothing |
 | `Ctrl+O` | Expand or collapse tool calls |
 | `Ctrl+T` | Show or hide thinking |
@@ -61,7 +61,7 @@ Assistant answers render a deliberately small markdown subset; your own messages
 
 ## Slash commands
 
-Typing `/` opens a suggestion list above the composer: the built-ins and, once `/skill:` is typed, one row per skill. `↑`/`↓` move the highlight, `Tab` completes, and `Enter` still sends exactly what you typed, except in the `/session` and `/model` lists, where it acts on the highlighted row.
+Typing `/` opens a suggestion list above the composer: the built-ins. `↑`/`↓` move the highlight, `Tab` completes, and `Enter` still sends exactly what you typed, except in the `/session`, `/model` and `/skill` lists, where it acts on the highlighted row.
 
 Typing `/model` opens the model list in the same panel, with one row per model: `provider/model`, its context window, any discovery status, `no key` when its key is missing, and the `· active` mark on the model in use. With nothing typed after the command the active model is highlighted, so `Enter` on a bare `/model` changes nothing (`already on …`). Typing after the command filters the list case-insensitively, and `Enter` switches to the highlighted model; a switch that fails, say over a missing key or an unknown model, keeps the list and shows the error in its last row. `Tab` completes the highlighted `provider/model` into the command. Live local models (Strata, `llama-server`, Ollama, vLLM) refresh in the background at startup and on `/reload`: their `/v1/models` endpoints are probed off the render loop with short timeouts, so the list picks up models loaded after the session began without waiting on a down server.
 
@@ -73,9 +73,11 @@ A session continues in the directory it started in, wherever you launched gg. Op
 
 A session's 8-hex id works as a filter: `/session 3fa9` leaves that session highlighted, and `Enter` opens it. Typed `copy` and `info` are filters too: `/session copy` highlights the `copy path` row, and `Enter` runs it.
 
+`/skill` opens the skill list in the same panel as soon as the command is typed: one row per discovered skill, its name and its description, with ` · manual only` on a skill the model may not invoke itself. The first word typed after the command filters the list (it has to appear in a skill's name or description), and anything after that word is passed to the skill as arguments. `Enter` runs the highlighted skill with those arguments; `Tab` completes its name so arguments can be typed. `/skill <name> [args]` typed in full forces one: its instructions become your next message and run immediately. Skills whose name contains a space are not listed and cannot be run this way.
+
 `/think` shows or sets the active OpenAI-compatible model's thinking configuration: with no argument it reports the current setting; a bare word sets the effort; a bare number sets the budget in tokens (0 clears it); `effort budget` sets both; `off` or `none` sets effort to `none` and clears the budget; `default` or `clear` reverts both to provider defaults.
 
-`/reload` re-discovers `AGENTS.md` files and skills from disk: the next system prompt picks up new files and skills, the `/skill:` rows refresh, and the local servers' `/v1/models` probes run again in the background. The session's entries and identity are kept (see [Reloading context and skills](context-and-skills.md#reloading-context-and-skills)).
+`/reload` re-discovers `AGENTS.md` files and skills from disk: the next system prompt picks up new files and skills, the `/skill` rows refresh, and the local servers' `/v1/models` probes run again in the background. The session's entries and identity are kept (see [Reloading context and skills](context-and-skills.md#reloading-context-and-skills)).
 
 The command list is in [TUI slash commands](../reference/commands.md). Unknown commands are rejected with the valid set.
 
@@ -88,7 +90,7 @@ Both share the bash tool's runner: 30-second timeout (the whole process group is
 
 ## `@file` mentions
 
-`@src/main.rs` in a message or `/skill:<name>` arguments attaches the file's content below your text. Attached files are appended below your message as fenced code blocks.
+`@src/main.rs` in a message or `/skill <name>` arguments attaches the file's content below your text. Attached files are appended below your message as fenced code blocks.
 
 - A token counts as a mention when what follows `@` contains `/` or `.`, so `user@host` and a lone `@` stay literal. Trailing punctuation (`@file.txt,`) is not part of the path.
 - Paths resolve against the session directory; two spellings of the same file attach once.

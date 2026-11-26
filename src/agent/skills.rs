@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 /// The parsed `key: value` block between the `---` fences.
 ///
 /// `disable_model_invocation` skills are still discovered and loadable on
-/// demand (`/skill:<name>`); the flag only hides them from system-prompt
+/// demand (`/skill <name>`); the flag only hides them from system-prompt
 /// advertising — the M3.5 consumer filters on it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillFrontmatter {
@@ -24,7 +24,7 @@ pub struct SkillFrontmatter {
 }
 
 /// A discovered skill: frontmatter plus everything the advertiser and the
-/// `/skill:` command need — the absolute `SKILL.md` path and the
+/// `/skill` command need — the absolute `SKILL.md` path and the
 /// instruction body that follows the fences.
 #[derive(Debug, Clone)]
 pub struct Skill {
@@ -34,7 +34,7 @@ pub struct Skill {
     /// Absolute path of the `SKILL.md` — advertised so the model can read it.
     pub path: PathBuf,
     /// The file's content after the frontmatter fences.
-    #[allow(dead_code)] // consumed by the TUI's /skill: forcing (M4.5)
+    #[allow(dead_code)] // consumed by the TUI's /skill forcing (M4.5)
     pub instructions: String,
 }
 

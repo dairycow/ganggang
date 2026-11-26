@@ -93,7 +93,7 @@ async fn reload_forwards_to_the_agent_task() {
     ));
 }
 
-/// `/skills` is gone: submitting it warns that `/skill:` lists skills.
+/// `/skills` is gone: submitting it warns that `/skill` lists skills.
 #[tokio::test]
 async fn skills_command_is_removed_with_a_hint() {
     use std::sync::Arc;
@@ -136,7 +136,7 @@ async fn skills_command_is_removed_with_a_hint() {
     assert!(
         lines
             .iter()
-            .any(|l| l.contains("/skills was removed: type /skill: to list skills")),
+            .any(|l| l.contains("/skills was removed: type /skill to list skills")),
         "{lines:?}"
     );
 }
@@ -190,28 +190,14 @@ fn the_catalogue_names_session_not_resume() {
 }
 
 #[test]
-fn skill_forcing_takes_name_and_args() {
+fn skill_forcing_is_gone_and_the_space_form_classifies() {
+    // The old colon form is not a command: it falls to the
+    // unknown-command reply, where the valid set names the space form.
     assert_eq!(
         classify_submission("/skill:pdf-tools"),
-        Submission::Command(Command::Skill {
-            name: "pdf-tools".into(),
-            args: String::new(),
-        })
+        Submission::Command(Command::Unknown("skill:pdf-tools".into()))
     );
-    assert_eq!(
-        classify_submission("/skill:pdf-tools  report.pdf --tables"),
-        Submission::Command(Command::Skill {
-            name: "pdf-tools".into(),
-            args: "report.pdf --tables".into(),
-        })
-    );
-    assert_eq!(
-        classify_submission("/skill:"),
-        Submission::Command(Command::Skill {
-            name: String::new(),
-            args: String::new(),
-        })
-    );
+    assert!(!known_commands().contains("/skill:"));
 }
 
 #[test]
@@ -265,7 +251,7 @@ fn bang_prefixes_run_shell_with_or_without_context() {
     assert_eq!(classify_submission("!"), Submission::Plain("!".into()));
 }
 
-/// Drive one `/skill:` command end to end: a temp cwd holding
+/// Drive one `/skill <name>` command end to end: a temp cwd holding
 /// `notes.txt`, one skill with the given instructions, the command
 /// with the given args, and the resulting state plus what reached
 /// the agent (if anything). The factory is never called on this
@@ -324,7 +310,7 @@ async fn run_skill_command(
     (state, input_rx.try_recv().ok())
 }
 
-/// `/skill:<name>` with an `@file` in the args: the file's content
+/// `/skill <name>` with an `@file` in the args: the file's content
 /// rides into the Prompt payload, while the transcript line stays
 /// exactly as typed — no attachment blocks on screen.
 #[tokio::test]
@@ -873,4 +859,67 @@ async fn think_command_shows_and_updates_the_setting() {
         input_rx.try_recv().is_err(),
         "nothing forwarded for anthropic"
     );
+}
+
+#[test]
+fn skill_takes_name_and_args() {
+    // The name is the first word of the argument, the args the rest:
+    // `/skill self-improve --last 10` runs self-improve with `--last 10`.
+    assert_eq!(
+        classify_submission("/skill self-improve --last 10"),
+        Submission::Command(Command::Skill {
+            name: "self-improve".into(),
+            args: "--last 10".into(),
+        })
+    );
+    // A bare `/skill` is an empty name and empty args: the list opens
+    // instead, so the handler never sees it from the TUI; a bare name
+    // has no args.
+    assert_eq!(
+        classify_submission("/skill"),
+        Submission::Command(Command::Skill {
+            name: String::new(),
+            args: String::new(),
+        })
+    );
+    assert_eq!(
+        classify_submission("/skill foo"),
+        Submission::Command(Command::Skill {
+            name: "foo".into(),
+            args: String::new(),
+        })
+    );
+    // The colon form is not a command: it falls to the unknown-command
+    // reply, where the valid set now names `/skill <name> [args]`.
+    assert_eq!(
+        classify_submission("/skill:foo"),
+        Submission::Command(Command::Unknown("skill:foo".into()))
+    );
+    assert!(!known_commands().contains("/skill:"));
+    assert!(known_commands().contains("/skill <name> [args]"));
+}
+
+/// `suggest` no longer lists skill rows: `/skill` is the trigger's own
+/// word, and the built-in row's completion is the space form.
+mod suggest_skill_tests {
+    use crate::tui::suggest;
+
+    #[test]
+    fn the_bare_skill_word_has_no_suggestion_rows() {
+        assert_eq!(
+            suggest::suggestions("/skill"),
+            Vec::new(),
+            "the trigger's word: the list's own, not the popup's"
+        );
+    }
+
+    #[test]
+    fn a_partial_skill_word_completes_to_the_space_form() {
+        // A partial word: only `/skil` is unambiguous — `/skill` itself
+        // is the trigger's own word, never a popup row.
+        let got = suggest::suggestions("/skil");
+        assert_eq!(got.len(), 1, "the generic row: {got:?}");
+        assert_eq!(got[0].label, "/skill <name> [args]");
+        assert_eq!(got[0].completion, "/skill ");
+    }
 }

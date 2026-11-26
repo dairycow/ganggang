@@ -1,30 +1,17 @@
-//! Tests for [`super`]: the catalog, its filtering and cap, and how a row is drawn.
+//! Tests for [`super`]: the catalogue and its filtering, and how a row is
+//! drawn.
 
 use super::*;
 
 use crate::tui::theme::TRUECOLOR;
-use std::path::PathBuf;
 
-fn skill(name: &str, description: &str) -> Skill {
-    Skill {
-        name: name.into(),
-        description: description.into(),
-        disable_model_invocation: false,
-        path: PathBuf::from(format!("/tmp/{name}/SKILL.md")),
-        instructions: String::new(),
-    }
-}
-
-fn labels(text: &str, skills: &[Skill]) -> Vec<String> {
-    suggestions(text, skills)
-        .into_iter()
-        .map(|s| s.label)
-        .collect()
+fn labels(text: &str) -> Vec<String> {
+    suggestions(text).into_iter().map(|s| s.label).collect()
 }
 
 #[test]
 fn a_bare_slash_lists_the_whole_builtin_set() {
-    let got = labels("/", &[]);
+    let got = labels("/");
     assert_eq!(
         got,
         vec![
@@ -33,7 +20,7 @@ fn a_bare_slash_lists_the_whole_builtin_set() {
             "/session [filter|copy|info]",
             "/context",
             "/hooks",
-            "/skill:<name> [args]",
+            "/skill <name> [args]",
             "/model [provider/model]",
             "/think [effort|off|default] [budget]",
             "/reload",
@@ -45,77 +32,41 @@ fn a_bare_slash_lists_the_whole_builtin_set() {
 
 #[test]
 fn the_typed_prefix_filters_and_keeps_order() {
-    assert_eq!(labels("/re", &[]), vec!["/reload"]);
-    assert_eq!(labels("/ses", &[]), vec!["/session [filter|copy|info]"]);
-    assert_eq!(
-        labels("/c", &[]),
-        vec!["/compact [instructions]", "/context"]
-    );
-    // `/sk` only matches the forcing form: the list command is gone.
-    assert_eq!(labels("/sk", &[]), vec!["/skill:<name> [args]"]);
-    assert_eq!(labels("/skills", &[]), Vec::<String>::new());
-    assert_eq!(labels("/zzz", &[]), Vec::<String>::new());
+    assert_eq!(labels("/re"), vec!["/reload"]);
+    assert_eq!(labels("/ses"), vec!["/session [filter|copy|info]"]);
+    assert_eq!(labels("/c"), vec!["/compact [instructions]", "/context"]);
+    assert_eq!(labels("/sk"), vec!["/skill <name> [args]"]);
+    assert_eq!(labels("/skills"), Vec::<String>::new());
+    assert_eq!(labels("/zzz"), Vec::<String>::new());
 }
 
 #[test]
 fn completions_carry_a_trailing_space_for_arguments() {
-    let got = suggestions("/ses", &[]);
-    assert_eq!(got[0].completion, "/session ");
-    // The generic skill row completes to the colon, not a space —
-    // the name is still to come.
-    let got = suggestions("/ski", &[]);
-    assert_eq!(got[0].completion, "/skill:");
+    assert_eq!(suggestions("/ses")[0].completion, "/session ");
+    // The skill row too: what follows the space is the skill's name.
+    assert_eq!(suggestions("/ski")[0].completion, "/skill ");
 }
 
+/// The three list commands are rows while they are still being typed, and
+/// stop being one once typed in full: the list is open then, and the
+/// popup never shows over it.
 #[test]
-fn the_typed_colon_expands_one_row_per_matching_skill() {
-    let skills = [
-        skill("pdf-tools", "pdf extraction"),
-        skill("pdftk", "the other pdf one"),
-        skill("web", "fetch pages"),
-    ];
-    assert_eq!(
-        labels("/skill:", &skills),
-        vec!["/skill:pdf-tools", "/skill:pdftk", "/skill:web"]
-    );
-    assert_eq!(
-        labels("/skill:pdf", &skills),
-        vec!["/skill:pdf-tools", "/skill:pdftk"]
-    );
-    assert_eq!(labels("/skill:zzz", &skills), Vec::<String>::new());
-    let got = suggestions("/skill:web", &skills);
-    assert_eq!(got[0].description, "fetch pages");
-    assert_eq!(got[0].completion, "/skill:web ");
-}
-
-/// Skill names are validated leniently (§11: non-empty only), so a
-/// name with whitespace CAN be discovered — but `classify_submission`
-/// splits at the first space, making such a row unrunnable (and the
-/// popup itself closes on whitespace, so it is untypeable too). The
-/// catalog skips it rather than advertise a lie.
-#[test]
-fn whitespace_named_skills_are_not_advertised() {
-    let skills = [
-        skill("pdf tools", "spaced"),
-        skill("pdf-tools", "hyphenated"),
-    ];
-    assert_eq!(
-        labels("/skill:pdf", &skills),
-        vec!["/skill:pdf-tools"],
-        "the spaced imposter is skipped (it would match the prefix), the real one shows"
-    );
-}
-
-/// A `disable-model-invocation` skill is flagged in its row: the popup
-/// says what the system prompt does not.
-#[test]
-fn manual_only_skills_are_flagged_in_their_row() {
-    let mut manual = skill("pdf-tools", "pdf extraction");
-    manual.disable_model_invocation = true;
-    let skills = [manual, skill("web", "fetch pages")];
-    let got = suggestions("/skill:", &skills);
-    assert_eq!(got[0].description, "pdf extraction · manual only");
-    assert_eq!(got[1].description, "fetch pages");
+fn a_list_command_typed_in_full_is_no_longer_a_popup_row() {
+    for text in ["/session", "/model", "/skill"] {
+        assert!(active(text), "{text:?} is still a bare command word");
+        assert!(
+            BUILTINS.iter().any(|(name, ..)| *name == text),
+            "{text:?} is in the catalogue"
+        );
+        assert_eq!(
+            suggestions(text),
+            Vec::new(),
+            "{text:?}: the list is open instead"
+        );
+    }
+    assert_eq!(labels("/sess"), vec!["/session [filter|copy|info]"]);
+    assert_eq!(labels("/mode"), vec!["/model [provider/model]"]);
+    assert_eq!(labels("/skil"), vec!["/skill <name> [args]"]);
 }
 
 #[test]
@@ -129,34 +80,25 @@ fn anything_that_is_not_a_bare_command_word_closes_the_list() {
         "!",
         "!!",
         "@file.txt",
-        "/model x", // the filter is the list's, not the popup's
+        "/model x",    // the filter is the list's, not the popup's
+        "/skill name", // and so is a skill's name
     ] {
-        assert_eq!(suggestions(text, &[]), Vec::new(), "{text:?}");
+        assert_eq!(suggestions(text), Vec::new(), "{text:?}");
         assert!(!active(text), "{text:?}");
     }
-    // The built-in row, alone: the model rows live in the list.
-    assert_eq!(suggestions("/model", &[]).len(), 1, "the generic row");
-    assert!(active("/mo"), "a partial command word is the popup's");
-    assert_eq!(
-        suggestions("/model", &[])[0].label,
-        "/model [provider/model]"
-    );
+    // A partial command word is still the popup's.
+    assert!(active("/mo"));
+    assert_eq!(suggestions("/mo")[0].label, "/model [provider/model]");
 }
 
 #[test]
-fn the_cap_keeps_the_list_at_the_builtin_set() {
+fn the_whole_catalogue_is_the_popup() {
     assert_eq!(
-        suggestions("/", &[]).len(),
+        suggestions("/").len(),
         BUILTINS.len(),
-        "the whole built-in set"
-    );
-    let skills: Vec<_> = (0..14).map(|i| skill(&format!("s{i:02}"), "f")).collect();
-    assert!(
-        suggestions("/skill:", &skills).len() > 1,
-        "the rows flow in"
+        "the whole built-in set, with no cap"
     );
 }
-
 /// What one row's spans say, joined — the truncation contract: the
 /// marker column, the label, a gap only when a description exists,
 /// everything within `width` chars, never wrapped.
