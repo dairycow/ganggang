@@ -8,6 +8,7 @@ use ratatui::text::Line as UiLine;
 
 use super::*;
 use crate::agent::session::io::SessionFile;
+use crate::tui::history::History;
 use crate::tui::theme::TRUECOLOR;
 
 /// 2026-11-25 12:00:00 UTC, as a Unix timestamp.
@@ -549,31 +550,13 @@ fn the_hint_names_the_keys_the_scope_and_the_place_in_a_long_list() {
     assert_eq!(row_text(&hint_row(&TRUECOLOR, 0, true, None)), "");
 }
 
-/// The panel's one row of explanation when its scope holds no row at
-/// all: an empty store in the wide view, an empty directory in this
-/// project's view, and the filter that kept no row otherwise. One
-/// leading space, the hint's colour, cut to the row.
+/// The panel's one row of explanation when the list has nothing to
+/// show: the reason as the state words it, with one leading space, in the
+/// hint's colour, cut to the row.
 #[test]
-fn an_empty_scope_gets_its_own_row_of_explanation() {
-    let all = empty_row(&TRUECOLOR, true, true, "", 80);
-    assert_eq!(
-        row_text(&all),
-        " no sessions yet",
-        "an empty store in the all-projects view"
-    );
-    let this_one = empty_row(&TRUECOLOR, true, false, "", 80);
-    assert_eq!(
-        row_text(&this_one),
-        " no sessions in this directory",
-        "an empty directory in this project's view"
-    );
-    let filtered = empty_row(&TRUECOLOR, false, false, "zzz", 80);
-    assert_eq!(row_text(&filtered), " no session matches \"zzz\"");
-    assert_eq!(
-        row_text(&empty_row(&TRUECOLOR, false, true, "  fix  ", 80)),
-        " no session matches \"fix\"",
-        "the filter, trimmed, in the composer's words"
-    );
+fn an_empty_list_gets_its_own_row_of_explanation() {
+    let all = empty_row(&TRUECOLOR, "no sessions yet", 80);
+    assert_eq!(row_text(&all), " no sessions yet", "the reason, as given");
     assert_eq!(
         all.spans[0].style.fg,
         Some(TRUECOLOR.dim),
@@ -585,11 +568,11 @@ fn an_empty_scope_gets_its_own_row_of_explanation() {
         "on the panel's surface"
     );
     assert_eq!(
-        row_text(&empty_row(&TRUECOLOR, true, false, "", 6)),
+        row_text(&empty_row(&TRUECOLOR, "no sessions in this directory", 6)),
         " no se",
         "cut to the row's width"
     );
-    assert_eq!(row_text(&empty_row(&TRUECOLOR, true, false, "", 0)), "");
+    assert_eq!(row_text(&empty_row(&TRUECOLOR, "no sessions yet", 0)), "");
 }
 
 /// The panel's last row after a failed open: the error itself, in the
@@ -629,6 +612,26 @@ pub(in crate::tui) fn filed_for_test(i: usize, uuid_prefix: &str, name: &str) ->
     }
 }
 
+/// Test seam: this project's `n` sessions `s00`.. in a loaded listing
+/// (see [`listing_of`]), and the sessions themselves.
+pub(in crate::tui) fn listing_for_test(
+    n: usize,
+) -> (crate::tui::picker::SessionListing, Vec<SessionFile>) {
+    let sessions = sessions_for_test(n);
+    (listing_of(sessions.clone()), sessions)
+}
+
+/// Test seam: a loaded listing of `sessions`, with `/s` as the
+/// directory this directory's sessions are filed under.
+pub(in crate::tui) fn listing_of(sessions: Vec<SessionFile>) -> crate::tui::picker::SessionListing {
+    let mut listing = crate::tui::picker::SessionListing::new(std::path::Path::new("/s"));
+    listing.dir = Some(std::path::PathBuf::from("/s"));
+    listing.home = Some(std::path::PathBuf::from("/home/u"));
+    listing.loaded = true;
+    listing.everywhere = sessions;
+    listing
+}
+
 /// Test seam: this project's `n` sessions `s00`.., as they are filed
 /// under `/s`.
 pub(in crate::tui) fn sessions_for_test(n: usize) -> Vec<SessionFile> {
@@ -665,4 +668,345 @@ pub(in crate::tui) fn elsewhere_for_test(n: usize) -> Vec<SessionFile> {
             session
         })
         .collect()
+}
+
+// The state half of the list, tested without a terminal: what the
+// trigger's text opens, what the cache's listing does to it, and what
+// its keys do.
+mod state_tests {
+    use super::*;
+    use crate::tui::view::State;
+
+    /// A view for the state's tests: no environment read is a test read.
+    fn view() -> State {
+        State::with_palette(
+            std::path::Path::new("/tmp/x"),
+            "m",
+            131_072,
+            std::sync::Arc::new(Vec::new()),
+            History::default(),
+            TRUECOLOR,
+        )
+    }
+
+    /// The list open on `n` sessions, all filed under `/s`, which is
+    /// also where this directory's sessions are filed (so both scopes
+    /// show them): the state the loop's first frame reaches after the
+    /// first scan's listing is stored. The listing is in place before the
+    /// list opens, as in the loop.
+    fn list_open_on(state: &mut State, n: usize) {
+        let (listing, _) = listing_for_test(n);
+        state.sessions = listing;
+        state.editor.set_text("/resume");
+        state.sync_picker();
+    }
+
+    fn names(state: &State) -> Vec<String> {
+        state
+            .picker_matches()
+            .iter()
+            .map(|row| row.name.clone())
+            .collect()
+    }
+
+    fn highlighted(state: &State) -> usize {
+        state.picker.as_ref().map_or(0, |pick| pick.selected)
+    }
+
+    /// Setting the text to `/resume` against a cached listing of three
+    /// sessions, one of them the current one, opens the list with the
+    /// other two, newest first, and the top row highlighted.
+    #[test]
+    fn typing_the_command_opens_the_list_from_the_cache_dropping_the_session_in_use() {
+        let mut state = view();
+        let current = filed_for_test(0, "uuid-of", "s");
+        state.session_path = Some(current.path.clone());
+        state.sessions = SessionListing::new(std::path::Path::new("/s"));
+        state.sessions.dir = Some(std::path::PathBuf::from("/s"));
+        state.sessions.loaded = true;
+        state.sessions.everywhere = vec![
+            filed_for_test(2, "uuid-of", "s"),
+            current.clone(),
+            filed_for_test(1, "uuid-of", "s"),
+        ];
+        state.editor.set_text("/resume");
+        state.sync_picker();
+        assert_eq!(
+            names(&state),
+            ["s02", "s01"],
+            "the other two, newest first, the session in use not listed"
+        );
+        assert_eq!(highlighted(&state), 0, "the top row");
+    }
+
+    /// The highlight moves with the arrows, returns to the top and its
+    /// error clears when the filter changes; a trailing space is not a
+    /// new filter, so the highlight stays.
+    #[test]
+    fn a_changed_filter_puts_the_highlight_back_on_the_top_row_and_a_trailing_space_is_not_a_change()
+     {
+        let mut state = view();
+        list_open_on(&mut state, 3);
+        state.picker_next();
+        assert_eq!(highlighted(&state), 1);
+        state.editor.set_text("/resume s02");
+        state.sync_picker();
+        assert_eq!(
+            highlighted(&state),
+            0,
+            "a changed filter: the top row again"
+        );
+        state.editor.set_text("/resume s02 ");
+        state.sync_picker();
+        assert_eq!(
+            highlighted(&state),
+            0,
+            "a trailing space is not a new filter"
+        );
+        state.pick_failed("boom");
+        assert!(state.picker.as_ref().unwrap().error.is_some());
+        state.editor.set_text("/resume s01");
+        state.sync_picker();
+        assert!(
+            state.picker.as_ref().unwrap().error.is_none(),
+            "and a changed filter clears the last failed open"
+        );
+    }
+
+    /// Text that is not a trigger closes the list and discards its
+    /// scope, highlight and error. `close_picker` and `interrupt()`
+    /// clear the composer; `interrupt()` returns `Cancel::PickerClosed`.
+    #[test]
+    fn text_that_is_not_a_trigger_closes_the_list_and_discards_it() {
+        let mut state = view();
+        list_open_on(&mut state, 3);
+        state.picker_next();
+        state.session_scope_this_directory();
+        state.pick_failed("boom");
+        state.editor.set_text("just words");
+        state.sync_picker();
+        assert!(
+            !state.picker_open(),
+            "a text with no trigger closes the list"
+        );
+        assert!(state.picker_matches().is_empty());
+
+        list_open_on(&mut state, 3);
+        state.close_picker();
+        assert!(!state.picker_open());
+        assert_eq!(state.editor.text(), "", "the composer is cleared");
+
+        list_open_on(&mut state, 3);
+        assert_eq!(state.interrupt(), crate::tui::view::Cancel::PickerClosed);
+        assert!(!state.picker_open());
+        assert_eq!(state.editor.text(), "", "and so is the composer");
+    }
+
+    /// A listing that arrives while the list is open is its new rows:
+    /// the highlight stays on the session it stood on, by its path,
+    /// wherever it now stands, and falls back to the first row when that
+    /// session is gone.
+    #[test]
+    fn a_listing_that_arrives_keeps_the_highlight_on_the_same_session() {
+        let mut state = view();
+        list_open_on(&mut state, 3);
+        state.picker_next();
+        state.picker_next();
+        assert_eq!(highlighted(&state), 2, "standing on s02");
+
+        // Another directory's session joins the listing: s02 is still
+        // there, so the highlight is still on it.
+        let mut listing = sessions_for_test(3);
+        listing.extend(elsewhere_for_test(1));
+        state.sessions_listed(listing, Vec::new());
+        assert!(state.picker_open(), "the list stays open on the new rows");
+        assert_eq!(names(&state), ["s00", "s01", "s02", "a00"]);
+        assert_eq!(highlighted(&state), 2, "the session it stood on, by path");
+
+        // It is gone from the listing: the first row again.
+        state.sessions_listed(elsewhere_for_test(1), Vec::new());
+        assert_eq!(names(&state), ["a00"]);
+        assert_eq!(
+            highlighted(&state),
+            0,
+            "the session is gone: the first row again"
+        );
+    }
+
+    /// Before the first listing the panel's row says it; with
+    /// `--no-session` it says that instead, and no scan is asked for.
+    #[test]
+    fn before_the_first_listing_the_panel_says_what_it_says() {
+        let mut state = view();
+        // A store to scan, wherever the test itself runs.
+        state.sessions.dir = Some(PathBuf::from("/s"));
+        state.editor.set_text("/resume");
+        state.sync_picker();
+        assert!(
+            state.picker_open(),
+            "the list opens even when the cache is empty"
+        );
+        assert!(state.session_scope_empty(), "no rows yet");
+        assert_eq!(
+            state.session_empty_reason(),
+            "reading sessions…",
+            "until the first listing arrives"
+        );
+        assert!(
+            state.session_scan_ready(),
+            "a scan is owed: the panel is where the reading row is said"
+        );
+        state.session_scan_started();
+        assert!(
+            !state.session_scan_ready(),
+            "in flight: the same request is kept until it returns"
+        );
+
+        let mut disabled = view();
+        disabled.sessions_disabled = true;
+        disabled.editor.set_text("/resume");
+        disabled.sync_picker();
+        assert!(disabled.picker_open());
+        assert_eq!(
+            disabled.session_empty_reason(),
+            "sessions are disabled for --no-session runs"
+        );
+        assert!(
+            !disabled.session_scan_ready(),
+            "--no-session runs have no store to scan"
+        );
+    }
+
+    /// The panel's reasons for an empty list, in the state's words: a
+    /// missing HOME, a store with nothing but the session in use, a
+    /// directory with no sessions of its own, and a filter that keeps no
+    /// row, in the composer's words.
+    #[test]
+    fn the_state_words_why_the_list_is_empty() {
+        let mut state = view();
+        // No HOME: said before anything else, since no scan can run.
+        state.editor.set_text("/resume");
+        state.sync_picker();
+        state.sessions.dir = None;
+        assert_eq!(
+            state.session_empty_reason(),
+            "no HOME: nowhere to look for sessions"
+        );
+
+        // Only the session in use: nothing to pick from.
+        state.editor.set_text("");
+        state.sync_picker();
+        let (mut listing, sessions) = listing_for_test(2);
+        listing.everywhere = vec![sessions[1].clone()];
+        state.session_path = Some(sessions[1].path.clone());
+        state.sessions = listing;
+        state.editor.set_text("/resume");
+        state.sync_picker();
+        assert_eq!(state.session_empty_reason(), "no sessions yet");
+
+        // Sessions elsewhere only: this directory's view is empty.
+        state.editor.set_text("");
+        state.sync_picker();
+        state.session_path = None;
+        state.sessions_listed(elsewhere_for_test(2), Vec::new());
+        state.editor.set_text("/resume");
+        state.sync_picker();
+        assert_eq!(names(&state).len(), 2, "every directory's");
+        state.session_scope_this_directory();
+        assert_eq!(
+            state.session_empty_reason(),
+            "no sessions in this directory"
+        );
+
+        // A filter that keeps no row.
+        state.session_scope_all_directories();
+        state.editor.set_text("/resume  fix  ");
+        state.sync_picker();
+        assert_eq!(
+            state.session_empty_reason(),
+            "no session matches \"fix\"",
+            "the filter, trimmed"
+        );
+    }
+
+    /// The scan's bookkeeping: a request made while a scan is in flight
+    /// is kept, `session_scan_ready` is false until that scan's result
+    /// is stored, then true once.
+    #[test]
+    fn a_request_while_a_scan_is_in_flight_is_kept_until_it_returns() {
+        let mut state = view();
+        assert!(!state.session_scan_ready());
+        state.request_session_scan();
+        assert!(state.session_scan_ready());
+        state.session_scan_started();
+        assert!(!state.session_scan_ready(), "in flight: not ready");
+        state.request_session_scan();
+        assert!(
+            !state.session_scan_ready(),
+            "a request made in flight is kept, still not ready"
+        );
+        state.sessions_listed(Vec::new(), Vec::new());
+        assert!(
+            state.session_scan_ready(),
+            "the kept request runs when the scan returns"
+        );
+        state.session_scan_started();
+        state.sessions_listed(Vec::new(), Vec::new());
+        assert!(!state.session_scan_ready(), "and then: nothing is owed");
+    }
+
+    /// Warnings: pushed when they differ from the previous scan's; the
+    /// same warnings again push nothing.
+    #[test]
+    fn a_scan_says_its_warnings_when_they_differ_and_says_them_not_twice() {
+        let mut state = view();
+        let warnings = vec!["a file: read failed".to_string()];
+        state.sessions_listed(Vec::new(), warnings.clone());
+        assert_eq!(
+            state.line_texts_for_test(),
+            vec!["⚠ a file: read failed"],
+            "the new warnings reach the transcript"
+        );
+        state.sessions_listed(Vec::new(), warnings.clone());
+        assert_eq!(
+            state.line_texts_for_test(),
+            vec!["⚠ a file: read failed"],
+            "the same warnings are not said twice"
+        );
+        state.sessions_listed(Vec::new(), vec!["another file: read failed".to_string()]);
+        assert_eq!(
+            state.line_texts_for_test(),
+            vec!["⚠ a file: read failed", "⚠ another file: read failed"],
+            "a changed warning is the scan's to say"
+        );
+    }
+
+    /// `new_session` and `set_directory` close the list or re-file it and
+    /// ask for a scan: the new session's file is the newest, and the new
+    /// directory is where this directory's rows are filed. The listing
+    /// stays until the scan replaces it.
+    #[test]
+    fn a_new_session_and_a_new_directory_close_the_list_and_ask_for_a_scan() {
+        let mut state = view();
+        list_open_on(&mut state, 3);
+        state.new_session(None, false);
+        assert!(!state.picker_open(), "the list is closed");
+        assert!(state.session_scan_ready(), "a scan is owed");
+
+        state.session_scan_started();
+        state.sessions_listed(sessions_for_test(3), Vec::new());
+        assert!(!state.session_scan_ready(), "nothing is owed now");
+        state.set_directory(std::path::Path::new("/elsewhere"));
+        assert!(state.sessions.wanted, "the new directory is owed a scan");
+        assert_eq!(
+            state.sessions.dir,
+            crate::agent::session::io::sessions_dir(std::path::Path::new("/elsewhere")),
+            "its rows are filed under the new directory"
+        );
+        assert_eq!(
+            state.sessions.everywhere.len(),
+            3,
+            "the listing stays until the scan replaces it"
+        );
+    }
 }

@@ -145,19 +145,21 @@ async fn skills_command_is_removed_with_a_hint() {
 fn resume_argument_shapes() {
     assert_eq!(
         classify_submission("/resume"),
-        Submission::Command(Command::Resume(None))
+        Submission::Command(Command::Resume)
     );
     assert_eq!(
         classify_submission("/resume   "),
-        Submission::Command(Command::Resume(None))
+        Submission::Command(Command::Resume)
     );
+    // An id or name typed after the command is a filter the list keeps;
+    // the submission is the bare command either way.
     assert_eq!(
-        classify_submission("/resume 2"),
-        Submission::Command(Command::Resume(Some("2".into())))
+        classify_submission("/resume 3"),
+        Submission::Command(Command::Resume)
     );
     assert_eq!(
         classify_submission("/resume ab12cd"),
-        Submission::Command(Command::Resume(Some("ab12cd".into())))
+        Submission::Command(Command::Resume)
     );
 }
 

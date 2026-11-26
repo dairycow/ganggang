@@ -392,26 +392,12 @@ pub(in crate::tui) fn row_line(
     suggestion_row(palette, &suggestion, selected, width)
 }
 
-/// The panel's one row when the picker is open but its scope holds no
-/// row at all: the panel must not vanish over an empty scope, so it says
-/// why in its own ground — the transcript, which the panel covers, has
-/// nothing newer to say it in.
-pub(in crate::tui) fn empty_row(
-    palette: &Palette,
-    scope_empty: bool,
-    all_directories: bool,
-    filter: &str,
-    width: usize,
-) -> UiLine<'static> {
-    let text = if scope_empty && all_directories {
-        "no sessions yet".to_string()
-    } else if scope_empty {
-        "no sessions in this directory".to_string()
-    } else {
-        format!("no session matches {:?}", filter.trim())
-    };
+/// The panel's one row when the list is open but has nothing to show:
+/// `reason` says why, in the panel's own ground — the transcript, which
+/// the panel covers, has nothing newer to say it in.
+pub(in crate::tui) fn empty_row(palette: &Palette, reason: &str, width: usize) -> UiLine<'static> {
     UiLine::from(Span::styled(
-        take_chars(&format!(" {text}"), width),
+        take_chars(&format!(" {reason}"), width),
         palette.popup_hint(),
     ))
 }

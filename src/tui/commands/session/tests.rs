@@ -1,5 +1,5 @@
-//! Tests for [`super`]: the picker's opening, the listing read off the
-//! loop, and where a chosen session continues.
+//! Tests for [`super`]: the scan's listing as it is stored on the
+//! state's cache, and where a chosen session continues.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -101,6 +101,18 @@ impl ResumeRig {
     fn asked(&self) -> Vec<String> {
         self.asked.lock().unwrap().clone()
     }
+
+    /// The listing as the cache holds it: stored, not scanning, and
+    /// where this directory's sessions are filed under the test's HOME.
+    fn listing(&self) -> (Vec<String>, bool, bool) {
+        let cache = &self.state.sessions;
+        let ids: Vec<String> = cache
+            .everywhere
+            .iter()
+            .map(|session| session.path.display().to_string())
+            .collect();
+        (ids, cache.loaded, cache.scanning)
+    }
 }
 
 /// A session filed as `<stamp>-<id>.jsonl`, titled.
@@ -125,148 +137,83 @@ fn filed_elsewhere(id: &str, title: &str) -> crate::agent::session::io::SessionF
     session
 }
 
-/// A bare `/resume` opens the picker on every project's sessions and
-/// puts nothing in the transcript, in the order `/resume <n>` counts. A
-/// store with nothing in it is still one line there.
-#[test]
-fn a_bare_resume_opens_the_picker_on_every_project_and_prints_nothing() {
+/// A `/resume` that is submitted anyway: the list already is open from
+/// the text, so the handler has one line to say and nothing to do. No
+/// factory is asked for, no picker touched.
+#[tokio::test]
+async fn a_submitted_resume_says_the_list_opens_as_you_type() {
     let mut rig = ResumeRig::new();
-    let here = std::path::Path::new("/s");
-    let home = Some(std::path::PathBuf::from("/home/u"));
-    open_picker(
-        &mut rig.state,
-        vec![
-            filed_elsewhere("c3d4e5f6", "other repo"),
-            filed("a1b2c3d4", "newest"),
-            filed("b2c3d4e5", "older"),
-        ],
-        here,
-        home.clone(),
-    );
-    assert!(rig.state.picker_open());
-    assert!(
-        rig.state.session_scope_all(),
-        "every project's sessions, to begin with"
-    );
-    let names: Vec<String> = rig
-        .state
-        .picker_matches()
-        .iter()
-        .map(|row| row.name.clone())
-        .collect();
+    rig.state.editor.set_text("/resume");
+    assert!(!rig.run(Command::Resume).await.unwrap());
     assert_eq!(
-        names,
-        ["other repo", "newest", "older"],
-        "one listing, in the order it was read"
+        rig.state.line_texts_for_test(),
+        ["the session list opens as you type /resume"]
     );
-    assert_eq!(
-        rig.state.pending_resume.len(),
-        3,
-        "the order `/resume <n>` counts"
-    );
-    assert!(
-        rig.state.line_texts_for_test().is_empty(),
-        "the listing is read in the picker, not printed"
-    );
-
-    open_picker(&mut rig.state, Vec::new(), here, home);
-    assert!(!rig.state.picker_open(), "nothing to pick from: no picker");
-    assert!(
-        rig.state.pending_resume.is_empty(),
-        "and no listing for a number to count"
-    );
-    let lines = rig.state.line_texts_for_test();
-    assert!(lines.iter().any(|l| l == "no sessions yet"), "{lines:?}");
+    assert!(rig.asked().is_empty(), "nothing was asked for");
 }
 
-/// The session gg is in now is not a row: reopening it would only
-/// reload it from disk, and it is the row Enter would open by default.
-/// `/resume <n>` counts the rest, and a store that holds only the
-/// session in use gets one line in the transcript and no picker.
+/// The listing a finished scan found: stored on the state's cache, the
+/// scan marked not in flight. An empty store, and one that holds only
+/// the session in use, are the panel's to say on their own row, not the
+/// transcript's.
 #[test]
-fn the_session_in_use_is_not_listed_by_the_picker() {
+fn the_listed_sessions_are_stored_on_the_cache_and_the_session_in_use_is_kept_out() {
     let mut rig = ResumeRig::new();
-    let here = std::path::Path::new("/s");
     let in_use = filed("b2c3d4e5", "older");
     rig.state.session_path = Some(in_use.path.clone());
 
-    open_picker(
-        &mut rig.state,
+    rig.state.sessions_listed(
         vec![filed("a1b2c3d4", "newest"), in_use.clone()],
-        here,
-        None,
+        Vec::new(),
     );
-    assert!(rig.state.picker_open());
-    let ids: Vec<&str> = rig
-        .state
-        .picker_matches()
-        .iter()
-        .map(|row| row.id.as_str())
-        .collect();
-    assert_eq!(ids, ["a1b2c3d4"], "the session in use is not a row");
+    let (ids, loaded, scanning) = rig.listing();
     assert_eq!(
-        rig.state.pending_resume.len(),
-        1,
-        "and /resume <n> counts the rest"
+        ids,
+        [
+            "/s/20261125-120000-a1b2c3d4.jsonl",
+            "/s/20261125-120000-b2c3d4e5.jsonl",
+        ],
+        "the listing the scan found, as read"
+    );
+    assert!(loaded, "marked loaded");
+    assert!(!scanning, "no scan in flight after one is stored");
+    assert!(
+        !rig.state
+            .line_texts_for_test()
+            .iter()
+            .any(|l| l.contains("no sessions") || l.contains("no other session")),
+        "nothing is said: an empty list is a panel row, not a transcript line"
     );
 
+    // A solo session in use, and a store with nothing in it: the cache
+    // holds what was read, and the panel is where the row is said.
     let mut solo = ResumeRig::new();
     solo.state.session_path = Some(in_use.path.clone());
-    open_picker(&mut solo.state, vec![in_use], here, None);
-    assert!(
-        !solo.state.picker_open(),
-        "nothing else to pick from: no picker"
-    );
-    assert!(
-        solo.state.pending_resume.is_empty(),
-        "and no listing for a number to count"
-    );
-    let lines = solo.state.line_texts_for_test();
-    assert!(
-        lines.iter().any(|l| l == "no other session yet"),
-        "{lines:?}"
-    );
+    solo.state.sessions_listed(vec![in_use.clone()], Vec::new());
+    let (ids, loaded, scanning) = solo.listing();
+    assert_eq!(ids, ["/s/20261125-120000-b2c3d4e5.jsonl"]);
+    assert!(loaded && !scanning);
+    assert!(solo.listing().0.len() == 1, "nothing else is remembered");
 }
 
-/// The listing a bare `/resume` asked for, read off the loop: idle with
-/// an empty composer, it opens the picker and pushes the scan's
-/// warnings; a run in flight, or a draft typed while the store was
-/// read, keeps it unopened and says so.
+/// The listing a scan found, read off the loop: stored on the cache with
+/// the scan's warnings whatever else is going on. A run in flight, or
+/// the list open on a filter, holds nothing back: the listing is the
+/// list's rows whenever it is drawn, and the text stays the user's.
 #[test]
-fn the_listed_sessions_open_the_picker_when_idle_and_say_so_when_not() {
-    let cwd = std::path::Path::new("/tmp/x");
-    // The picker's rows are built against this directory's sessions dir,
-    // which is under HOME: a test's home, not the machine's.
-    let work = std::env::temp_dir().join(format!("gg-resume-listed-{}", std::process::id()));
-    let home = work.join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    let saved_home = std::env::var_os("HOME");
-    unsafe { std::env::set_var("HOME", &home) };
-
+fn the_listed_sessions_are_stored_whatever_the_loop_is_doing() {
     let warnings = vec!["skipping session file: read failed".to_string()];
     let mut rig = ResumeRig::new();
-    sessions_listed(
-        &mut rig.state,
-        vec![filed("a1b2c3d4", "newest")],
-        warnings,
-        cwd,
-    );
-    assert!(
-        rig.state.picker_open(),
-        "idle and empty composer: the picker opens"
-    );
+    sessions_listed(&mut rig.state, vec![filed("a1b2c3d4", "newest")], warnings);
+    let (ids, loaded, scanning) = rig.listing();
+    assert_eq!(ids, ["/s/20261125-120000-a1b2c3d4.jsonl"]);
+    assert!(loaded && !scanning);
     let lines = rig.state.line_texts_for_test();
     assert!(
         lines
             .iter()
             .any(|l| l == "⚠ skipping session file: read failed"),
         "the scan's warnings reach the transcript: {lines:?}"
-    );
-    assert!(
-        !lines
-            .iter()
-            .any(|l| l == "sessions are listed: /resume again to pick one"),
-        "nothing held the listing back: {lines:?}"
     );
 
     let mut busy = ResumeRig::new();
@@ -275,53 +222,69 @@ fn the_listed_sessions_open_the_picker_when_idle_and_say_so_when_not() {
         &mut busy.state,
         vec![filed("a1b2c3d4", "newest")],
         Vec::new(),
-        cwd,
     );
-    assert!(
-        !busy.state.picker_open(),
-        "a run in flight keeps it unopened"
-    );
-    let lines = busy.state.line_texts_for_test();
-    assert!(
-        lines
-            .iter()
-            .any(|l| l == "sessions are listed: /resume again to pick one"),
-        "and the transcript says so: {lines:?}"
+    assert_eq!(
+        busy.listing().0.len(),
+        1,
+        "a run in flight does not hold the listing back"
     );
 
     let mut draft = ResumeRig::new();
-    draft.state.editor.set_text("a draft, not a filter");
+    draft.state.editor.set_text("/resume other");
     sessions_listed(
         &mut draft.state,
         vec![filed("a1b2c3d4", "newest")],
         Vec::new(),
-        cwd,
     );
-    assert!(
-        !draft.state.picker_open(),
-        "a draft typed while the store was read keeps it unopened"
-    );
+    assert_eq!(draft.listing().0.len(), 1, "nor does a filter");
     assert_eq!(
         draft.state.editor.text(),
-        "a draft, not a filter",
-        "the draft is the user's: it stays"
+        "/resume other",
+        "the text is the user's: it stays"
+    );
+    let lines = draft.state.line_texts_for_test();
+    assert!(
+        !lines.iter().any(|l| l.contains("sessions are listed")),
+        "and nothing is said about it: {lines:?}"
+    );
+}
+
+/// The scan's warnings reach the transcript when they differ from the
+/// previous scan's, and not again when they are the same.
+#[test]
+fn the_scan_says_its_warnings_only_when_they_change() {
+    let warnings = vec!["skipping session file: read failed".to_string()];
+    let mut rig = ResumeRig::new();
+    rig.state.sessions_listed(Vec::new(), warnings.clone());
+    let first = rig.state.line_texts_for_test();
+    assert!(
+        first
+            .iter()
+            .any(|l| l == "⚠ skipping session file: read failed"),
+        "{first:?}"
     );
 
-    unsafe {
-        match saved_home {
-            Some(value) => std::env::set_var("HOME", value),
-            None => std::env::remove_var("HOME"),
-        }
-    }
-    let _ = std::fs::remove_dir_all(&work);
+    rig.state.sessions_listed(Vec::new(), warnings.clone());
+    let again = rig.state.line_texts_for_test();
+    assert_eq!(
+        first, again,
+        "the same warnings are not repeated: {again:?}"
+    );
+
+    rig.state
+        .sessions_listed(Vec::new(), vec!["another file: read failed".into()]);
+    let changed = rig.state.line_texts_for_test();
+    assert!(
+        changed.iter().any(|l| l == "⚠ another file: read failed"),
+        "a new warning is said: {changed:?}"
+    );
 }
 
 /// The row the picker highlighted opens through the factory by its file,
 /// in the directory the session started in: a session of another project
-/// as readily as one of this project's, with none of the prefix
-/// resolution. A failed open leaves the picker as it was — open, with
-/// its filter and its highlight — and nothing in the transcript beyond
-/// the error the caller reports.
+/// as readily as one of this project's. A failed open leaves the picker
+/// as it was — open, with its filter and its highlight — and nothing in
+/// the transcript beyond the error the caller reports.
 #[test]
 fn the_picked_row_opens_through_the_factory_by_its_file_in_its_own_directory() {
     let mut rig = ResumeRig::new();
@@ -330,17 +293,12 @@ fn the_picked_row_opens_through_the_factory_by_its_file_in_its_own_directory() {
     let mut session = filed_elsewhere("c3d4e5f6", "other repo");
     session.cwd = own.display().to_string();
 
-    // The picker open on two sessions, its filter and highlight the
+    // The list open on two sessions, its filter and highlight the
     // user's own: a failure must leave them both where they were.
-    let mut pick = super::super::super::picker::Picker::new(
-        vec![filed("a1b2c3d4", "newest"), filed("b2c3d4e5", "older")],
-        vec![filed("a1b2c3d4", "newest"), filed("b2c3d4e5", "older")],
-        None,
-    );
+    let mut pick = super::super::super::picker::tests::pick_for_test(2);
     pick.selected = 1;
-    pick.filter = "other".into();
     rig.state.picker = Some(pick);
-    rig.state.editor.set_text("other");
+    rig.state.editor.set_text("/resume other");
 
     let error = open_session(session, rig.ctx()).unwrap_err();
     assert_eq!(
@@ -351,8 +309,8 @@ fn the_picked_row_opens_through_the_factory_by_its_file_in_its_own_directory() {
     assert!(rig.state.picker_open(), "a failed open loses no picker");
     assert_eq!(
         rig.state.editor.text(),
-        "other",
-        "nor the filter the picker was built on"
+        "/resume other",
+        "nor the text that opened it"
     );
     assert_eq!(
         rig.state.picker.as_ref().unwrap().selected,
@@ -426,118 +384,4 @@ fn a_session_continues_in_its_own_directory_while_it_has_one() {
         (nameless.directory.as_path(), nameless.note),
         (here.as_path(), None)
     );
-}
-
-/// `/resume <n>` counts the listing the picker opened, newest first, and
-/// past its end is the error it always was.
-#[tokio::test]
-async fn a_number_counts_the_listing_the_picker_opened() {
-    let mut rig = ResumeRig::new();
-    let mut older = filed("b2c3d4e5", "older");
-    older.cwd = "/gg-tests/no-such-directory".into();
-    open_picker(
-        &mut rig.state,
-        vec![filed("a1b2c3d4", "newest"), older],
-        std::path::Path::new("/s"),
-        None,
-    );
-    assert!(rig.run(Command::Resume(Some("2".into()))).await.is_err());
-    assert_eq!(
-        rig.asked(),
-        ["file /s/20261125-120000-b2c3d4e5.jsonl in /tmp/x"]
-    );
-    assert_eq!(
-        rig.run(Command::Resume(Some("3".into())))
-            .await
-            .unwrap_err()
-            .to_string(),
-        "3 is not in the last /resume listing"
-    );
-    assert_eq!(rig.asked().len(), 1, "nothing was asked for");
-}
-
-/// `--no-session` refuses `/resume` in both shapes: a warning, no
-/// picker, and nothing asked of the factory.
-#[tokio::test]
-async fn no_session_refuses_the_picker_and_the_argument() {
-    let mut rig = ResumeRig::new();
-    rig.state.sessions_disabled = true;
-    assert!(!rig.run(Command::Resume(None)).await.unwrap());
-    assert!(!rig.run(Command::Resume(Some("a1b2".into()))).await.unwrap());
-    assert!(!rig.state.picker_open());
-    assert!(rig.asked().is_empty());
-    let lines = rig.state.line_texts_for_test();
-    assert_eq!(
-        lines
-            .iter()
-            .filter(|l| l.contains("/resume is disabled for --no-session runs"))
-            .count(),
-        2,
-        "{lines:?}"
-    );
-}
-
-/// `/resume <prefix>` names a session of this project first. When none
-/// matches, it names one of any project's, so an id the all-projects view
-/// showed can be typed from here.
-#[test]
-fn a_prefix_falls_back_to_every_project_when_none_here_matches() {
-    let root = std::env::temp_dir().join(format!("gg-resume-prefix-{}", std::process::id()));
-    let header = |id: &str, cwd: &str| {
-        format!(
-            "{{\"type\":\"session\",\"version\":1,\"id\":\"{id}\",\"timestamp\":\"t\",\"cwd\":\"{cwd}\",\"model\":\"m\"}}\n"
-        )
-    };
-    let projects: &[(&str, &[(&str, &str)])] = &[
-        (
-            "-proj-here",
-            &[
-                ("aaaa1111-0000", "/proj/here"),
-                ("aacc3333-0000", "/proj/here"),
-            ],
-        ),
-        ("-proj-there", &[("bbbb2222-0000", "/proj/there")]),
-    ];
-    for &(slug, sessions) in projects {
-        let dir = root.join(slug);
-        std::fs::create_dir_all(&dir).unwrap();
-        for (id, cwd) in sessions {
-            std::fs::write(
-                dir.join(format!("20260101-0900-{}.jsonl", &id[..8])),
-                header(id, cwd),
-            )
-            .unwrap();
-        }
-    }
-    let here = std::path::Path::new("/proj/here");
-
-    let elsewhere = resolve_prefix_everywhere(&root, here, "bbbb").unwrap();
-    assert_eq!(
-        elsewhere.id, "bbbb2222-0000",
-        "nothing here matches: every project is searched"
-    );
-    assert_eq!(elsewhere.cwd, "/proj/there");
-
-    // This project's matches come first, its own ambiguity included: that
-    // is not settled by looking elsewhere.
-    let ambiguous = resolve_prefix_everywhere(&root, here, "aa").unwrap_err();
-    assert!(
-        format!("{ambiguous:#}").contains("ambiguous"),
-        "{ambiguous:#}"
-    );
-    assert_eq!(
-        resolve_prefix_everywhere(&root, here, "aacc").unwrap().id,
-        "aacc3333-0000"
-    );
-    assert_eq!(
-        resolve_prefix_everywhere(&root, here, "aaaa1111")
-            .unwrap()
-            .id,
-        "aaaa1111-0000",
-        "the 8-hex id in the file name"
-    );
-
-    let none = resolve_prefix_everywhere(&root, here, "zz").unwrap_err();
-    assert!(none.to_string().contains("no session matches"), "{none:#}");
-    let _ = std::fs::remove_dir_all(&root);
 }

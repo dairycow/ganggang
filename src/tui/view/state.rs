@@ -58,12 +58,15 @@ pub struct State {
     pub entries: usize,
     pub tokens_in: u64,
     pub tokens_out: u64,
-    /// The listing the `/resume` picker last showed, for `/resume <n>`.
-    pub pending_resume: Vec<crate::agent::session::io::SessionFile>,
+    /// The session listing the `/resume` list is built from: the last
+    /// scan's result, where this directory's sessions are filed, and the
+    /// scan's bookkeeping. The tests sit in the module tree and reach in
+    /// through it.
+    pub sessions: crate::tui::picker::SessionListing,
     /// The last `/model` listing, for `/model <n>`.
     pub pending_models: Vec<(String, String)>,
-    /// The `/resume` picker while it is open; the composer's text is its
-    /// filter. `None` = closed.
+    /// The `/resume` list while it is open; the text after the command
+    /// is its filter. `None` = closed.
     pub picker: Option<crate::tui::picker::Picker>,
     /// Configured context window — the denominator of the footer's %.
     context_window: u64,
@@ -136,7 +139,7 @@ impl State {
             entries: 0,
             tokens_in: 0,
             tokens_out: 0,
-            pending_resume: Vec::new(),
+            sessions: crate::tui::picker::SessionListing::new(cwd),
             pending_models: Vec::new(),
             picker: None,
             context_window: context_window as u64,

@@ -230,7 +230,7 @@ fn draw_popup(frame: &mut Frame, state: &mut State, areas: Areas) {
 /// cannot say it there. The panel's last row is the hint, or, after a
 /// failed open, the error in its place.
 fn draw_picker(frame: &mut Frame, state: &mut State, areas: Areas) {
-    state.sync_resume();
+    state.sync_picker();
     let rows = state.picker_matches();
     let width = areas.composer.width as usize;
     if rows.is_empty() {
@@ -249,14 +249,9 @@ fn draw_picker(frame: &mut Frame, state: &mut State, areas: Areas) {
         frame.render_widget(Clear, area);
         frame.render_widget(Fill::new(" ").style(state.palette.popup()), area);
         let last = picker_last_row(state, &state.palette, width, None);
+        let reason = state.session_empty_reason();
         let panel = vec![
-            crate::tui::picker::empty_row(
-                &state.palette,
-                state.session_scope_empty(),
-                state.session_scope_all(),
-                state.editor.text(),
-                width,
-            ),
+            crate::tui::picker::empty_row(&state.palette, &reason, width),
             last,
         ];
         frame.render_widget(Paragraph::new(panel), area);

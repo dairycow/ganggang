@@ -293,7 +293,7 @@ fn the_suggestion_popup_is_a_panel_of_its_own() {
     state.editor.set_text("/re");
     draw(&mut terminal, &mut state);
     let text = screen(&terminal);
-    assert!(shows(&terminal, "/resume [n|prefix]"), "{text}");
+    assert!(shows(&terminal, "/resume [filter]"), "{text}");
     assert!(shows(&terminal, "▸ /resume"), "the marker: {text}");
     assert!(shows(&terminal, "↑↓ select"), "{text}");
     // The selection is the theme's `selection`, not an inversion — so a
@@ -333,18 +333,41 @@ fn the_suggestion_popup_is_a_panel_of_its_own() {
     );
 }
 
-/// The `/resume` picker: the same panel, one row per session, and a
-/// window that follows the highlight through a list longer than the
-/// panel. The hint row says where the highlight stands; a scope with no
-/// row at all says why on its own row; a failed open says its error on
-/// the panel's last row, in the hint row's place.
+/// Open the list on `sessions` (a loaded listing, with `/s` as this
+/// directory's own and `/home/u` as home) on the composer's `text`, the
+/// highlight on `selected`, and draw: the listing is in place before the
+/// text opens the list, as in the loop.
+fn open_list(
+    terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+    state: &mut State,
+    sessions: Vec<crate::agent::session::io::SessionFile>,
+    text: &str,
+    selected: usize,
+) {
+    state.editor.set_text("");
+    state.sync_picker();
+    state.sessions = super::picker::tests::listing_of(sessions);
+    state.editor.set_text(text);
+    state.sync_picker();
+    state.picker.as_mut().unwrap().selected = selected;
+    draw(terminal, state);
+}
+
+/// The list's panel is a window over the listing that follows the
+/// highlight, on the same floating panel as the suggestion popup. The
+/// hint row says where the highlight stands; a scope with no row at all
+/// says why on its own row; a failed open says its error on the panel's
+/// last row, in the hint row's place.
 #[test]
-fn the_resume_picker_is_a_window_that_follows_the_highlight() {
+fn the_resume_list_is_a_window_that_follows_the_highlight() {
     let (mut terminal, mut state) = fresh(80, 24);
-    let mut pick = super::picker::tests::pick_for_test(30);
-    pick.selected = 25;
-    state.picker = Some(pick);
-    draw(&mut terminal, &mut state);
+    open_list(
+        &mut terminal,
+        &mut state,
+        super::picker::tests::sessions_for_test(30),
+        "/resume",
+        25,
+    );
 
     // An empty draft is a three-row composer over a one-row footer, so
     // the panel has the 20 rows above it: 19 rows of sessions, then the
@@ -373,13 +396,15 @@ fn the_resume_picker_is_a_window_that_follows_the_highlight() {
         row(&terminal, 20).contains(" compose "),
         "the composer is untouched below the panel: {text}"
     );
-    let buffer = terminal.backend().buffer();
-    for x in 0..80 {
-        assert_eq!(
-            buffer[(x, 18)].style().bg,
-            Some(TRUECOLOR.selection),
-            "cell ({x}, 18) is on the highlight"
-        );
+    {
+        let buffer = terminal.backend().buffer();
+        for x in 0..80 {
+            assert_eq!(
+                buffer[(x, 18)].style().bg,
+                Some(TRUECOLOR.selection),
+                "cell ({x}, 18) is on the highlight"
+            );
+        }
     }
 
     // Back at the top, the window is anchored there.
@@ -391,8 +416,15 @@ fn the_resume_picker_is_a_window_that_follows_the_highlight() {
     assert!(row(&terminal, 19).starts_with(" ↑↓ move 1/30 · "), "{text}");
 
     // A list that fits is a short panel directly above the composer, and
-    // its hint has no counter.
-    state.picker = Some(super::picker::tests::pick_for_test(3));
+    // its hint has no counter: this directory's three.
+    open_list(
+        &mut terminal,
+        &mut state,
+        super::picker::tests::sessions_for_test(3),
+        "/resume",
+        0,
+    );
+    state.session_scope_this_directory();
     draw(&mut terminal, &mut state);
     let text = screen(&terminal);
     assert!(row(&terminal, 16).contains("s00"), "{text}");
@@ -406,24 +438,20 @@ fn the_resume_picker_is_a_window_that_follows_the_highlight() {
         "nothing above the panel: {text}"
     );
 
-    // Every project's sessions: each row shows its session's directory
+    // Every directory's sessions: each row shows its session's directory
     // in the model's place, and the hint offers the way back to this
-    // project's. Five rows make a panel six high, its first row at 14.
-    state.picker = Some(super::picker::Picker::new(
+    // directory's. Five rows make a panel six high, its first row at 14.
+    let everywhere = [
         super::picker::tests::sessions_for_test(3),
-        [
-            super::picker::tests::sessions_for_test(3),
-            super::picker::tests::elsewhere_for_test(2),
-        ]
-        .concat(),
-        Some(std::path::Path::new("/home/u")),
-    ));
-    draw(&mut terminal, &mut state);
+        super::picker::tests::elsewhere_for_test(2),
+    ]
+    .concat();
+    open_list(&mut terminal, &mut state, everywhere, "/resume", 0);
     let text = screen(&terminal);
     assert!(row(&terminal, 14).contains("s00"), "{text}");
     assert!(
         row(&terminal, 16).contains("/tmp/x"),
-        "this project's sessions name their directory too: {text}"
+        "this directory's sessions name their directory too: {text}"
     );
     assert!(
         row(&terminal, 17).contains("~/repo/.worktrees/wt00"),
@@ -448,7 +476,7 @@ fn the_resume_picker_is_a_window_that_follows_the_highlight() {
     // A filter that keeps no row still draws the panel, in two rows: the
     // empty row that says why, then the hint. The panel floats over the
     // transcript's newest rows, so it cannot vanish and say nothing.
-    state.editor.set_text("zzz");
+    state.editor.set_text("/resume zzz");
     draw(&mut terminal, &mut state);
     let text = screen(&terminal);
     assert_eq!(
@@ -462,20 +490,17 @@ fn the_resume_picker_is_a_window_that_follows_the_highlight() {
         "the hint row stays the last: {text}"
     );
     assert!(!shows(&terminal, "s00"), "{text}");
-    assert!(shows(&terminal, "zzz"), "{text}");
+    assert!(shows(&terminal, "/resume zzz"), "{text}");
 
     // Tab into a directory with no sessions: its own empty row, over a
     // hint that offers the wider listing.
-    state.picker = Some(super::picker::Picker::new(
-        Vec::new(),
-        [
-            super::picker::tests::sessions_for_test(3),
-            super::picker::tests::elsewhere_for_test(2),
-        ]
-        .concat(),
-        Some(std::path::Path::new("/home/u")),
-    ));
-    state.editor.clear();
+    open_list(
+        &mut terminal,
+        &mut state,
+        super::picker::tests::elsewhere_for_test(2),
+        "/resume",
+        0,
+    );
     state.session_scope_this_directory();
     draw(&mut terminal, &mut state);
     let text = screen(&terminal);
@@ -492,8 +517,14 @@ fn the_resume_picker_is_a_window_that_follows_the_highlight() {
     // A failed open says its error on the panel's last row, in the hint
     // row's place; a changed filter is a new list, and brings the hint
     // back.
-    state.picker = Some(super::picker::tests::pick_for_test(3));
-    state.editor.clear();
+    open_list(
+        &mut terminal,
+        &mut state,
+        super::picker::tests::sessions_for_test(3),
+        "/resume",
+        0,
+    );
+    state.session_scope_this_directory();
     state.pick_failed("boom");
     draw(&mut terminal, &mut state);
     let text = screen(&terminal);
@@ -504,7 +535,7 @@ fn the_resume_picker_is_a_window_that_follows_the_highlight() {
     );
     assert!(!shows(&terminal, "↑↓ move"), "{text}");
     assert!(shows(&terminal, "s00"), "the rows stay: {text}");
-    state.editor.set_text("s01");
+    state.editor.set_text("/resume s01");
     draw(&mut terminal, &mut state);
     let text = screen(&terminal);
     assert_eq!(
@@ -656,10 +687,11 @@ fn degenerate_terminals_do_not_panic() {
         state.editor.set_text("s");
         draw(&mut terminal, &mut state);
     }
-    // And the picker's empty scope, with no row at all to show.
+    // And the list's empty scope, with no row at all to show.
     for (w, h) in [(1, 1), (4, 2), (5, 3), (80, 1), (1, 40), (3, 6)] {
         let (mut terminal, mut state) = fresh(w, h);
-        state.picker = Some(super::picker::tests::pick_for_test(0));
+        state.editor.set_text("/resume");
+        state.sync_picker();
         state.picker_next();
         draw(&mut terminal, &mut state);
     }

@@ -7,11 +7,10 @@ mod model;
 mod session;
 mod think;
 
-// `Command::Resume` also calls `session::resolve_session_prefix` directly.
-/// The event loop calls these three (mod.rs answers
-/// `UiEvent::SessionsListed` with `sessions_listed` and the picker's Tab
-/// with `toggle_session_scope`).
-pub(super) use session::{open_session, sessions_listed, toggle_session_scope};
+/// The event loop calls these two (mod.rs answers
+/// `UiEvent::SessionsListed` with `sessions_listed`, and starts the
+/// list's scan with `spawn_session_scan` after a draw).
+pub(super) use session::{open_session, sessions_listed, spawn_session_scan};
 
 #[cfg(test)]
 use think::parse_think_args;
@@ -36,9 +35,9 @@ pub enum Submission {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     New,
-    /// No argument opens the session picker; an argument picks by list
-    /// number or id prefix.
-    Resume(Option<String>),
+    /// A typed `/resume` no longer opens the list: it already is one, open
+    /// from the text. One that reaches the handler anyway says so.
+    Resume,
     /// Compact the context now; an argument becomes focus instructions
     /// for the summarize call (§14's manual path).
     Compact(Option<String>),
@@ -93,7 +92,7 @@ pub fn classify_submission(text: &str) -> Submission {
         let arg = parts.next().unwrap_or_default().trim().to_string();
         return Submission::Command(match head {
             "new" => Command::New,
-            "resume" => Command::Resume(Some(arg)).filter_arg(),
+            "resume" => Command::Resume,
             "compact" => Command::Compact(Some(arg)).filter_arg(),
             "session" => Command::Session,
             "context" => Command::Context,
@@ -113,11 +112,9 @@ pub fn classify_submission(text: &str) -> Submission {
 }
 
 impl Command {
-    /// `/resume` with an empty argument opens the picker;
     /// `/compact` with an empty argument is the plain compaction.
     fn filter_arg(self) -> Self {
         match self {
-            Command::Resume(Some(arg)) if arg.is_empty() => Command::Resume(None),
             Command::Compact(Some(arg)) if arg.is_empty() => Command::Compact(None),
             Command::Model(Some(arg)) if arg.is_empty() => Command::Model(None),
             Command::Think(Some(arg)) if arg.is_empty() => Command::Think(None),
@@ -128,7 +125,7 @@ impl Command {
 
 /// The valid commands, for unknown-command feedback.
 pub fn known_commands() -> &'static str {
-    "/new /resume [n|prefix] /compact [instructions] /session /context /hooks /skill:<name> [args] /model [provider/model] /think [effort|off|default] [budget] /reload /quit"
+    "/new /resume [filter] /compact [instructions] /session /context /hooks /skill:<name> [args] /model [provider/model] /think [effort|off|default] [budget] /reload /quit"
 }
 
 /// Everything a command needs to act: view state, the agent channels, the
@@ -264,61 +261,10 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
             let boot = factory(super::SessionPick::New, cwd, active_endpoint, abort.clone())?;
             swap_agent(boot, state, input_tx, ui_tx, cwd);
         }
-        Command::Resume(Some(choice)) => {
-            if state.sessions_disabled {
-                state.push_warning("/resume is disabled for --no-session runs");
-                return Ok(false);
-            }
-            // A number counts the last listing, the picker's; anything else
-            // is a prefix, for this project's sessions first and then
-            // every project's.
-            let chosen = match choice.parse::<usize>() {
-                Ok(n) if n >= 1 => state
-                    .pending_resume
-                    .get(n - 1)
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("{n} is not in the last /resume listing"))?,
-                _ => session::resolve_session_prefix(cwd, &choice)?,
-            };
-            open_session(
-                chosen,
-                CmdCtx {
-                    state,
-                    factory,
-                    input_tx,
-                    ui_tx,
-                    skills,
-                    hooks,
-                    cwd,
-                    abort,
-                    config,
-                    active_endpoint,
-                },
-            )?;
-        }
-        Command::Resume(None) => {
-            if state.sessions_disabled {
-                state.push_warning("/resume is disabled for --no-session runs");
-                return Ok(false);
-            }
-            let Some(root) = crate::agent::session::io::sessions_root() else {
-                anyhow::bail!("no HOME: nowhere to look for sessions");
-            };
-            // The scan reads every file of every directory, so it runs
-            // off the loop; the picker opens when the listing arrives
-            // (UiEvent::SessionsListed, answered in mod.rs).
-            let ui_tx = ui_tx.clone();
-            tokio::spawn(async move {
-                let listed = tokio::task::spawn_blocking(move || {
-                    crate::agent::session::io::list_all_sessions(&root)
-                })
-                .await;
-                if let Ok((sessions, warnings)) = listed {
-                    let _ = ui_tx
-                        .send(super::agent_task::UiEvent::SessionsListed { sessions, warnings })
-                        .await;
-                }
-            });
+        Command::Resume => {
+            // The list opens from the text as it is typed: a `/resume`
+            // that is submitted anyway has nothing to do but say so.
+            state.push_info("the session list opens as you type /resume");
         }
         Command::Model(choice) => {
             model::handle_model(

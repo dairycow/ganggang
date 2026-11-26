@@ -24,9 +24,14 @@ impl super::super::State {
         self.footer.set_thinking_pct(None);
     }
 
-    /// The directory gg is working in, as the footer shows it.
+    /// The directory gg is working in, as the footer shows it: where the
+    /// run's session file lives, so where the `/resume` list files this
+    /// directory's rows. The listing itself stays until the next scan
+    /// replaces it; the new directory is owed a scan of its own.
     pub fn set_directory(&mut self, directory: &std::path::Path) {
         self.footer.set_directory(directory);
+        self.sessions.dir = crate::agent::session::io::sessions_dir(directory);
+        self.request_session_scan();
     }
 
     /// The active model's thinking level, shown beside its name.
@@ -92,12 +97,14 @@ impl super::super::State {
     ) {
         self.session_path = session_path;
         self.sessions_disabled = sessions_disabled;
-        // The new session is the one in use, so no picker outlives it and
+        // The new session is the one in use, so no list outlives it and
         // its filter goes with it; only an open that got this far reaches
-        // here, a failed one leaves the picker as it was.
+        // here, a failed one leaves the list as it was. The new session's
+        // listing is owed a scan of its own: it is the newest one now.
         if self.picker.take().is_some() {
             self.editor.clear();
         }
+        self.request_session_scan();
         self.entries = 0;
         self.tokens_in = 0;
         self.tokens_out = 0;

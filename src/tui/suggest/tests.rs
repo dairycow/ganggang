@@ -47,7 +47,7 @@ fn a_bare_slash_lists_the_whole_builtin_set() {
         got,
         vec![
             "/new",
-            "/resume [n|prefix]",
+            "/resume [filter]",
             "/compact [instructions]",
             "/session",
             "/context",
@@ -64,8 +64,8 @@ fn a_bare_slash_lists_the_whole_builtin_set() {
 
 #[test]
 fn the_typed_prefix_filters_and_keeps_order() {
-    assert_eq!(labels("/re", &[]), vec!["/resume [n|prefix]", "/reload"]);
-    assert_eq!(labels("/res", &[]), vec!["/resume [n|prefix]"]);
+    assert_eq!(labels("/re", &[]), vec!["/resume [filter]", "/reload"]);
+    assert_eq!(labels("/res", &[]), vec!["/resume [filter]"]);
     assert_eq!(
         labels("/c", &[]),
         vec!["/compact [instructions]", "/context"]
@@ -275,16 +275,13 @@ fn suggestion(label: &str, description: &str) -> Suggestion {
 /// line up, and the marker is the only thing a highlight adds.
 #[test]
 fn the_marker_column_is_reserved_on_every_row() {
-    let s = suggestion("/resume [n|prefix]", "list sessions, or open one");
+    let s = suggestion("/resume [filter]", "pick a saved session");
     let unselected = row_text(&suggestion_row(&TRUECOLOR, &s, false, 80));
     let selected = row_text(&suggestion_row(&TRUECOLOR, &s, true, 80));
-    assert_eq!(
-        unselected,
-        "  /resume [n|prefix]  list sessions, or open one"
-    );
+    assert_eq!(unselected, "  /resume [filter]  pick a saved session");
     assert_eq!(
         selected.trim_end(),
-        "▸ /resume [n|prefix]  list sessions, or open one",
+        "▸ /resume [filter]  pick a saved session",
         "the marker is the only thing the text of a highlight adds"
     );
 }
@@ -320,7 +317,7 @@ fn the_selection_runs_to_the_popup_edge() {
 
 #[test]
 fn rows_truncate_to_the_width_and_never_wrap() {
-    let s = suggestion("/resume [n|prefix]", "list sessions, or open one");
+    let s = suggestion("/resume [filter]", "pick a saved session");
     // Narrow: the marker fits, the label is cut, no description.
     let cut = suggestion_row(&TRUECOLOR, &s, true, 8);
     assert_eq!(row_text(&cut), "▸ /resum");

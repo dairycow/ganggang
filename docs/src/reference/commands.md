@@ -7,7 +7,7 @@ Generated from the command catalogue that drives the `/` suggestion popup.
 | Command | Arguments | Description |
 |---|---|---|
 | `/new` |  | start a fresh session |
-| `/resume` | [n\|prefix] | pick a saved session from any directory |
+| `/resume` | [filter] | pick a saved session from any directory |
 | `/compact` | [instructions] | summarise and rebuild the context |
 | `/session` |  | session path, entries, token totals |
 | `/context` |  | show the assembled system prompt |

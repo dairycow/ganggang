@@ -210,6 +210,10 @@ pub async fn run(
     }
     state.session_path = boot.session_path.clone();
     state.sessions_disabled = boot.sessions_disabled;
+    // The `/resume` list is built from a listing read off the loop: the
+    // first scan is owed from the start, so the list has rows the first
+    // time it opens (the loop starts it after a draw).
+    state.request_session_scan();
     // A resumed session shows its past immediately, not after the first
     // new turn (the agent is about to move into the task — read first).
     state.seed_from_entries(boot.agent.entries());
@@ -308,6 +312,13 @@ pub async fn run(
             terminal
                 .draw(|frame| render(frame, &mut state))
                 .map_err(|e| anyhow::anyhow!("drawing: {e}"))?;
+            // The `/resume` list's scan, owed after a draw: its rows are
+            // built from the listing it brings, and a request made while
+            // one is in flight is kept and runs when that scan returns.
+            if state.session_scan_ready() {
+                state.session_scan_started();
+                commands::spawn_session_scan(ui_tx.clone());
+            }
         }
 
         // The spinner's clock, in line with the footer before the loop
@@ -426,10 +437,10 @@ pub async fn run(
                                 }
                             }
                         }
-                        // Tab in the picker: every project's sessions, or
-                        // this project's.
+                        // Tab in the list: every directory's sessions, or
+                        // this directory's.
                         KeyAction::SuggestComplete if state.picker_open() && !state.busy => {
-                            commands::toggle_session_scope(&mut state)
+                            state.toggle_session_scope()
                         }
                         // Submissions land between runs: the text stays
                         // in the editor for resubmission, with a line
@@ -551,12 +562,8 @@ pub async fn run(
                     // [`classify_wheel`]), so a stray click can never move a
                     // cursor or a selection.
                     crossterm::event::Event::Mouse(mouse) => match classify_wheel(mouse) {
-                        Some(Wheel::Up) if state.picker_open() => {
-                            state.scroll_picker(true, WHEEL_ROWS)
-                        }
-                        Some(Wheel::Down) if state.picker_open() => {
-                            state.scroll_picker(false, WHEEL_ROWS)
-                        }
+                        // The wheel is for the transcript only: the list's
+                        // highlight is moved by the arrows.
                         Some(Wheel::Up) => state.scroll_up(WHEEL_ROWS),
                         Some(Wheel::Down) => state.scroll_down(WHEEL_ROWS),
                         None => {}
@@ -566,11 +573,8 @@ pub async fn run(
             }
             ui = ui_rx.recv() => {
                 let Some(event) = ui else { break };
-                // The listing of a bare `/resume`, read off the loop:
-                // the loop opens the picker from it itself, so it never
-                // reaches apply.
                 if let UiEvent::SessionsListed { sessions, warnings } = event {
-                    commands::sessions_listed(&mut state, sessions, warnings, &cwd);
+                    commands::sessions_listed(&mut state, sessions, warnings);
                     continue;
                 }
                 if !agent_task::apply(event, &mut state, &mut input_tx).await {

@@ -24,8 +24,8 @@ use repair::repair_missing_trailing_newline;
 
 /// Re-export the listing and repair APIs so callers need zero changes.
 pub use list::{
-    SessionFile, latest_in, list_all_sessions, list_sessions, matching_prefix, resolve_prefix,
-    sessions_dir, sessions_root, short_id,
+    SessionFile, latest_in, list_all_sessions, list_sessions, resolve_prefix, sessions_dir,
+    sessions_root, short_id,
 };
 pub use repair::repair_dangling_tool_calls;
 
