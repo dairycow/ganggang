@@ -18,6 +18,8 @@ pub enum UiEvent {
     RunComplete {
         tokens_in: u64,
         tokens_out: u64,
+        /// Session cache-read tokens: the footer's `cache NN%` hit rate.
+        cache_read_tokens: u64,
         /// Prompt+completion tokens of the LAST assistant entry — the
         /// footer's context % (§15) is this against the context window.
         context_tokens: u64,
@@ -190,13 +192,14 @@ pub(super) async fn agent_task(
         match joined {
             Ok((agent_back, Ok(()))) => {
                 agent = agent_back;
-                let (tokens_in, tokens_out) = usage_totals(agent.entries());
+                let (tokens_in, tokens_out, cache_read) = usage_totals(agent.entries());
                 let context_tokens = last_context_tokens(agent.entries());
                 let entries = agent.entries().len();
                 let _ = ui
                     .send(UiEvent::RunComplete {
                         tokens_in,
                         tokens_out,
+                        cache_read_tokens: cache_read,
                         context_tokens,
                         entries,
                     })
@@ -237,10 +240,13 @@ pub(super) async fn apply(
         UiEvent::RunComplete {
             tokens_in,
             tokens_out,
+            cache_read_tokens,
             context_tokens,
             entries,
         } => {
-            state.footer.set_usage(tokens_in, tokens_out);
+            state
+                .footer
+                .set_usage(tokens_in, tokens_out, cache_read_tokens);
             state.set_context_tokens(context_tokens);
             state.record_totals(tokens_in, tokens_out, entries);
             state.run_finished();
@@ -339,23 +345,24 @@ pub(super) fn last_context_tokens(entries: &[Entry]) -> u64 {
 
 /// Session-wide usage totals (§13): summed from assistant entries, so a
 /// resumed session starts with the totals of everything before it.
-pub(super) fn usage_totals(entries: &[Entry]) -> (u64, u64) {
-    let (tokens_in, tokens_out) =
-        entries
-            .iter()
-            .fold((0u64, 0u64), |(tin, tout), entry| match entry {
-                // Only assistant entries count: a provider stamping usage
-                // on a user message must not inflate the totals.
-                Entry::Message { message, .. } if message.role == Role::Assistant => {
-                    match &message.usage {
-                        Some(u) => (
-                            tin + u.prompt_tokens as u64,
-                            tout + u.completion_tokens as u64,
-                        ),
-                        None => (tin, tout),
-                    }
+pub(super) fn usage_totals(entries: &[Entry]) -> (u64, u64, u64) {
+    let (tokens_in, tokens_out, cache_read) = entries.iter().fold(
+        (0u64, 0u64, 0u64),
+        |(tin, tout, cache), entry| match entry {
+            // Only assistant entries count: a provider stamping usage
+            // on a user message must not inflate the totals.
+            Entry::Message { message, .. } if message.role == Role::Assistant => {
+                match &message.usage {
+                    Some(u) => (
+                        tin + u.prompt_tokens as u64,
+                        tout + u.completion_tokens as u64,
+                        cache + u.cache_read_tokens as u64,
+                    ),
+                    None => (tin, tout, cache),
                 }
-                _ => (tin, tout),
-            });
-    (tokens_in, tokens_out)
+            }
+            _ => (tin, tout, cache),
+        },
+    );
+    (tokens_in, tokens_out, cache_read)
 }

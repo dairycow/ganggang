@@ -7,7 +7,7 @@ use std::path::Path;
 
 fn footer() -> Footer {
     let mut f = Footer::new(Path::new("/home/user/Projects/ganggang"), "qwen3.8");
-    f.set_usage(305, 81);
+    f.set_usage(305, 81, 0);
     f
 }
 
@@ -218,4 +218,27 @@ fn set_context_clamps_above_100_without_u8_wrapping() {
     let mut f = footer();
     f.set_context(400_000, 100_000);
     assert!(text(&f).contains("ctx 100%"), "{}", text(&f));
+}
+
+/// The cache hit rate is a field like the rest: it appears once the
+/// provider reports cache reads, muted like the token counts, clamped at
+/// 100, and gone when there is nothing cached.
+#[test]
+fn the_cache_hit_rate_sits_beside_the_context_pct() {
+    use crate::tui::theme::TRUECOLOR as T;
+    let mut f = footer();
+    assert!(!text(&f).contains("cache"), "unset: no field at all");
+
+    f.set_usage(1000, 50, 870);
+    let shown = text(&f);
+    assert!(shown.contains("↑1000 ↓50 │ cache 87%"), "{shown}");
+    assert_eq!(colour(&f, "cache"), Some(T.muted), "a fact, not an alarm");
+
+    // The rate is clamped, never above 100.
+    f.set_usage(100, 0, 100);
+    assert!(text(&f).contains("cache 100%"), "{}", text(&f));
+
+    // Zero cache reads: the field is simply not there.
+    f.set_usage(1000, 50, 0);
+    assert!(!text(&f).contains("cache"), "{}", text(&f));
 }

@@ -156,6 +156,11 @@ pub struct Usage {
     pub total_tokens: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_tokens: Option<u32>,
+    /// Cache-read tokens (prefix-cache hits), already folded into
+    /// `prompt_tokens`; the footer's `cache NN%` rate divides this by the
+    /// session's prompt total.
+    #[serde(default)]
+    pub cache_read_tokens: u32,
 }
 
 /// Percentage of output tokens spent on thinking, if known from usage or
@@ -458,6 +463,7 @@ pub fn from_response(resp: ChatResponse) -> anyhow::Result<(Message, Vec<String>
                 completion_tokens: u.completion_tokens,
                 total_tokens: u.total_tokens,
                 reasoning_tokens,
+                cache_read_tokens: u.cache_read_tokens,
             }
         }),
         is_error: false,

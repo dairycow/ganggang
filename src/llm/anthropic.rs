@@ -222,6 +222,7 @@ impl AnthropicUsage {
             prompt_tokens,
             completion_tokens,
             total_tokens: prompt_tokens.saturating_add(completion_tokens),
+            cache_read_tokens: self.cache_read_input_tokens,
             ..Usage::default()
         }
     }
