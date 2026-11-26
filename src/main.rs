@@ -533,16 +533,16 @@ async fn open_agent(
         eprintln!("warning: {warning}");
     }
     let pick = pick_of(cli);
-    let boot = assemble_boot(
-        &cfg,
-        &endpoint,
-        &cwd,
+    let boot = assemble_boot(BootOpts {
+        cfg: &cfg,
+        endpoint: &endpoint,
+        cwd: &cwd,
         abort,
         cli,
         pick,
-        &hooks,
-        nested_boot.as_ref(),
-    )?;
+        hooks: &hooks,
+        nested_boot: nested_boot.as_ref(),
+    })?;
     if let Some(path) = &boot.session_path {
         eprintln!("session: {}", path.display());
     }
@@ -560,8 +560,21 @@ fn boot_and_factory(
 ) -> anyhow::Result<(tui::Boot, tui::Factory)> {
     let pick = pick_of(cli);
     let endpoint = cfg.active_endpoint();
-    let boot = assemble_boot(cfg, &endpoint, cwd, abort, cli, pick, &hooks, None)?;
+    let boot = assemble_boot(BootOpts {
+        cfg,
+        endpoint: &endpoint,
+        cwd,
+        abort,
+        cli,
+        pick,
+        hooks: &hooks,
+        nested_boot: None,
+    })?;
 
+    // The factory rebuilds an agent for `/new` and `/resume` with a
+    // one-shot cli: print mode, no prompt, no model or turn overrides —
+    // the run's own pick of session, tools and hooks. A TUI boot never
+    // nests, so it carries no nest.
     let cfg = cfg.clone();
     let cli_tools = cli.tools.clone();
     let no_session = cli.no_session;
@@ -588,9 +601,32 @@ fn boot_and_factory(
             max_turns: None,
             session_file: None,
         };
-        assemble_boot(&cfg, endpoint, cwd, abort, &cli, pick, &hooks, None)
+        assemble_boot(BootOpts {
+            cfg: &cfg,
+            endpoint,
+            cwd,
+            abort,
+            cli: &cli,
+            pick,
+            hooks: &hooks,
+            nested_boot: None,
+        })
     });
     Ok((boot, factory))
+}
+
+/// What one boot needs: the run's config and endpoint, the session pick,
+/// the user's stop flag, and, for a headless boot another run started, the
+/// nest it clamps to.
+struct BootOpts<'a> {
+    cfg: &'a config::Config,
+    endpoint: &'a config::Endpoint,
+    cwd: &'a std::path::Path,
+    abort: Arc<AtomicBool>,
+    cli: &'a Cli,
+    pick: tui::SessionPick,
+    hooks: &'a agent::hooks::Hooks,
+    nested_boot: Option<&'a nested::NestedBoot>,
 }
 
 /// What resolving a session pick yields: the store to append through,
@@ -603,31 +639,22 @@ type ResolvedSession = (
 
 /// Build one [`tui::Boot`]: resolve the session (store + entries), then
 /// construct the agent around it. The single path both interfaces and
-/// the TUI factory share. `nested_boot` is set by a headless boot another
-/// run started.
-#[allow(clippy::too_many_arguments)]
-fn assemble_boot(
-    cfg: &config::Config,
-    endpoint: &config::Endpoint,
-    cwd: &std::path::Path,
-    abort: Arc<AtomicBool>,
-    cli: &Cli,
-    pick: tui::SessionPick,
-    hooks: &agent::hooks::Hooks,
-    nested_boot: Option<&nested::NestedBoot>,
-) -> anyhow::Result<tui::Boot> {
+/// the TUI factory share. `opts.nested_boot` is set by a headless boot
+/// another run started.
+fn assemble_boot(opts: BootOpts<'_>) -> anyhow::Result<tui::Boot> {
     let (store, entries, session_path) = open_session_for(
-        cli,
-        cwd,
-        &endpoint.label(),
-        pick,
-        nested_boot.and_then(|nest| nest.parent_session.as_deref()),
+        opts.cli,
+        opts.cwd,
+        &opts.endpoint.label(),
+        opts.pick.clone(),
+        opts.nested_boot
+            .and_then(|nest| nest.parent_session.as_deref()),
     )?;
-    let mut agent = build_agent(cfg, endpoint, cwd, abort, cli, store, hooks, nested_boot)?;
+    let mut agent = build_agent(&opts, store)?;
     if let Some(entries) = entries {
         agent.load_entries(entries);
     }
-    if cli.watch {
+    if opts.cli.watch {
         // The restart resumes by id: the file must exist before the first
         // message, or the new process would find nothing to continue.
         agent.ensure_session_file()?;
@@ -635,25 +662,25 @@ fn assemble_boot(
     Ok(tui::Boot {
         agent,
         session_path,
-        sessions_disabled: cli.no_session,
+        sessions_disabled: opts.cli.no_session,
     })
 }
 
-/// Agent construction, shared by every boot: config, client, registry
-/// filtered by the allowlist, cwd, and the already-resolved store. The
-/// allowlist is resolved against the canonical names so the nest a nested
-/// run's own commands carry can be built before the registry is.
-#[allow(clippy::too_many_arguments)]
+/// Agent construction for one boot: config, client, registry filtered by
+/// the allowlist, cwd, and the already-resolved store. The allowlist is
+/// resolved against the canonical names so the nest a nested run's own
+/// commands carry can be built before the registry is.
 fn build_agent(
-    cfg: &config::Config,
-    endpoint: &config::Endpoint,
-    cwd: &std::path::Path,
-    abort: Arc<AtomicBool>,
-    cli: &Cli,
+    opts: &BootOpts<'_>,
     store: Option<agent::session::io::SessionStore>,
-    hooks: &agent::hooks::Hooks,
-    nested_boot: Option<&nested::NestedBoot>,
 ) -> anyhow::Result<Agent> {
+    let cfg = opts.cfg;
+    let endpoint = opts.endpoint;
+    let cwd = opts.cwd;
+    let cli = opts.cli;
+    let hooks = opts.hooks;
+    let nested_boot = opts.nested_boot;
+    let abort = opts.abort.clone();
     let client = LlmClient::from_endpoint(endpoint)?
         .with_retry(cfg.max_retries)
         .with_request_timeout(cfg.request_timeout_secs);

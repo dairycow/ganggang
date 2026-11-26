@@ -64,6 +64,7 @@ pub struct Boot {
 }
 
 /// Which session a new [`Boot`] should carry.
+#[derive(Clone)]
 pub enum SessionPick {
     New,
     Latest,

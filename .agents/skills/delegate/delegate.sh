@@ -14,6 +14,15 @@
 #
 # Exit status: 0 with an answer, 124 on a timeout, 1 with no answer, and
 # otherwise the job's own. See scripts/test-delegate.py.
+#
+# A --timeout job is stopped by a watchdog that writes $dir/.watchdog_fired
+# when it fires, then terms the job, then kills it five seconds later, so
+# a job that ignores the term cannot outlive the timeout. The job runs in
+# its own process group (started with setsid) only when this script is not
+# a group leader itself, so the signals reach the job and the commands it
+# starts; a script backgrounded from an interactive shell is a leader and
+# would share its group with the job, so there the watchdog targets the
+# job's pid alone.
 set -euo pipefail
 
 GG="${GG:-gg}"
@@ -81,11 +90,48 @@ if [[ -n "$model" ]]; then args+=(-m "$model"); fi
 if [[ -n "$tools" ]]; then args+=(--tools "$tools"); fi
 if [[ -n "$max_turns" ]]; then args+=(--max-turns "$max_turns"); fi
 
-"$GG" "${args[@]}" < "$prompt" > "$out" 2> "$err" &
+# A job in its own process group gives the timeout a group to kill: the
+# job and the commands it starts die together. That is only safe when this
+# script is not a group leader itself: a script backgrounded from an
+# interactive shell is, and then the job would share this script's group
+# and a group kill would take the script down with it. Without setsid (or
+# as a leader) the watchdog targets the job's pid alone. Not a leader,
+# setsid execs directly (no fork), so $! is the new group's pid.
+own_group=0
+if [[ -n "$timeout" ]] && ! kill -0 -$$ 2>/dev/null && command -v setsid >/dev/null 2>&1; then
+  own_group=1
+fi
+if (( own_group )); then
+  setsid "$GG" "${args[@]}" < "$prompt" > "$out" 2> "$err" &
+else
+  "$GG" "${args[@]}" < "$prompt" > "$out" 2> "$err" &
+fi
 pid=$!
 watchdog=''
 if [[ -n "$timeout" ]]; then
-  (sleep "$timeout"; kill -TERM "$pid" 2>/dev/null) &
+  # The watchdog is self-contained: the script's main path stays parked
+  # in `wait` on the job, so the escalation must fire from here. It
+  # writes the marker before the term: a job that dies from the term is
+  # stopped by the deadline, whatever its exit status. Then it kills the
+  # same target five seconds later, so a job that ignores the term still
+  # dies at the deadline; both are ignored when nothing is left.
+  if (( own_group )); then
+    (
+      sleep "$timeout"
+      echo 1 > "$dir/.watchdog_fired"
+      kill -TERM -"$pid" 2>/dev/null || true
+      sleep 5
+      kill -KILL -"$pid" 2>/dev/null || true
+    ) &
+  else
+    (
+      sleep "$timeout"
+      echo 1 > "$dir/.watchdog_fired"
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 5
+      kill -KILL "$pid" 2>/dev/null || true
+    ) &
+  fi
   watchdog=$!
 fi
 
@@ -93,12 +139,20 @@ rc=0
 wait "$pid" || rc=$?
 timed_out=0
 if [[ -n "$watchdog" ]]; then
-  if kill -0 "$watchdog" 2>/dev/null; then
+  if [[ -f "$dir/.watchdog_fired" ]]; then
+    # The marker is written before the watchdog's term: the deadline
+    # stopped the job, whatever its exit status.
+    timed_out=1
+  elif kill -0 "$watchdog" 2>/dev/null; then
+    # The job beat the deadline: stop the watchdog before it can fire,
+    # then check the marker once more for a firing that landed just now.
     kill "$watchdog" 2>/dev/null
     wait "$watchdog" 2>/dev/null || true
-  else
-    timed_out=1
+    if [[ -f "$dir/.watchdog_fired" ]]; then
+      timed_out=1
+    fi
   fi
+  rm -f "$dir/.watchdog_fired"
 fi
 
 bytes=$(wc -c < "$out" | tr -d '[:space:]')
