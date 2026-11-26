@@ -226,15 +226,11 @@ impl Transcript {
                 self.assistant_open = false;
                 self.thinking_open = false;
             }
-            // Run/turn markers carry no transcript content. `Subtask` is
-            // ignored here too: the nested run's rows are a follow-up, and
-            // forwarding its `TurnEnded` into `State::apply` would corrupt
-            // the parent's context footer with the child's usage.
+            // Run/turn markers carry no transcript content.
             AgentEvent::RunStarted
             | AgentEvent::TurnStarted
             | AgentEvent::TurnEnded { .. }
-            | AgentEvent::RunEnded { .. }
-            | AgentEvent::Subtask { .. } => {
+            | AgentEvent::RunEnded { .. } => {
                 self.assistant_open = false;
                 self.thinking_open = false;
             }

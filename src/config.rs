@@ -95,12 +95,8 @@ impl Default for Config {
             bash_timeout_secs: 30,
             max_retries: 3,
             request_timeout_secs: 600,
-            // The default allowlist names every tool the boot registry
-            // offers: the default tools plus `task` (registered in
-            // `build_agent`, so it is not in `NAMES` itself).
             tools: crate::agent::tools::NAMES
                 .iter()
-                .chain(std::iter::once(&"task"))
                 .map(|s| s.to_string())
                 .collect(),
             providers,
@@ -564,9 +560,7 @@ fn validate(cfg: &Config) -> anyhow::Result<()> {
         if tool.trim().is_empty() {
             anyhow::bail!("tools list contains an empty name");
         }
-        // The allowlist may name any tool the boot registry offers: the
-        // default tools plus `task`.
-        if !crate::agent::tools::is_known_name(tool) {
+        if !crate::agent::tools::NAMES.contains(&tool.as_str()) {
             anyhow::bail!("unknown tool in tools allowlist: {tool}");
         }
     }

@@ -81,8 +81,8 @@ impl super::super::State {
     /// until the first new run.
     pub fn seed_from_entries(&mut self, entries: &[crate::agent::session::Entry]) {
         self.transcript.extend_from_entries(entries);
-        let (tokens_in, tokens_out) = crate::tui::agent_task::usage_totals(entries);
-        self.footer.set_usage(tokens_in, tokens_out);
+        let (tokens_in, tokens_out, cache_read) = crate::tui::agent_task::usage_totals(entries);
+        self.footer.set_usage(tokens_in, tokens_out, cache_read);
         // The context figure is the last request's, not the session total's.
         self.set_context_tokens(crate::tui::agent_task::last_context_tokens(entries));
         self.record_totals(tokens_in, tokens_out, entries.len());
@@ -110,7 +110,7 @@ impl super::super::State {
         self.tokens_out = 0;
         // Nothing has been spent or measured in the new session yet.
         self.last_context_tokens = 0;
-        self.footer.set_usage(0, 0);
+        self.footer.set_usage(0, 0, 0);
         self.footer.clear_telemetry();
         // A recall from the old session has nothing to do with the new one;
         // a Ctrl+C that was waiting to be confirmed is over too.

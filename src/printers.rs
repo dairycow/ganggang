@@ -51,7 +51,11 @@ pub struct Printer {
     tool_calls: u32,
     tool_errors: u32,
     peak_prompt_tokens: u32,
+    total_prompt_tokens: u64,
     total_completion_tokens: u64,
+    /// Cache-read tokens across the run: the summary's `cache NN%` hit
+    /// rate divides this by the prompt total.
+    total_cache_read_tokens: u64,
     total_predicted_n: u64,
     total_predicted_ms: f64,
     total_reasoning_tokens: u64,
@@ -78,7 +82,9 @@ impl Printer {
             tool_calls: 0,
             tool_errors: 0,
             peak_prompt_tokens: 0,
+            total_prompt_tokens: 0,
             total_completion_tokens: 0,
+            total_cache_read_tokens: 0,
             total_predicted_n: 0,
             total_predicted_ms: 0.0,
             total_reasoning_tokens: 0,
@@ -151,7 +157,9 @@ impl Printer {
                 let mut parts = Vec::new();
                 if let Some(u) = usage {
                     self.peak_prompt_tokens = self.peak_prompt_tokens.max(u.prompt_tokens);
+                    self.total_prompt_tokens += u.prompt_tokens as u64;
                     self.total_completion_tokens += u.completion_tokens as u64;
+                    self.total_cache_read_tokens += u.cache_read_tokens as u64;
                     if let Some(r) = u.reasoning_tokens {
                         self.total_reasoning_tokens += r as u64;
                     }
@@ -219,15 +227,6 @@ impl Printer {
                 }
             }
             AgentEvent::Warned { message } => vec![format!("warning: {message}")],
-            // A nested run's event, tagged with the `task` call that
-            // started it: name the child's tool calls and its warnings,
-            // indented under the parent's. Nested text, turns, and ends
-            // are the subagent's own; the parent already knows its state.
-            AgentEvent::Subtask { event, .. } => match event.as_ref() {
-                AgentEvent::ToolCallStarted { name, .. } => vec![format!("  \u{21b3} {name}")],
-                AgentEvent::Warned { message } => vec![format!("  \u{21b3} warning: {message}")],
-                _ => Vec::new(),
-            },
         }
     }
 
@@ -282,6 +281,11 @@ impl Printer {
         ];
         if self.peak_prompt_tokens > 0 {
             parts.push(format!("peak ctx {} tok", self.peak_prompt_tokens));
+        }
+        if self.total_cache_read_tokens > 0 && self.total_prompt_tokens > 0 {
+            let pct = (self.total_cache_read_tokens.saturating_mul(100) / self.total_prompt_tokens)
+                .min(100);
+            parts.push(format!("cache {pct}%"));
         }
         if self.total_completion_tokens > 0 {
             let agg_tps = (self.total_predicted_n > 0 && self.total_predicted_ms > 0.0)

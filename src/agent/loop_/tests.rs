@@ -5,7 +5,6 @@ mod compact;
 mod edge;
 mod fake;
 mod hooks;
-mod task_runner;
 mod wave23;
 
 use std::path::PathBuf;
@@ -280,7 +279,7 @@ async fn plain_answer_is_one_turn() {
             json!({"type": "run_started"}),
             json!({"type": "turn_started"}),
             json!({"type": "assistant_text", "delta": "hello there"}),
-            json!({"type": "turn_ended", "stop_reason": "stop", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}),
+            json!({"type": "turn_ended", "stop_reason": "stop", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cache_read_tokens": 0}}),
             json!({"type": "run_ended", "turns": 1}),
         ]
     );
@@ -311,10 +310,10 @@ async fn tool_call_round_trip_replays_in_second_request() {
             json!({"type": "turn_started"}),
             json!({"type": "tool_call_started", "name": "echo", "id": "call_1", "args": {"text": "hi"}}),
             json!({"type": "tool_call_finished", "name": "echo", "id": "call_1", "output": "hi", "is_error": false}),
-            json!({"type": "turn_ended", "stop_reason": "tool_calls", "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28}}),
+            json!({"type": "turn_ended", "stop_reason": "tool_calls", "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28, "cache_read_tokens": 0}}),
             json!({"type": "turn_started"}),
             json!({"type": "assistant_text", "delta": "done"}),
-            json!({"type": "turn_ended", "stop_reason": "stop", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}),
+            json!({"type": "turn_ended", "stop_reason": "stop", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cache_read_tokens": 0}}),
             json!({"type": "run_ended", "turns": 2}),
         ]
     );
@@ -443,11 +442,11 @@ async fn streamed_run_emits_deltas_and_records_the_same_session() {
             json!({"type": "turn_started"}),
             json!({"type": "tool_call_started", "name": "echo", "id": "call_1", "args": {"text": "hi"}}),
             json!({"type": "tool_call_finished", "name": "echo", "id": "call_1", "output": "hi", "is_error": false}),
-            json!({"type": "turn_ended", "stop_reason": "tool_calls", "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28}}),
+            json!({"type": "turn_ended", "stop_reason": "tool_calls", "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28, "cache_read_tokens": 0}}),
             json!({"type": "turn_started"}),
             json!({"type": "assistant_text", "delta": "do"}),
             json!({"type": "assistant_text", "delta": "ne"}),
-            json!({"type": "turn_ended", "stop_reason": "stop", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}),
+            json!({"type": "turn_ended", "stop_reason": "stop", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cache_read_tokens": 0}}),
             json!({"type": "run_ended", "turns": 2}),
         ]
     );

@@ -13,7 +13,7 @@ gg -p "what changed in the last commit?"
 echo "explain this" | gg -p -
 ```
 
-The final answer goes to **stdout**; progress (turn markers, formatted tool-call lines, per-turn token/throughput stats, a final run summary, and a spinner on a terminal) goes to **stderr**. A consumer that closes the pipe early (`… | head -c 5`) ends the run quietly.
+The final answer goes to **stdout**; progress (turn markers, formatted tool-call lines, per-turn token/throughput stats, a final run summary that includes the session's cache hit rate when the provider reports cache reads, and a spinner on a terminal) goes to **stderr**. A consumer that closes the pipe early (`… | head -c 5`) ends the run quietly.
 
 `Ctrl+C` aborts the run: in-flight requests close within about 100 ms, running `bash` commands have their process group killed, and any partial text already streamed is printed to stdout. A second `Ctrl+C` exits immediately with status 130. `SIGTERM` triggers the same graceful abort, flushes output, and exits with status 143.
 
@@ -43,7 +43,6 @@ Stdout carries the session header record first (when a session is kept), then on
 | `run_ended` | `turns` | A clean finish |
 | `run_aborted` | | The run was aborted; emitted after a `warned` |
 | `warned` | `message` | A non-fatal problem (hook failure, compaction, a retried request, a truncated answer and whether it is being continued…) |
-| `subtask` | `task_id`, `event` | A nested run's event (from the `task` tool): `task_id` is the id of the `task` call that started the subagent and `event` is one of the other event types. Interfaces that group by call id render it under that call; the TUI ignores it today, print mode shows the subagent's tool calls and warnings |
 
 A run ends with either `run_ended` or `run_aborted`, so a consumer can tell them apart:
 

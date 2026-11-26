@@ -11,6 +11,7 @@
 - [Output modes and export](guide/modes.md)
 - [Configuration and providers](guide/configuration.md)
 - [Tools](guide/tools.md)
+- [Delegation](guide/delegation.md)
 - [Sessions and compaction](guide/sessions-compaction.md)
 - [Context and skills](guide/context-and-skills.md)
 - [Hooks](guide/hooks.md)

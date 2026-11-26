@@ -192,6 +192,10 @@ pub struct Usage {
     pub reasoning_tokens: Option<u32>,
     #[serde(default)]
     pub completion_tokens_details: Option<CompletionTokensDetails>,
+    /// Cache-read tokens (prefix-cache hits), once the provider reports
+    /// them; folded into `prompt_tokens`, never added on top.
+    #[serde(default)]
+    pub cache_read_tokens: u32,
 }
 
 impl Usage {

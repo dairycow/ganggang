@@ -132,12 +132,15 @@ fn parse_response_maps_blocks_usage_and_stop_reason() {
         (u.prompt_tokens, u.completion_tokens, u.total_tokens),
         (35, 7, 42)
     );
+    // The cache reads stay separated out: prompt is the full request,
+    // cache_read is the part of it served from the prompt cache.
+    assert_eq!(u.cache_read_tokens, 20);
 }
 
 #[test]
 fn assembler_folds_thinking_text_and_split_tool_json() {
     let events = [
-        json!({"type":"message_start","message":{"usage":{"input_tokens":12,"output_tokens":0}}}),
+        json!({"type":"message_start","message":{"usage":{"input_tokens":12,"output_tokens":0,"cache_read_input_tokens":8}}}),
         json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}),
         json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan"}}),
         json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}),
@@ -167,7 +170,13 @@ fn assembler_folds_thinking_text_and_split_tool_json() {
         resp.choices[0].message.tool_calls[0].function.arguments,
         r#"{"command":"ls"}"#
     );
-    assert_eq!(resp.usage.unwrap().total_tokens, 21);
+    // 12 fresh input plus 8 cache reads, plus 9 output.
+    let u = resp.usage.unwrap();
+    assert_eq!(
+        (u.prompt_tokens, u.completion_tokens, u.total_tokens),
+        (20, 9, 29)
+    );
+    assert_eq!(u.cache_read_tokens, 8);
 }
 
 #[tokio::test]

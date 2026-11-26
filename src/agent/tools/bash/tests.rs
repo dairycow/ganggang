@@ -1,7 +1,14 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
+use crate::nested::{DEPTH, MAX_TURNS_CAP, PARENT_MODEL, PARENT_SESSION, TOOL_CAP};
+
+/// A nest with nothing in it: these tests are about commands, not nesting.
+fn no_nest() -> SharedParentEnv {
+    ParentEnv::default().shared()
+}
 
 /// A cancel flag nothing sets — the tests here are about running and
 /// timing out, not about the user stopping a command.
@@ -10,7 +17,7 @@ fn no_cancel() -> Cancel {
 }
 
 async fn run(cmd: &str, timeout: Option<u64>) -> ToolResult {
-    let tool = BashTool::new(std::env::temp_dir(), 30);
+    let tool = BashTool::new(std::env::temp_dir(), 30, no_nest());
     let args = match timeout {
         Some(t) => serde_json::json!({"command": cmd, "timeout_secs": t}),
         None => serde_json::json!({"command": cmd}),
@@ -40,7 +47,7 @@ async fn nonzero_exit_is_an_error_result_with_output() {
 
 #[tokio::test]
 async fn timeout_kills_the_command_and_clamps_to_the_max() {
-    let tool = BashTool::new(std::env::temp_dir(), 1);
+    let tool = BashTool::new(std::env::temp_dir(), 1, no_nest());
     let started = std::time::Instant::now();
     let r = tool
         .execute(
@@ -61,7 +68,7 @@ async fn timeout_kills_the_whole_process_group_not_just_the_shell() {
     let pid = std::process::id();
     let marker = format!("617.{pid}");
     let pattern = format!(r"617\.{pid}([^0-9]|$)");
-    let tool = BashTool::new(std::env::temp_dir(), 1);
+    let tool = BashTool::new(std::env::temp_dir(), 1, no_nest());
     let r = tool
         .execute(
             &serde_json::json!({
@@ -101,7 +108,7 @@ async fn cancellation_kills_the_whole_process_group_and_reports_it() {
     let pid = std::process::id();
     let marker = format!("731.{pid}");
     let pattern = format!(r"731\.{pid}([^0-9]|$)");
-    let tool = BashTool::new(std::env::temp_dir(), 30);
+    let tool = BashTool::new(std::env::temp_dir(), 30, no_nest());
     let flag = Arc::new(AtomicBool::new(false));
     let setter = {
         let flag = flag.clone();
@@ -160,7 +167,7 @@ async fn cancellation_kills_the_whole_process_group_and_reports_it() {
 /// cancellation, never the deadline that never fired.
 #[tokio::test]
 async fn cancellation_beats_a_timeout_that_was_never_reached() {
-    let tool = BashTool::new(std::env::temp_dir(), 300);
+    let tool = BashTool::new(std::env::temp_dir(), 300, no_nest());
     let flag = Arc::new(AtomicBool::new(false));
     let setter = {
         let flag = flag.clone();
@@ -235,7 +242,7 @@ fn interior_non_utf8_bytes_do_not_truncate_head_or_tail() {
 async fn an_endless_stream_is_bounded_and_reports_partial_output() {
     // /dev/zero never EOFs: the capped read loop keeps 10 KiB and
     // discards the rest until the timeout kills the group.
-    let tool = BashTool::new(std::env::temp_dir(), 1);
+    let tool = BashTool::new(std::env::temp_dir(), 1, no_nest());
     let started = std::time::Instant::now();
     let r = tool
         .execute(
@@ -255,7 +262,7 @@ async fn an_endless_stream_is_bounded_and_reports_partial_output() {
 
 #[tokio::test]
 async fn timeout_reports_output_that_arrived_before_the_kill() {
-    let tool = BashTool::new(std::env::temp_dir(), 1);
+    let tool = BashTool::new(std::env::temp_dir(), 1, no_nest());
     let r = tool
         .execute(
             &serde_json::json!({"command": "printf 'before-timeout'; sleep 30"}),
@@ -270,7 +277,7 @@ async fn timeout_reports_output_that_arrived_before_the_kill() {
 
 #[tokio::test]
 async fn cancellation_reports_output_that_arrived_before_the_kill() {
-    let tool = BashTool::new(std::env::temp_dir(), 30);
+    let tool = BashTool::new(std::env::temp_dir(), 30, no_nest());
     let flag = Arc::new(AtomicBool::new(false));
     let setter = {
         let flag = flag.clone();
@@ -413,7 +420,7 @@ fn workaround_hint_separates_inline_perl_edits_from_ordinary_perl() {
 #[tokio::test]
 async fn a_workaround_command_gets_a_hint_line() {
     let cwd = std::env::temp_dir();
-    let tool = BashTool::new(cwd.clone(), 30);
+    let tool = BashTool::new(cwd.clone(), 30, no_nest());
     let cases = [
         ("cat /dev/null", "use native read"),
         ("sed '' /dev/null", "use native read"),
@@ -445,7 +452,7 @@ async fn a_workaround_command_gets_a_hint_line() {
 /// Ordinary shell use gets no hint line at all.
 #[tokio::test]
 async fn an_ordinary_command_gets_no_hint() {
-    let tool = BashTool::new(std::env::temp_dir(), 30);
+    let tool = BashTool::new(std::env::temp_dir(), 30, no_nest());
     for command in [
         "echo hi",
         "cargo test | tail -20",
@@ -461,4 +468,50 @@ async fn an_ordinary_command_gets_no_hint() {
             r.output
         );
     }
+}
+
+#[test]
+fn a_command_carries_the_whole_nest_set_or_removed() {
+    let nest = ParentEnv {
+        session: Some("parent-1".into()),
+        tool_cap: Some(vec!["read".into()]),
+        ..ParentEnv::default()
+    };
+    let mut command = tokio::process::Command::new("bash");
+    apply_env(&mut command, nest.exports());
+    let seen: BTreeMap<String, Option<String>> = command
+        .as_std()
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.map(|value| value.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    assert_eq!(seen[DEPTH], Some("1".into()));
+    assert_eq!(seen[PARENT_SESSION], Some("parent-1".into()));
+    assert_eq!(seen[TOOL_CAP], Some("read".into()));
+    // Nothing to say, so the variable goes: an inherited value must not
+    // stand in for this run's.
+    assert_eq!(seen[PARENT_MODEL], None);
+    assert_eq!(seen[MAX_TURNS_CAP], None);
+}
+
+#[tokio::test]
+async fn a_command_sees_the_nest_of_the_run_that_started_it() {
+    let nest = ParentEnv {
+        session: Some("parent-1".into()),
+        tool_cap: Some(vec!["read".into(), "bash".into()]),
+        max_turns_cap: Some(9),
+        ..ParentEnv::default()
+    };
+    let tool = BashTool::new(std::env::temp_dir(), 30, nest.shared());
+    let r = tool
+        .execute(
+            &serde_json::json!({"command": "printf '%s\\n' \"$GG_NEST_DEPTH|$GG_PARENT_SESSION|$GG_TOOL_CAP|$GG_MAX_TURNS_CAP\""}),
+            &no_cancel(),
+        )
+        .await;
+    assert!(r.output.contains("1|parent-1|read,bash|9"), "{}", r.output);
 }

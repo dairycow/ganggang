@@ -36,6 +36,9 @@ pub struct Footer {
     thinking: Option<String>,
     tokens_in: u64,
     tokens_out: u64,
+    /// The session's cache-read tokens: the `cache NN%` hit rate divides
+    /// this by the prompt total.
+    cache_read_tokens: u64,
     /// Context usage of the last request vs the window, once known.
     context_pct: Option<u8>,
     /// Last turn's decode throughput (tokens/s), once the backend reports
@@ -61,6 +64,7 @@ impl Footer {
             thinking: None,
             tokens_in: 0,
             tokens_out: 0,
+            cache_read_tokens: 0,
             context_pct: None,
             decode_tps: None,
             thinking_pct: None,
@@ -76,9 +80,15 @@ impl Footer {
         self.watch = watch;
     }
 
-    pub fn set_usage(&mut self, tokens_in: u64, tokens_out: u64) {
+    pub fn set_usage(&mut self, tokens_in: u64, tokens_out: u64, cache_read_tokens: u64) {
         self.tokens_in = tokens_in;
         self.tokens_out = tokens_out;
+        self.cache_read_tokens = cache_read_tokens;
+    }
+
+    /// The session's cache-read tokens, for `/session`'s report.
+    pub fn cache_read_tokens(&self) -> u64 {
+        self.cache_read_tokens
     }
 
     /// §15's context %: the last request's prompt+completion tokens
@@ -188,7 +198,8 @@ impl Footer {
     }
 
     /// e.g. `gg …/projects/ganggang qwen3.8 think medium ↑305 ↓81 ctx 4% ⠋ working`,
-    /// and with the throughput figures the backend reports,
+    /// and with the session's cache hit rate, `… ctx 4% cache 87% …`;
+    /// with the throughput figures the backend reports,
     /// `… ↑305 ↓81 ctx 4% 62.4 t/s think 45% ⠋ working`.
     ///
     /// One row of spans, each already carrying the style its role means:
@@ -223,6 +234,13 @@ impl Footer {
                 format!("ctx {pct}%"),
                 Style::new().fg(Self::ctx_colour(palette, pct)),
             ));
+        }
+        // The session's KV-cache hit rate, once the provider reports cache
+        // reads. Absent, the field is simply not there.
+        if self.cache_read_tokens > 0 && self.tokens_in > 0 {
+            let pct = (self.cache_read_tokens.saturating_mul(100) / self.tokens_in).min(100);
+            spans.push(field(muted));
+            spans.push(Span::styled(format!("cache {pct}%"), muted));
         }
         // Throughput, when the backend reports it: Strata does, most
         // cloud providers do not. Absent, the field is simply not there.

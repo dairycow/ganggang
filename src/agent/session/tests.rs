@@ -476,6 +476,7 @@ fn thinking_pct_prefers_usage_reasoning_tokens_then_char_ratio() {
             completion_tokens: 100,
             total_tokens: 110,
             reasoning_tokens: Some(75),
+            ..Default::default()
         }),
         is_error: false,
         reasoning: Some("x".into()),
@@ -503,6 +504,7 @@ fn thinking_pct_prefers_usage_reasoning_tokens_then_char_ratio() {
             completion_tokens: 100,
             total_tokens: 110,
             reasoning_tokens: Some(0),
+            ..Default::default()
         }),
         is_error: false,
         reasoning: Some("123456".into()),

@@ -219,11 +219,12 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "not persisted (--no-session)".into());
             state.push_info(&format!(
-                "session: {path}\nmodel: {}\nentries: {}\ntokens: {} in / {} out",
+                "session: {path}\nmodel: {}\nentries: {}\ntokens: {} in / {} out / {} cache",
                 active_endpoint.label(),
                 state.entries,
                 state.tokens_in,
                 state.tokens_out,
+                state.footer.cache_read_tokens(),
             ));
         }
         Command::Context => {

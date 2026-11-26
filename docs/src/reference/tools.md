@@ -7,14 +7,13 @@ The tool surface the model sees, generated from the registry (advertisement orde
 | Tool | Description |
 |---|---|
 | `read` | Read a text file as 1-based numbered lines (N\| text). Returns up to 400 lines or 24 KiB by default, with truncation noted; an explicit limit caps at 2000 lines. A negative offset reads the last N lines. Lines over 500 characters are cut. |
-| `bash` | Run a shell command in bash; returns merged stdout+stderr and the exit code. Output keeps the start and end when over 10 KiB. Nonzero exits are errors that still include the output; a timeout or abort reports any partial output. |
+| `bash` | Run a shell command in bash; returns merged stdout+stderr and the exit code. Output keeps the start and end when over 10 KiB. Nonzero exits are errors that still include the output; a timeout or abort reports any partial output. A `gg -p` started here is a nested run: it keeps this run's tools, hooks, model and limits. |
 | `edit` | Apply exact-match edits: each old_text must appear exactly once unless the edit sets replace_all: true, and any miss or ambiguity writes nothing. |
 | `write` | Create or overwrite a file. Refuses paths outside the working directory unless force is true; reports bytes written. |
 | `grep` | Search file contents by regex, or literal text with fixed_strings. Respects .gitignore and skips .git, target, node_modules and binaries. Results are grouped by file; supports glob, case_insensitive, context lines and files_only; caps at max_results (default 50) and 16 KiB of output. |
 | `find` | Find files and directories by glob (e.g. "*.rs", "**/*.md"). Respects .gitignore and skips .git, target and node_modules by default (include_ignored: true to include them). Sorted and capped at max_results (default 50). |
 | `ls` | List one directory level: directories (name/) then files with byte size, alphabetical. Not recursive; use find for deeper paths. Hidden entries included; unreadable entries are noted, not fatal. |
 | `outline` | Return a compact structural outline of a file: symbol or heading signatures with 1-based line ranges, so you can jump straight to read(offset, limit). Supports Rust, Python, JS/TS, Go, C/C++/Java/C#, shell, Markdown and TOML. |
-| `task` | Run a subagent: a fresh-context agent with its own session and its own tool registry, in-process. The subagent does the work and the tool returns only its final answer (plus a one-line usage summary). Use it to delegate a bounded piece of work; it is one level deep (subagents cannot spawn subagents) and shares the run's stop request. |
 
 ## `read`
 
@@ -28,7 +27,7 @@ Read a text file as 1-based numbered lines (N| text). Returns up to 400 lines or
 
 ## `bash`
 
-Run a shell command in bash; returns merged stdout+stderr and the exit code. Output keeps the start and end when over 10 KiB. Nonzero exits are errors that still include the output; a timeout or abort reports any partial output.
+Run a shell command in bash; returns merged stdout+stderr and the exit code. Output keeps the start and end when over 10 KiB. Nonzero exits are errors that still include the output; a timeout or abort reports any partial output. A `gg -p` started here is a nested run: it keeps this run's tools, hooks, model and limits.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -96,14 +95,3 @@ Return a compact structural outline of a file: symbol or heading signatures with
 |---|---|---|---|
 | `max_entries` | integer | no | Maximum entries to return (default 200, max 500) |
 | `path` | string | yes | File path relative to the working directory, absolute, or starting with ~ |
-
-## `task`
-
-Run a subagent: a fresh-context agent with its own session and its own tool registry, in-process. The subagent does the work and the tool returns only its final answer (plus a one-line usage summary). Use it to delegate a bounded piece of work; it is one level deep (subagents cannot spawn subagents) and shares the run's stop request.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `max_turns` | integer | no | Optional turn budget for the subagent; can only lower the run's max_turns, never raise it (default: the run's max_turns) |
-| `model` | string | no | Optional provider/model to run the subagent on (default: the run's model) |
-| `prompt` | string | yes | What the subagent should do, self-contained: it starts with a fresh context |
-| `tools` | array of string | no | Optional tool allowlist for the subagent; a subset of the run's tool set only (default: the run's tool set) |

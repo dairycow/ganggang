@@ -1,6 +1,6 @@
 # ganggang
 
-A small, sharp agentic harness in Rust. One agent loop, nine tools, and a terminal UI, modelled on [pi](https://github.com/earendil-works/pi).
+A small, sharp agentic harness in Rust. One agent loop, eight tools, and a terminal UI, modelled on [pi](https://github.com/earendil-works/pi).
 
 **[Read the user guide](https://dairycow.github.io/ganggang/)**
 
@@ -32,6 +32,7 @@ curl -s 127.0.0.1:8080/health
 - **Agent loop**: request, tool calls, results, repeat until the model answers. Read-only tool calls in a contiguous run dispatch concurrently, responses stream, and `--max-turns` caps the run. A truncated answer is kept and continued at most 3 times. Esc (or Ctrl+C) aborts the run promptly.
 - **Tools**: `read`, `bash`, `edit`, `write`, plus `grep`, `find`, `ls` and `outline` for search and file structure. Every truncation is visible in the output, and tool failures are returned to the model as values rather than crashing the run.
 - **Skills**: drop an Agent Skills `SKILL.md` directory into `~/.agents/skills/` or `.agents/skills/`. Names and descriptions are advertised in the system prompt; the model reads the instructions when a task matches. `/skill <name>` forces one (arguments expand `@file` mentions).
+- **Delegation**: a `bash` command can start a headless `gg -p` subagent. Nested runs keep the parent's tools, hooks, model and limits, and record the parent in their session. The repository's `delegate` skill wraps the pattern.
 - **Hooks**: `~/.gg/hooks.toml` runs one-shot `pre_tool`, `post_tool` and `run_end` shell commands with JSON on stdin; a `pre_tool` hook may deny. Hook failures log a warning and do not abort the run. `/hooks` lists; `--no-hooks` skips.
 - **`@file` mentions**: `@src/main.rs` in the editor attaches the file's content to your message (text files, visible 50 KiB cap); `user@host` stays literal.
 - **Context files**: `~/.gg/AGENTS.md` plus `AGENTS.md` from the repo root to the cwd are loaded into the system prompt.
@@ -51,7 +52,7 @@ max_tokens = 16384
 bash_timeout_secs = 30
 max_retries = 3           # extra attempts on a transient transport failure
 request_timeout_secs = 600  # whole-response timeout (a stream included)
-tools = ["read", "bash", "edit", "write", "grep", "find", "ls", "outline", "task"]
+tools = ["read", "bash", "edit", "write", "grep", "find", "ls", "outline"]
 
 [providers.strata]
 base_url = "http://127.0.0.1:8080/v1"

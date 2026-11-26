@@ -340,6 +340,7 @@ fn smart_tool_formatting_and_turn_telemetry_render_cleanly() {
                     completion_tokens: 80,
                     total_tokens: 1280,
                     reasoning_tokens: Some(40),
+                    ..Default::default()
                 }),
                 timings: Some(crate::llm::types::Timings {
                     predicted_per_second: Some(62.4),
@@ -387,6 +388,7 @@ fn aborted_summary_and_malformed_tool_args_render_cleanly() {
                     completion_tokens: 100,
                     total_tokens: 600,
                     reasoning_tokens: Some(20),
+                    ..Default::default()
                 }),
                 timings: Some(crate::llm::types::Timings {
                     predicted_n: Some(100),
@@ -402,5 +404,40 @@ fn aborted_summary_and_malformed_tool_args_render_cleanly() {
     assert_eq!(
         lines.last().unwrap(),
         "── aborted after 1 turn(s) · 1 tool(s) (1 err) · peak ctx 500 tok · gen 100 tok (50.0 tok/s) · think 20% ──"
+    );
+}
+
+/// The run summary carries the session's cache hit rate once the
+/// provider reports cache reads: `cache NN%` between the peak context
+/// and the generation figures, over the whole run's prompt total.
+#[test]
+fn the_run_summary_carries_the_cache_hit_rate() {
+    let turn = |cache_read: u32| AgentEvent::TurnEnded {
+        stop_reason: "stop".into(),
+        usage: Some(crate::agent::session::Usage {
+            prompt_tokens: 1000,
+            completion_tokens: 50,
+            total_tokens: 1050,
+            cache_read_tokens: cache_read,
+            ..Default::default()
+        }),
+        timings: None,
+        thinking_pct: None,
+    };
+    let mut p = Printer::new().with_spinner(false);
+    let lines = render(
+        &mut p,
+        vec![
+            AgentEvent::TurnStarted,
+            turn(800),
+            AgentEvent::TurnStarted,
+            turn(950),
+            AgentEvent::RunEnded { turns: 2 },
+        ],
+    );
+    // 1750 of the 2000 prompt tokens came from the cache.
+    assert_eq!(
+        lines.last().unwrap(),
+        "── done: 2 turn(s) · 0 tool(s) · peak ctx 1000 tok · cache 87% · gen 100 tok ──"
     );
 }

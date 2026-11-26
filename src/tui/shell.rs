@@ -44,8 +44,17 @@ pub(super) async fn run_shell(command: &str, cwd: &std::path::Path) -> (String, 
     // silently kill the next `!` command. Bounded by the timeout instead.
     let cancel = Cancel::none();
     let timeout = std::time::Duration::from_secs(SHELL_TIMEOUT_SECS);
-    match crate::agent::tools::bash::run_bash(command, cwd, timeout, SHELL_OUTPUT_CAP, &cancel)
-        .await
+    // No nest: a `!` line is the user's own command, and a `gg` it starts
+    // is theirs to run, not this run's to clamp or link.
+    match crate::agent::tools::bash::run_bash(
+        command,
+        cwd,
+        timeout,
+        SHELL_OUTPUT_CAP,
+        &cancel,
+        None,
+    )
+    .await
     {
         BashOutcome::Done { output, status } => (output, status.code()),
         BashOutcome::Cancelled { output } => (

@@ -66,6 +66,9 @@ pub struct Agent {
     /// User-level hooks (§22). Loaded once per process; a run consults them
     /// at the tool and run boundaries.
     pub(super) hooks: hooks::Hooks,
+    /// The nest the run's `bash` tool hands its commands, when the boot
+    /// built one; `None` when tools were assembled without one.
+    pub(super) nest: Option<crate::nested::SharedParentEnv>,
 }
 
 impl Agent {
@@ -110,6 +113,7 @@ impl Agent {
             replay_reasoning: session::ReplayReasoning::Never,
             session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
             hooks,
+            nest: None,
         }
     }
 
@@ -133,6 +137,13 @@ impl Agent {
         self
     }
 
+    /// Hold the nest the `bash` tool already runs with, so a later model
+    /// switch reaches the nested runs the tool starts.
+    pub fn with_parent_env(mut self, nest: crate::nested::SharedParentEnv) -> Self {
+        self.nest = Some(nest);
+        self
+    }
+
     pub fn switch_endpoint(&mut self, endpoint: &crate::config::Endpoint) -> anyhow::Result<()> {
         // The retry budget and the request timeout are the run's, not the
         // endpoint's: carry both onto the fresh client rather than falling
@@ -148,6 +159,11 @@ impl Agent {
         self.context_window = endpoint.context_window;
         self.replay_reasoning = endpoint.replay_reasoning;
         self.compact_threshold_tokens = endpoint.compact_threshold_tokens;
+        // A nested run defaults to the run's current model, so the nest
+        // follows the switch as the client does.
+        if let Some(nest) = &self.nest {
+            crate::nested::set_model(nest, endpoint.label());
+        }
         Ok(())
     }
 
@@ -214,12 +230,6 @@ impl Agent {
             Some(store) => store.materialize(),
             None => Ok(()),
         }
-    }
-
-    /// The session id the hooks and the `task` summary report, or `None`
-    /// when the run keeps no session (`--no-session`).
-    pub fn store_id(&self) -> Option<&str> {
-        self.store.as_ref().map(|store| store.id())
     }
 
     /// The session's header record — the line JSON mode echoes before

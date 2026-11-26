@@ -648,7 +648,7 @@ fn the_selection_stops_at_the_last_drawn_row_on_short_terminals() {
 
 #[test]
 fn usage_totals_sum_assistant_entries_only() {
-    let entry = |usage: Option<u32>| Entry::Message {
+    let entry = |prompt: u32, cache: u32| Entry::Message {
         id: "e".into(),
         parent_id: None,
         timestamp: "t".into(),
@@ -657,10 +657,11 @@ fn usage_totals_sum_assistant_entries_only() {
             content: None,
             tool_calls: Vec::new(),
             tool_call_id: None,
-            usage: usage.map(|total| crate::agent::session::Usage {
-                prompt_tokens: total,
+            usage: Some(crate::agent::session::Usage {
+                prompt_tokens: prompt,
                 completion_tokens: 1,
-                total_tokens: total + 1,
+                total_tokens: prompt + 1,
+                cache_read_tokens: cache,
                 ..Default::default()
             }),
             is_error: false,
@@ -668,7 +669,7 @@ fn usage_totals_sum_assistant_entries_only() {
         },
     };
     let entries = vec![
-        entry(Some(100)),
+        entry(100, 60),
         Entry::Message {
             id: "u".into(),
             parent_id: None,
@@ -682,16 +683,17 @@ fn usage_totals_sum_assistant_entries_only() {
                     prompt_tokens: 999,
                     completion_tokens: 999,
                     total_tokens: 999,
+                    cache_read_tokens: 999,
                     ..Default::default()
                 }), // a provider that stamps usage on a user message
                 is_error: false,
                 reasoning: None,
             },
         },
-        entry(Some(50)),
+        entry(50, 25),
     ];
-    // Only the two assistant entries count.
-    assert_eq!(usage_totals(&entries), (150, 2));
+    // Only the two assistant entries count, cache included.
+    assert_eq!(usage_totals(&entries), (150, 2, 85));
 }
 
 #[test]
@@ -1682,6 +1684,7 @@ async fn task_events_fold_into_the_view() {
         UiEvent::RunComplete {
             tokens_in: 305,
             tokens_out: 81,
+            cache_read_tokens: 250,
             context_tokens: 13_108,
             entries: 3,
         },
@@ -1695,6 +1698,8 @@ async fn task_events_fold_into_the_view() {
     );
     assert!(state.footer.render().contains("↑305 ↓81"));
     assert!(state.footer.render().contains("ctx 10%"));
+    // 250 of the 305 prompt tokens came from the cache.
+    assert!(state.footer.render().contains("cache 81%"));
     assert!(!state.busy, "the run is over");
 
     // A `!!` line is shown and nothing goes to the model.

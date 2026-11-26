@@ -18,13 +18,10 @@ fn nothing_set_leaves_defaults() {
 #[test]
 fn the_default_allowlist_names_every_registered_tool() {
     // The allowlist, hook validation, and the registry share one canonical
-    // name list (`agent::tools::NAMES`); registration is pinned to it. The
-    // default allowlist adds `task` on top: `build_agent` registers it
-    // after the default registry, so it is not in `NAMES` itself.
+    // name list (`agent::tools::NAMES`); registration is pinned to it.
     let expected: Vec<String> = crate::agent::tools::NAMES
         .iter()
         .map(|name| name.to_string())
-        .chain(std::iter::once("task".to_string()))
         .collect();
     assert_eq!(Config::default().tools, expected);
 }

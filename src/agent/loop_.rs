@@ -89,43 +89,10 @@ impl Agent {
         input: String,
         events: &mut Sender<AgentEvent>,
     ) -> anyhow::Result<()> {
-        self.run_inner(input, events, true).await
-    }
-
-    /// Entry point for a nested run that shares the parent run's stop flag
-    /// (the `task` tool hands the parent's `Arc<AtomicBool>` to the child
-    /// agent): the flag is owned and cleared by the top-level run, so this
-    /// entry point never clears it. A stop latched between the parent's
-    /// last abort check and the child's start is therefore honored at the
-    /// child's first check instead of being erased, and the child ends with
-    /// the abort shape without asking the model at all.
-    pub async fn run_nested(
-        &mut self,
-        input: String,
-        events: &mut Sender<AgentEvent>,
-    ) -> anyhow::Result<()> {
-        self.run_inner(input, events, false).await
-    }
-
-    /// The shared body of [`Self::run`] and [`Self::run_nested`]: the same turn loop,
-    /// abort checks, and `emit_abort` behaviour. `reset_abort` clears the
-    /// stop flag on entry so a latch left by an earlier run cannot
-    /// phantom-abort this one; a nested run passes `false` because its
-    /// flag belongs to the parent.
-    async fn run_inner(
-        &mut self,
-        input: String,
-        events: &mut Sender<AgentEvent>,
-        reset_abort: bool,
-    ) -> anyhow::Result<()> {
-        // Every top-level run starts with a clean stop-request state: a
-        // flag latched by an earlier run (or an interface path that forgot
-        // to reset it) would phantom-abort this one between tool calls.
-        // A nested run (`reset_abort: false`) shares its parent's flag and
-        // leaves it alone.
-        if reset_abort {
-            self.abort.store(false, Ordering::Release);
-        }
+        // Every run starts with a clean stop-request state: a flag latched
+        // by an earlier run (or an interface path that forgot to reset it)
+        // would phantom-abort this one between tool calls.
+        self.abort.store(false, Ordering::Release);
         // The tool-facing view of that same flag: one handle for every call
         // this run dispatches, so a running tool notices the stop request
         // instead of only being skipped between calls.

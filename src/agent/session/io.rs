@@ -40,8 +40,8 @@ pub struct SessionHeader {
     pub timestamp: String,
     pub cwd: String,
     pub model: String,
-    /// The session that spawned this one (`task` tool subagents); absent
-    /// for a top-level run. Optional so older files load unchanged.
+    /// The session that started this one (a nested run); absent for a
+    /// top-level run. Optional so older files load unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
 }
@@ -165,7 +165,7 @@ impl SessionStore {
         &self.id
     }
 
-    /// Link this session to the one that spawned it (`task` subagents).
+    /// Link this session to the one that started it (a nested run).
     /// Applies to a fresh store before its first append: the header is
     /// re-serialized in memory and the file has not materialized yet, so
     /// no written line needs rewriting. The precondition is enforced:
