@@ -9,7 +9,10 @@
 //! command does; `stop: <id>` kills one.
 //!
 //! A job lives as long as the tool: when the table is dropped, every job
-//! still running goes down with it, whole process group included.
+//! still running goes down with it, whole process group included. The same
+//! kill rides along on an exit that skips destructors
+//! ([`kill_jobs_at_exit`]), so a kept job does not outlive the process
+//! either.
 
 use std::path::Path;
 use std::process::ExitStatus;
@@ -180,8 +183,10 @@ impl Jobs {
         }
     }
 
-    /// Keep a job still running and give it its number.
+    /// Keep a job still running and give it its number. The exit registry
+    /// gets a handle too, so an exit that skips [`Drop`] can still kill it.
     fn keep(&self, job: Arc<Job>) -> u64 {
+        register_for_exit(&job);
         self.with(|jobs| {
             jobs.push(job);
             jobs.len() as u64
@@ -265,23 +270,63 @@ impl Job {
     }
 }
 
+/// Every job this process has kept, so that an exit which runs no
+/// destructors can still kill one. Entries whose command has settled are
+/// pruned whenever a new job arrives; the kill itself re-checks every
+/// entry, so a stale one is skipped rather than trusted.
+static KEPT_JOBS: Mutex<Vec<Arc<Job>>> = Mutex::new(Vec::new());
+
+/// The blocking form of the deadline kill over `jobs`: every job whose
+/// command has not settled and whose shell is still alive goes down with
+/// its whole process group. Answers with the number of groups it sent a
+/// kill to.
+fn kill_live_groups(jobs: &[Arc<Job>]) -> usize {
+    let mut killed = 0;
+    for job in jobs
+        .iter()
+        .filter(|job| job.settled.borrow().is_none() && job.shell_alive())
+    {
+        if let Some(pgid) = job.pgid {
+            let _ = std::process::Command::new("kill")
+                .args(["-9", &format!("-{pgid}")])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            killed += 1;
+        }
+    }
+    killed
+}
+
+/// Add a kept job to [`KEPT_JOBS`].
+fn register_for_exit(job: &Arc<Job>) {
+    let mut kept = match KEPT_JOBS.lock() {
+        Ok(kept) => kept,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    kept.retain(|kept| kept.settled.borrow().is_none());
+    kept.push(Arc::clone(job));
+}
+
+/// Kill every kept job still running, group included, and forget them all.
+/// `process::exit` runs no destructors, so the exit paths in `main` call
+/// this where [`Drop`] would never run; a normal exit needs it not.
+pub(crate) fn kill_jobs_at_exit() -> usize {
+    let mut kept = match KEPT_JOBS.lock() {
+        Ok(kept) => kept,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let killed = kill_live_groups(&kept);
+    kept.clear();
+    killed
+}
+
 impl Drop for Jobs {
     /// A job outlives its calls, not the tool. Nothing can be awaited here,
     /// so this is the blocking form of the group kill every deadline uses.
     fn drop(&mut self) {
         self.with(|jobs| {
-            for job in jobs
-                .iter()
-                .filter(|job| job.settled.borrow().is_none() && job.shell_alive())
-            {
-                if let Some(pgid) = job.pgid {
-                    let _ = std::process::Command::new("kill")
-                        .args(["-9", &format!("-{pgid}")])
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status();
-                }
-            }
+            kill_live_groups(jobs);
         });
     }
 }
