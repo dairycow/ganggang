@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use ratatui::text::{Line as UiLine, Span};
 
-use super::suggest::{Suggestion, suggestion_row, take_chars};
+use super::suggest::{ModelChoice, Suggestion, suggestion_row, take_chars};
 use super::theme::Palette;
 use crate::agent::session::io::SessionFile;
 
@@ -23,6 +23,7 @@ pub(in crate::tui) mod tests;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum List {
     Sessions,
+    Models,
 }
 
 /// The session listing a `/session` list is built from: the last scan's
@@ -73,15 +74,22 @@ pub struct Trigger {
     pub filter: String,
 }
 
-/// `text`'s first word is `/session`: the list it opens, with the rest of
-/// the line, trimmed, as its filter. Nothing else is a trigger: `/sessionx`
-/// and a plain prompt open nothing.
+/// `text`'s first word is `/session` or `/model`: the list it opens, with
+/// the rest of the line, trimmed, as its filter. Nothing else is a
+/// trigger: `/sessionx`, `/modelx` and a plain prompt open nothing.
 pub(in crate::tui) fn trigger(text: &str) -> Option<Trigger> {
     let (head, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
-    (head == "/session").then(|| Trigger {
-        list: List::Sessions,
-        filter: rest.trim().to_string(),
-    })
+    match head {
+        "/session" => Some(Trigger {
+            list: List::Sessions,
+            filter: rest.trim().to_string(),
+        }),
+        "/model" => Some(Trigger {
+            list: List::Models,
+            filter: rest.trim().to_string(),
+        }),
+        _ => None,
+    }
 }
 
 /// The one-line actions the session list's rows act on, beside the
@@ -122,7 +130,33 @@ pub fn action_row(action: Action) -> Suggestion {
     }
 }
 
-/// One row of the list.
+/// One model row of the `/model` list, as the popup's row builders draw
+/// it: the `provider/model` label, a `/model provider/model` completion
+/// (no trailing space: the argument IS the completion), and the context
+/// window, discovery status, key state and active mark in the
+/// description.
+pub fn model_row(m: &ModelChoice, active_label: &str) -> Suggestion {
+    let label = format!("{}/{}", m.provider, m.model);
+    let mut description = format!("ctx {}k", m.context_window / 1000);
+    if let Some(status) = &m.status {
+        description.push_str(&format!(" · {status}"));
+    }
+    if m.needs_key && !m.has_key {
+        description.push_str(" · no key");
+    }
+    if label == active_label {
+        description.push_str(" · active");
+    }
+    Suggestion {
+        label,
+        completion: format!("/model {}/{}", m.provider, m.model),
+        description,
+    }
+}
+
+/// One row of the list, with its own text a filter has to appear in.
+/// The session rows' is their [`SessionRow::haystack`]; the action
+/// rows' is their label; a model row's is its label and description.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum Row {
@@ -131,6 +165,12 @@ pub enum Row {
     /// An action row, beside the sessions: it shows above them while a
     /// filter is typed, and its search text is its label.
     Action(Action),
+    /// A model row, as the `/model` panel draws it: the suggestion as
+    /// the popup's row builders draw it, and the row's search text.
+    Model {
+        suggestion: Suggestion,
+        search: String,
+    },
 }
 
 impl Row {
@@ -139,6 +179,19 @@ impl Row {
         match self {
             Row::Session(row) => &row.haystack,
             Row::Action(action) => action.label(),
+            Row::Model { search, .. } => search,
+        }
+    }
+
+    /// The row's first string: the `provider/model` of a model row, the
+    /// action's label, `None` for a session (its many strings have no
+    /// single first one). What the `/model` list's highlight is kept on,
+    /// across a changed listing.
+    pub fn label(&self) -> Option<&str> {
+        match self {
+            Row::Model { suggestion, .. } => Some(&suggestion.label),
+            Row::Action(action) => Some(action.label()),
+            Row::Session(_) => None,
         }
     }
 
@@ -147,6 +200,7 @@ impl Row {
         match self {
             Row::Session(row) => row_line(palette, row, selected, width),
             Row::Action(action) => suggestion_row(palette, &action_row(*action), selected, width),
+            Row::Model { suggestion, .. } => suggestion_row(palette, suggestion, selected, width),
         }
     }
 
@@ -156,16 +210,10 @@ impl Row {
         match (self, other) {
             (Row::Session(a), Row::Session(b)) => a.session.path == b.session.path,
             (Row::Action(a), Row::Action(b)) => a == b,
+            (Row::Model { suggestion: a, .. }, Row::Model { suggestion: b, .. }) => {
+                a.label == b.label
+            }
             _ => false,
-        }
-    }
-
-    /// The session the row was built from; `None` on an action row.
-    #[allow(dead_code)]
-    pub fn session(&self) -> Option<&SessionFile> {
-        match self {
-            Row::Session(row) => Some(&row.session),
-            Row::Action(_) => None,
         }
     }
 }
@@ -179,6 +227,8 @@ pub enum Pick {
     CopyPath,
     /// Show the current session's path, model, entries and tokens.
     Info,
+    /// Run the highlighted row's command: `/model provider/model`.
+    Command(String),
 }
 
 impl PartialEq for Pick {
@@ -208,13 +258,17 @@ pub struct Picker {
     /// when the list closes. `None` until one fails, and cleared by a
     /// scope change or a changed filter, which are a new list.
     pub error: Option<String>,
-    /// This directory's sessions, newest first.
+    /// This directory's sessions, newest first. The `/model` list's
+    /// rows are stored as [`Row`]s in their own place: here is empty.
     here: Vec<SessionRow>,
     /// Every directory's sessions, newest first, this directory's
-    /// included.
+    /// included. Empty for the `/model` list.
     everywhere: Vec<SessionRow>,
     /// Whether the list shows every directory's sessions.
     all_directories: bool,
+    /// The `/model` list's rows, in the state's order, as its rows are
+    /// built: `Row::Model`s. Empty for the session list.
+    model_rows: Vec<Row>,
 }
 
 impl Picker {
@@ -239,6 +293,22 @@ impl Picker {
             filter: String::new(),
             error: None,
             list: List::Sessions,
+            model_rows: Vec::new(),
+        }
+    }
+
+    /// The `/model` list over its `rows`: no session rows, the first row
+    /// highlighted, no filter, no error.
+    pub fn for_models(rows: Vec<Row>) -> Self {
+        Self {
+            here: Vec::new(),
+            everywhere: Vec::new(),
+            all_directories: true,
+            selected: 0,
+            filter: String::new(),
+            error: None,
+            list: List::Models,
+            model_rows: rows,
         }
     }
 
@@ -252,10 +322,18 @@ impl Picker {
             filter: String::new(),
             error: None,
             list: List::Sessions,
+            model_rows: Vec::new(),
         }
     }
 
-    /// The session rows in view, in listing order.
+    /// The `/model` list's rows in view, in the state's order; empty
+    /// for the session list.
+    pub fn model_rows(&self) -> &[Row] {
+        &self.model_rows
+    }
+
+    /// The session rows in view, in listing order. Empty for the
+    /// `/model` list.
     pub fn rows(&self) -> &[SessionRow] {
         if self.all_directories {
             &self.everywhere
@@ -328,31 +406,41 @@ pub(in crate::tui) fn error_row(palette: &Palette, error: &str, width: usize) ->
     ))
 }
 
+/// What the hint row says of the list's own keys, after "type filters":
+/// the session list's `Tab` (which scope it switches to) and its `Enter`,
+/// or the `Enter` then the `Tab` of a list whose `Tab` completes the row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::tui) enum HintKeys {
+    Sessions { every_directory: bool },
+    Complete { enter: &'static str },
+}
+
 /// The panel's last row: how to drive the list, and where the highlight
-/// stands (`at` is `Some((selected, total))` only when the list is
-/// longer than the panel). `scope`: `Some(true)` when every directory's
-/// sessions show (the hint offers this directory's), `Some(false)` for
-/// this directory's (it offers every directory's), `None` for a list with
-/// no scope key. The counter stands right after the move keys it
-/// describes, not at the end: the keys and the scope survive a narrow
-/// row, where the tail is what gets cut.
+/// stands (`at` is `Some((selected, total))` only when the list is longer
+/// than the panel). The counter stands right after the move keys it
+/// describes, not at the end: the keys survive a narrow row, where the
+/// tail is what gets cut.
 pub(in crate::tui) fn hint_row(
     palette: &Palette,
     width: usize,
-    scope: Option<bool>,
+    keys: HintKeys,
     at: Option<(usize, usize)>,
 ) -> UiLine<'static> {
-    let scope = match scope {
-        Some(true) => "Tab: this directory",
-        Some(false) => "Tab: all directories",
-        None => "Tab: complete",
+    let own = match keys {
+        HintKeys::Sessions { every_directory } => {
+            let scope = if every_directory {
+                "this directory"
+            } else {
+                "all directories"
+            };
+            format!("Tab: {scope} · Enter picks")
+        }
+        HintKeys::Complete { enter } => format!("{enter} · Tab completes"),
     };
     let mut hint = String::from(" ↑↓ move");
     if let Some((selected, total)) = at {
         hint.push_str(&format!(" {}/{}", selected + 1, total));
     }
-    hint.push_str(&format!(
-        " · type filters · {scope} · Enter picks · Esc clears"
-    ));
+    hint.push_str(&format!(" · type filters · {own} · Esc clears"));
     UiLine::from(Span::styled(take_chars(&hint, width), palette.popup_hint()))
 }

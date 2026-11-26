@@ -14,13 +14,8 @@ use ratatui::text::{Line as UiLine, Span};
 
 use super::theme::Palette;
 
-/// Rows the popup shows at most. Eleven is the whole built-in set (the
-/// merged set includes `/hooks`, §22, `/model`, `/think`, and `/reload`);
-/// skills flow in as the prefix narrows.
-const MAX_ROWS: usize = 11;
-
-/// One model row the `/model` popup lists from: the catalog's row, minus
-/// what the popup does not show (`api`), so the TUI never names the
+/// One model row the `/model` list and popup list from: the catalog's
+/// row, minus what they do not show (`api`), so the TUI never names the
 /// transport directly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelChoice {
@@ -89,30 +84,17 @@ pub(crate) const BUILTINS: &[(&str, &str, &str)] = &[
 ];
 
 /// The popup is live while the composer holds a bare command word (a
-/// leading `/` and no whitespace yet), or `/model ` plus a filter word,
-/// which completes the argument in place. Everything else closes it:
+/// leading `/` and no whitespace yet). Everything else closes it:
 /// arguments to other commands are typed with the popup gone, and so is
 /// everything that is not a command.
 pub fn active(text: &str) -> bool {
-    if text.starts_with('/') && !text.chars().any(char::is_whitespace) {
-        return true;
-    }
-    let Some(rest) = text.strip_prefix("/model ") else {
-        return false;
-    };
-    !rest.chars().any(char::is_whitespace)
+    text.starts_with('/') && !text.chars().any(char::is_whitespace)
 }
 
 /// The suggestions for the composer's current text, in catalog order:
-/// built-ins, then (once `/skill:` is typed) per-skill rows, or (while
-/// `/model` or `/model <filter>` is typed) the model rows. Empty when the
-/// popup should not show.
-pub fn suggestions(
-    text: &str,
-    skills: &[Skill],
-    models: &[ModelChoice],
-    active_label: &str,
-) -> Vec<Suggestion> {
+/// built-ins, then (once `/skill:` is typed) per-skill rows. Empty when
+/// the popup should not show.
+pub fn suggestions(text: &str, skills: &[Skill]) -> Vec<Suggestion> {
     if !active(text) {
         return Vec::new();
     }
@@ -136,34 +118,6 @@ pub fn suggestions(
                 });
             }
         }
-        out.truncate(MAX_ROWS);
-        return out;
-    }
-    if text == "/model" {
-        // The bare command lists the built-in row (no argument yet) and
-        // then every model row, so Tab on the first row just adds the
-        // space the filter is typed into.
-        out.push(Suggestion {
-            label: "/model [provider/model]".to_string(),
-            completion: "/model ".to_string(),
-            description: "list or switch provider and model".to_string(),
-        });
-        out.extend(models.iter().map(|m| model_row(m, active_label)));
-        out.truncate(MAX_ROWS);
-        return out;
-    }
-    if let Some(filter) = text.strip_prefix("/model ")
-        && !filter.chars().any(char::is_whitespace)
-    {
-        // A filter word: only the matching model rows, in catalog order.
-        let filter = filter.to_lowercase();
-        for m in models {
-            let label = format!("{}/{}", m.provider, m.model);
-            if label.to_lowercase().contains(&filter) {
-                out.push(model_row(m, active_label));
-            }
-        }
-        out.truncate(MAX_ROWS);
         return out;
     }
     for (name, args_hint, description) in BUILTINS {
@@ -183,31 +137,7 @@ pub fn suggestions(
             });
         }
     }
-    out.truncate(MAX_ROWS);
     out
-}
-
-/// One model row: the `provider/model` label, a `/model provider/model`
-/// completion (no trailing space — the argument IS the completion), and
-/// the context window, discovery status, key state and active mark in
-/// the description.
-fn model_row(m: &ModelChoice, active_label: &str) -> Suggestion {
-    let label = format!("{}/{}", m.provider, m.model);
-    let mut description = format!("ctx {}k", m.context_window / 1000);
-    if let Some(status) = &m.status {
-        description.push_str(&format!(" · {status}"));
-    }
-    if m.needs_key && !m.has_key {
-        description.push_str(" · no key");
-    }
-    if label == active_label {
-        description.push_str(" · active");
-    }
-    Suggestion {
-        label,
-        completion: format!("/model {}/{}", m.provider, m.model),
-        description,
-    }
 }
 
 /// One popup row as the terminal sees it: the command first, the

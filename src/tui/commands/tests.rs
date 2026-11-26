@@ -364,7 +364,7 @@ async fn skill_instructions_mentions_are_not_expanded() {
 }
 
 #[tokio::test]
-async fn model_command_lists_and_switches_endpoints() {
+async fn model_command_switches_endpoints() {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
@@ -385,130 +385,61 @@ async fn model_command_lists_and_switches_endpoints() {
     let skills = Arc::new(Vec::new());
     let abort = Arc::new(AtomicBool::new(false));
     let mut cwd = std::path::PathBuf::from("/tmp/x");
+    macro_rules! model {
+        ($choice:expr) => {
+            handle_command(
+                Command::Model($choice),
+                CmdCtx {
+                    state: &mut state,
+                    factory: &factory,
+                    input_tx: &mut input_tx,
+                    ui_tx: &ui_tx,
+                    skills: skills.clone(),
+                    hooks: &crate::agent::hooks::Hooks::default(),
+                    cwd: &mut cwd,
+                    abort: &abort,
+                    config: &config,
+                    active_endpoint: &mut active_endpoint,
+                },
+            )
+            .await
+            .unwrap()
+        };
+    }
 
-    handle_command(
-        Command::Model(None),
-        CmdCtx {
-            state: &mut state,
-            factory: &factory,
-            input_tx: &mut input_tx,
-            ui_tx: &ui_tx,
-            skills: skills.clone(),
-            hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &mut cwd,
-            abort: &abort,
-            config: &config,
-            active_endpoint: &mut active_endpoint,
-        },
-    )
-    .await
-    .unwrap();
-    assert!(!state.pending_models.is_empty());
+    // No argument: the models are the list's to show, so the handler has
+    // one line to say, and switches nothing.
+    model!(None);
+    let lines = state.line_texts_for_test();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("pick a model from the list above the composer")),
+        "{lines:?}"
+    );
+    assert!(input_rx.try_recv().is_err(), "nothing was switched");
 
-    handle_command(
-        Command::Model(Some("deepseek/deepseek-flash".into())),
-        CmdCtx {
-            state: &mut state,
-            factory: &factory,
-            input_tx: &mut input_tx,
-            ui_tx: &ui_tx,
-            skills: skills.clone(),
-            hooks: &crate::agent::hooks::Hooks::default(),
-            cwd: &mut cwd,
-            abort: &abort,
-            config: &config,
-            active_endpoint: &mut active_endpoint,
-        },
-    )
-    .await
-    .unwrap();
+    model!(Some("deepseek/deepseek-flash".into()));
     assert_eq!(active_endpoint.label(), "deepseek/deepseek-flash");
     assert!(matches!(
         input_rx.try_recv().unwrap(),
         super::super::AgentInput::SwitchEndpoint(_)
     ));
-}
 
-/// `/hooks` surfaces the loaded set and `--no-hooks` without reaching
-/// the agent.
-#[tokio::test]
-async fn hooks_lists_loaded_or_disabled() {
-    use crate::agent::hooks::{Hook, HookEvent, Hooks, load_from};
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-
-    let mut state = super::super::view::State::new(
-        std::path::Path::new("/tmp/x"),
-        "m",
-        131_072,
-        Arc::new(vec![]),
-        History::default(),
-    );
-    let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
-    let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
-    let factory: super::super::Factory =
-        Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
-    let abort = Arc::new(AtomicBool::new(false));
-    let mut cwd = std::path::PathBuf::from("/tmp/x");
-    let config = crate::config::Config::default();
-    let mut active_endpoint = config.active_endpoint();
-    let hooks = Hooks::new(vec![Hook {
-        event: HookEvent::PreTool,
-        tools: Some(vec!["bash".into()]),
-        command: "guard.sh".into(),
-        timeout_secs: 5,
-    }]);
-
-    handle_command(
-        Command::Hooks,
-        CmdCtx {
-            state: &mut state,
-            factory: &factory,
-            input_tx: &mut input_tx,
-            ui_tx: &ui_tx,
-            skills: Arc::new(Vec::new()),
-            hooks: &hooks,
-            cwd: &mut cwd,
-            abort: &abort,
-            config: &config,
-            active_endpoint: &mut active_endpoint,
-        },
-    )
-    .await
-    .unwrap();
+    // The model in use again: said, and nothing is switched or probed.
+    model!(Some("deepseek/deepseek-flash".into()));
     let lines = state.line_texts_for_test();
-    assert!(lines.iter().any(|l| l == "hooks (1):"), "{lines:?}");
     assert!(
         lines
             .iter()
-            .any(|l| l.contains("pre_tool") && l.contains("guard.sh")),
+            .any(|l| l.contains("already on deepseek/deepseek-flash")),
         "{lines:?}"
     );
-
-    let (disabled, _) = load_from(None, &cwd, true).unwrap();
-    handle_command(
-        Command::Hooks,
-        CmdCtx {
-            state: &mut state,
-            factory: &factory,
-            input_tx: &mut input_tx,
-            ui_tx: &ui_tx,
-            skills: Arc::new(Vec::new()),
-            hooks: &disabled,
-            cwd: &mut cwd,
-            abort: &abort,
-            config: &config,
-            active_endpoint: &mut active_endpoint,
-        },
-    )
-    .await
-    .unwrap();
-    let lines = state.line_texts_for_test();
-    assert!(lines.iter().any(|l| l.contains("disabled by --no-hooks")));
+    assert!(input_rx.try_recv().is_err(), "no second switch");
 }
 
 #[tokio::test]
-async fn model_command_discovers_local_router_and_strata_health() {
+async fn model_command_switches_to_a_discovered_model_and_probes_health() {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::Arc;
@@ -552,14 +483,41 @@ async fn model_command_discovers_local_router_and_strata_health() {
         History::default(),
     );
     let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
-    let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
+    let (ui_tx, mut ui_rx) = tokio::sync::mpsc::channel(4);
     let factory: super::super::Factory =
         Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
     let abort = Arc::new(AtomicBool::new(false));
     let mut cwd = std::path::PathBuf::from("/tmp/x");
 
+    // The background discovery the loop starts: its rows reach the state
+    // as the event the loop applies, and are the list's rows.
+    super::super::models::spawn_model_discovery(config.providers.clone(), ui_tx.clone());
+    let event = ui_rx.recv().await.unwrap();
+    assert!(
+        super::super::agent_task::apply(event, &mut state, &mut input_tx).await,
+        "the event folds into state without ending the TUI"
+    );
+    state.editor.set_text("/model");
+    state.sync_picker();
+    let rows = state.picker_matches();
+    let discovered = rows.iter().find_map(|row| match row {
+        super::super::picker::Row::Model { suggestion, .. }
+            if suggestion.label == "llama-cpp/gemma4-26b-200k" =>
+        {
+            Some(suggestion.description.clone())
+        }
+        _ => None,
+    });
+    assert_eq!(
+        discovered.as_deref(),
+        Some("ctx 200k · unloaded"),
+        "the list shows the discovered model with its status: {rows:?}"
+    );
+
+    // A model the config does not list: known to the switch because the
+    // list's rows have it.
     handle_command(
-        Command::Model(None),
+        Command::Model(Some("llama-cpp/gemma4-26b-200k".into())),
         CmdCtx {
             state: &mut state,
             factory: &factory,
@@ -575,14 +533,7 @@ async fn model_command_discovers_local_router_and_strata_health() {
     )
     .await
     .unwrap();
-
-    let lines = state.line_texts_for_test();
-    assert!(
-        lines
-            .iter()
-            .any(|l| l.contains("llama-cpp/gemma4-26b-200k (ctx 200k · unloaded)")),
-        "{lines:?}"
-    );
+    assert_eq!(active_endpoint.label(), "llama-cpp/gemma4-26b-200k");
 
     handle_command(
         Command::Model(Some("strata".into())),

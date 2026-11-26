@@ -442,7 +442,7 @@ fn model_choice(
     }
 }
 
-/// `/model <filter>` completes the argument in place: Tab puts the
+/// `/model <filter>` is the list's own text: Tab completes the
 /// highlighted `provider/model` into the composer, no trailing space.
 #[test]
 fn tab_on_a_model_filter_completes_the_argument() {
@@ -458,13 +458,14 @@ fn tab_on_a_model_filter_completes_the_argument() {
         model_choice("openai", "gpt-5", 400_000),
     ]));
     state.editor.set_text("/model gpt");
-    assert!(state.suggest_open(), "the filter keeps the popup open");
+    state.sync_picker();
+    assert!(state.picker_open(), "the filter keeps the list open");
     assert_eq!(
-        state.suggestions().first().map(|s| s.label.as_str()),
-        Some("openai/gpt-5"),
+        state.picker_matches().first().map(|row| row.label()),
+        Some(Some("openai/gpt-5")),
         "the filter narrows to one row"
     );
-    state.complete_suggestion();
+    state.picker_tab();
     assert_eq!(
         state.editor.text(),
         "/model openai/gpt-5",
@@ -472,10 +473,10 @@ fn tab_on_a_model_filter_completes_the_argument() {
     );
 }
 
-/// A late model list (discovery arriving) replaces the rows and resets
-/// the selection, as `set_skills` does.
+/// A late model list (discovery arriving) replaces the list's rows and
+/// keeps the highlight on the model it stood on.
 #[test]
-fn set_models_resets_the_selection() {
+fn set_models_keeps_the_highlight_on_the_same_model() {
     let mut state = State::new(
         std::path::Path::new("/tmp/x"),
         "m",
@@ -483,28 +484,40 @@ fn set_models_resets_the_selection() {
         std::sync::Arc::new(Vec::new()),
         History::default(),
     );
-    state.editor.set_text("/");
-    state.suggest_next();
-    state.suggest_next();
-    assert_eq!(state.suggest_selected_for_test(), 2);
+    state.set_models(std::sync::Arc::new(vec![
+        model_choice("anthropic", "claude-sonnet", 200_000),
+        model_choice("openai", "gpt-5", 400_000),
+    ]));
+    state.editor.set_text("/model");
+    state.sync_picker();
+    state.picker_next();
+    assert_eq!(
+        state.picker.as_ref().map_or(0, |pick| pick.selected),
+        1,
+        "standing on openai/gpt-5"
+    );
     state.set_models(std::sync::Arc::new(vec![model_choice(
         "openai", "gpt-5", 400_000,
     )]));
-    assert_eq!(state.suggest_selected_for_test(), 0, "the selection resets");
-    state.editor.set_text("/model");
+    assert!(state.picker_open(), "the list stays on the new rows");
     assert_eq!(
+        state.picker.as_ref().map_or(0, |pick| pick.selected),
+        0,
+        "the model it stood on, by label"
+    );
+    // And the suggestion popup, built-ins only, is not its:
+    state.editor.set_text("/");
+    assert!(
         state
             .suggestions()
             .iter()
-            .map(|s| s.label.clone())
-            .collect::<Vec<_>>(),
-        vec!["/model [provider/model]", "openai/gpt-5"],
-        "the new rows are listed"
+            .all(|s| !s.label.starts_with("openai")),
+        "no model rows in the popup"
     );
 }
 
 /// The `· active` mark follows the model the session runs on: `set_model`
-/// moves it, so the popup always shows which row is the one in use.
+/// moves it, so the list's rows say which model is in use.
 #[test]
 fn the_active_mark_follows_set_model() {
     let mut state = State::new(
@@ -519,30 +532,30 @@ fn the_active_mark_follows_set_model() {
         model_choice("openai", "gpt-5", 400_000),
     ]));
     state.editor.set_text("/model");
+    state.sync_picker();
     let descriptions = |state: &State| {
         state
-            .suggestions()
+            .picker_matches()
             .iter()
-            .map(|s| s.description.clone())
+            .filter_map(|row| match row {
+                Row::Model { suggestion, .. } => Some(suggestion.description.clone()),
+                _ => None,
+            })
             .collect::<Vec<_>>()
     };
     assert_eq!(
         descriptions(&state),
-        vec![
-            "list or switch provider and model",
-            "ctx 200k · active",
-            "ctx 400k",
-        ],
+        vec!["ctx 200k · active", "ctx 400k"],
         "the boot model is marked"
     );
     state.set_model("openai/gpt-5", 400_000);
+    state.editor.set_text("");
+    state.sync_picker();
+    state.editor.set_text("/model");
+    state.sync_picker();
     assert_eq!(
         descriptions(&state),
-        vec![
-            "list or switch provider and model",
-            "ctx 200k",
-            "ctx 400k · active",
-        ],
+        vec!["ctx 200k", "ctx 400k · active"],
         "the mark moves with set_model"
     );
 }
@@ -940,6 +953,7 @@ fn row_label(row: &Row) -> &str {
             Action::CopyPath => "copy path",
             Action::Info => "info",
         },
+        Row::Model { suggestion, .. } => &suggestion.label,
     }
 }
 
@@ -1038,6 +1052,7 @@ fn enter_takes_the_highlighted_session_and_closes_the_list() {
             Pick::Open(session) => &session.id,
             Pick::CopyPath => "copy path",
             Pick::Info => "info",
+            Pick::Command(_) => "command",
         },
         "uuid-of-00000000",
         "no filter: the listing's first session"
@@ -1065,6 +1080,7 @@ fn enter_takes_the_highlighted_session_and_closes_the_list() {
             Pick::Open(session) => session.id,
             Pick::CopyPath => "copy path".to_string(),
             Pick::Info => "info".to_string(),
+            Pick::Command(_) => "command".to_string(),
         },
         "uuid-of-00000001",
         "the one row a filter keeps is the one that opens"
@@ -1115,30 +1131,23 @@ fn opening_the_list_builds_rows_from_the_listing() {
         preview: Some("first question".into()),
         path: std::path::PathBuf::from("/s/20261125-120000-a1b2c3d4.jsonl"),
     };
-    let mut state = list_on(vec![session], "/session");
+    let mut state = list_on(vec![session.clone()], "/session");
     assert!(state.picker_open());
     assert!(state.popup_open());
     {
         let rows = state.picker_matches();
         assert_eq!(rows.len(), 1);
-        let row = &rows[0];
-        assert_eq!(row.session().unwrap().id, "uuid-of-a1b2c3d4");
-        assert!(
-            matches!(row, Row::Session(row) if row.name == "first question"),
-            "no title: the preview: {row:?}"
-        );
-        assert!(
-            matches!(row, Row::Session(row) if !row.age.is_empty()),
-            "aged, whatever the clock says"
-        );
+        let Row::Session(row) = &rows[0] else {
+            panic!("a session row: {:?}", rows[0]);
+        };
+        assert_eq!(row.id, "a1b2c3d4");
+        assert_eq!(row.name, "first question", "no title: the preview");
+        assert!(!row.age.is_empty(), "aged, whatever the clock says");
     }
     assert_eq!(
-        match state.picker_action().expect("the one row") {
-            Pick::Open(session) => session.id,
-            Pick::CopyPath => "copy path".to_string(),
-            Pick::Info => "info".to_string(),
-        },
-        "uuid-of-a1b2c3d4"
+        state.picker_action(),
+        Some(Pick::Open(session)),
+        "the row's session, to open"
     );
     assert!(
         state.picker_open(),
@@ -1165,21 +1174,18 @@ fn the_cached_listing_is_the_lists_rows() {
             .map(|row| match row {
                 Row::Session(session) => session.id.as_str(),
                 Row::Action(_) => "",
+                Row::Model { suggestion, .. } => suggestion.label.as_str(),
             })
             .collect::<Vec<_>>(),
         ["00000000", "00000001", "00000002", "00000000", "00000001"],
         "the listing's sessions, in its order"
     );
     for (row, session) in rows.iter().zip(sessions.iter()) {
-        assert_eq!(
-            row.session().unwrap().path,
-            session.path,
-            "the row keeps the session"
-        );
-        assert!(
-            matches!(row, Row::Session(row) if !row.age.is_empty()),
-            "aged against now"
-        );
+        let Row::Session(row) = row else {
+            panic!("a session row: {row:?}");
+        };
+        assert_eq!(row.session.path, session.path, "the row keeps the session");
+        assert!(!row.age.is_empty(), "aged against now");
     }
 }
 
@@ -1234,6 +1240,7 @@ fn tab_narrows_the_list_to_this_directory_and_widens_it_back() {
         .map(|row| match row {
             Row::Session(session) => session.project.as_deref().unwrap_or(""),
             Row::Action(_) => "",
+            Row::Model { suggestion, .. } => suggestion.label.as_str(),
         })
         .collect();
     assert_eq!(directories, ["~/repo/.worktrees/wt01"]);

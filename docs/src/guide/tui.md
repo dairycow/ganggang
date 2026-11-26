@@ -8,19 +8,19 @@ If stdin is not a terminal and no prompt is given, `gg` exits with an error; use
 
 | Key | Action |
 |---|---|
-| `Enter` | Send the message; in an open `/session` list, open the highlighted session, or run its `copy path` or `info` row |
+| `Enter` | Send the message; in an open list, act on the highlighted row: open the session or run its `copy path` or `info` row, or switch to the model |
 | `Alt+Enter`, `Ctrl+J` | Newline (`Shift+Enter` too, where the terminal reports modified keys) |
 | `Backspace` | Delete before the cursor |
 | `←` / `→` | Move the cursor |
 | `Ctrl+←` / `Ctrl+→` | Move the cursor by word |
-| `↑` / `↓` | Navigate the `/` suggestion list or the `/session` list while one is open; otherwise recall prompts while the composer is empty or single-line, or move between its lines |
-| `Ctrl+P` / `Ctrl+N` | Recall the previous / next prompt, whatever the composer holds, unless the suggestion list or the `/session` list is open |
+| `↑` / `↓` | Navigate the `/` suggestion list or the `/session` or `/model` list while one is open; otherwise recall prompts while the composer is empty or single-line, or move between its lines |
+| `Ctrl+P` / `Ctrl+N` | Recall the previous / next prompt, whatever the composer holds, unless the suggestion list or the `/session` or `/model` list is open |
 | `Ctrl+A`, `Home` | Start of line |
 | `Ctrl+E`, `End` | End of line |
 | `Ctrl+K` | Kill to end of line |
 | `Ctrl+U` | Kill to start of line |
-| `Tab` | Complete the highlighted `/` suggestion; in the `/session` list, switch between every directory's sessions and the current directory's |
-| `Esc` | Stop the run in flight: an in-flight stream is cut and a running tool is killed; what had arrived is kept. Idle, it clears the line and closes the `/session` list when one is open, and otherwise does nothing |
+| `Tab` | Complete the highlighted `/` suggestion; in the `/session` list, switch between every directory's sessions and the current directory's; in the `/model` list, complete the highlighted `provider/model` |
+| `Esc` | Stop the run in flight: an in-flight stream is cut and a running tool is killed; what had arrived is kept. Idle, it clears the line and closes the open list when one is, and otherwise does nothing |
 | `Ctrl+O` | Expand or collapse tool calls |
 | `Ctrl+T` | Show or hide thinking |
 | `Ctrl+X` | Copy the last answer to the clipboard |
@@ -28,7 +28,7 @@ If stdin is not a terminal and no prompt is given, `gg` exits with an error; use
 | `Ctrl+R` | Rebuild and restart (only in [`--watch`](watch-mode.md) mode) |
 | `PageUp` / `PageDown` | Scroll the transcript (10 rows a page) |
 | Mouse wheel | Scroll the transcript (3 rows a notch) |
-| `Ctrl+C` | Cancel: stop a run in flight, close an open `/session` list and clear the line, clear a typed draft, or, with nothing left to cancel, quit. A second press while a run is stopping quits at once |
+| `Ctrl+C` | Cancel: stop a run in flight, close an open list and clear the line, clear a typed draft, or, with nothing left to cancel, quit. A second press while a run is stopping quits at once |
 
 When you stop a run, the footer shows `stopping…` while active streams close and running tools terminate. Partial output received before stopping stays in the transcript and session file ([Stopping a run](tools.md#stopping-a-run)). Use `/quit` to exit directly without cancelling a draft or run. `SIGTERM` shuts down cleanly.
 
@@ -61,9 +61,9 @@ Assistant answers render a deliberately small markdown subset; your own messages
 
 ## Slash commands
 
-Typing `/` opens a suggestion list above the composer: the built-ins and, once `/skill:` is typed, one row per skill. `↑`/`↓` move the highlight, `Tab` completes, and `Enter` still sends exactly what you typed, except in the `/session` list, where it acts on the highlighted row.
+Typing `/` opens a suggestion list above the composer: the built-ins and, once `/skill:` is typed, one row per skill. `↑`/`↓` move the highlight, `Tab` completes, and `Enter` still sends exactly what you typed, except in the `/session` and `/model` lists, where it acts on the highlighted row.
 
-Typing `/model` lists the models in the same popup: the built-in row first, then one row per model with its context window, any discovery status, whether a key is missing, and the `· active` mark on the model in use. Typing after the space filters the list case-insensitively, and `Tab` completes the highlighted `provider/model` into the command. Live local models (Strata, `llama-server`, Ollama, vLLM) refresh in the background at startup and on `/reload`: their `/v1/models` endpoints are probed off the render loop with short timeouts, so the popup picks up models loaded after the session began without waiting on a down server.
+Typing `/model` opens the model list in the same panel, with one row per model: `provider/model`, its context window, any discovery status, `no key` when its key is missing, and the `· active` mark on the model in use. With nothing typed after the command the active model is highlighted, so `Enter` on a bare `/model` changes nothing (`already on …`). Typing after the command filters the list case-insensitively, and `Enter` switches to the highlighted model; a switch that fails, say over a missing key or an unknown model, keeps the list and shows the error in its last row. `Tab` completes the highlighted `provider/model` into the command. Live local models (Strata, `llama-server`, Ollama, vLLM) refresh in the background at startup and on `/reload`: their `/v1/models` endpoints are probed off the render loop with short timeouts, so the list picks up models loaded after the session began without waiting on a down server.
 
 `/session` opens a session list in the same panel as soon as the command is typed: one row per saved session, from every directory gg has run in, newest first. Each row shows the session's age (`just now`, `5m ago`, `3h ago`, `2d ago`, then the date), the 8-hex id from its file name, its title or first message, and the directory it started in, with `~` for your home directory. The session you are in is not listed. What you type after the command filters the rows: every word has to appear in a row's id, title, first message, model or directory, so a repository's name or a worktree's narrows the list to it. Once a filter is typed, the two action rows `copy path` and `info` sit above the matching sessions: `copy path` copies the current session's `.jsonl` path to the clipboard by the same OSC 52 copy as `Ctrl+X`, so `/session copy` then `Enter` copies the path, and `info` prints the path, model, entry count and token totals. `↑`/`↓` move the highlight, the panel scrolls to follow it, and `Enter` opens the highlighted session or runs the highlighted action row. With nothing to show, because there are no sessions yet or a filter matches no row, the panel stays up and says so. If a session cannot be opened, or a copy fails, the list stays and its panel shows the error. `Esc` and `Ctrl+C` clear the line and close the list without opening anything. The listing is read in the background when gg starts, each time the list opens, and after a session switch. A run started with `--no-session` has no session file: `copy path` there says so instead, and `info` says the session is not persisted. A fresh session's file is written on its first message; until then, `info` says the path is not written yet.
 

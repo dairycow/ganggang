@@ -1,11 +1,11 @@
-//! The session picker's half of [`State`](super::super::State): the
-//! listing cache the rows are built from, whether the list is open and
-//! from what text, which directories and rows it shows, which row is
+//! The list's half of [`State`](super::super::State): the listing cache
+//! the rows are built from, whether the list is open and from what text,
+//! which directories and rows the session list shows, which row is
 //! highlighted, and what its keys do. The rows, the filter and the hint
 //! are [`picker`](crate::tui::picker)'s; the trigger is its.
 
 use crate::agent::session::io::SessionFile;
-use crate::tui::picker::{Action, Pick, Picker, Row, matching, trigger};
+use crate::tui::picker::{Action, List, Pick, Picker, Row, matching, trigger};
 
 impl crate::tui::view::State {
     /// The session list's rows, built from the state's listing cache: the
@@ -39,12 +39,48 @@ impl crate::tui::view::State {
         Picker::new(here, sessions, self.sessions.home.as_deref())
     }
 
-    /// Open the session list from the listing cache, on the trigger's
-    /// filter: not the whole composer text.
-    fn open_picker_from_listing(&mut self) {
-        let mut pick = self.session_list();
-        pick.filter = trigger(self.editor.text()).map_or_else(String::new, |t| t.filter);
+    /// The `/model` list's rows, built from the state's model rows:
+    /// one row per model, in the state's order.
+    pub(crate) fn model_list(&self) -> Picker {
+        let rows = self
+            .models
+            .iter()
+            .map(|m| crate::tui::picker::Row::Model {
+                suggestion: crate::tui::picker::model_row(m, &self.active_model),
+                search: format!("{}/{}", m.provider, m.model).to_lowercase(),
+            })
+            .collect();
+        crate::tui::picker::Picker::for_models(rows)
+    }
+
+    /// Open this trigger's list: the sessions from the listing cache, the
+    /// models from the state's rows; on the trigger's filter.
+    fn open_picker(&mut self) {
+        let Some(trigger) = trigger(self.editor.text()) else {
+            return;
+        };
+        let mut pick = match trigger.list {
+            crate::tui::picker::List::Sessions => self.session_list(),
+            crate::tui::picker::List::Models => self.model_list(),
+        };
+        let filter = trigger.filter.clone();
+        let selected = self.default_row(&trigger, &pick);
+        pick.filter = filter;
+        pick.selected = selected;
         self.picker = Some(pick);
+    }
+
+    /// The list's starting highlight: the active model's row while the
+    /// `/model` list's filter is empty, the first row otherwise.
+    fn default_row(&self, trigger: &crate::tui::picker::Trigger, pick: &Picker) -> usize {
+        if trigger.filter.is_empty() && trigger.list == crate::tui::picker::List::Models {
+            pick.model_rows()
+                .iter()
+                .position(|row| row.label() == Some(self.active_model.as_str()))
+                .unwrap_or(0)
+        } else {
+            0
+        }
     }
 
     /// Whether the list is open.
@@ -57,30 +93,38 @@ impl crate::tui::view::State {
     /// The panel draws one row of its own then, because the transcript,
     /// which the panel covers, would otherwise say nothing newer.
     pub fn session_scope_empty(&self) -> bool {
-        self.picker
-            .as_ref()
-            .is_some_and(|pick| pick.rows().is_empty())
+        self.picker.as_ref().is_some_and(|pick| {
+            if pick.list == List::Sessions {
+                pick.rows().is_empty()
+            } else {
+                pick.model_rows().is_empty()
+            }
+        })
     }
 
-    /// The rows the open list's filter keeps, in listing order: with a
-    /// filter, the matching action rows (`copy path`, then `info`) above
-    /// the matching sessions; with no filter, the sessions alone. Empty
-    /// with the list closed, and when the filter matches nothing. A
-    /// listing is about a hundred rows and this runs once per frame, so
-    /// the kept rows are cloned, not borrowed.
+    /// The rows the open list's filter keeps, in listing order: the
+    /// sessions with, above them, the matching action rows when a filter
+    /// is typed; the models as they stand. Empty with the list closed,
+    /// and when the filter matches nothing. A listing is about a hundred
+    /// rows and this runs once per frame, so the kept rows are cloned,
+    /// not borrowed.
     pub fn picker_matches(&self) -> Vec<Row> {
         let Some(pick) = &self.picker else {
             return Vec::new();
         };
         let mut rows = Vec::new();
-        if !pick.filter.is_empty() {
-            rows.extend(
-                [Action::CopyPath, Action::Info]
-                    .into_iter()
-                    .map(Row::Action),
-            );
+        if pick.list == List::Sessions {
+            if !pick.filter.is_empty() {
+                rows.extend(
+                    [Action::CopyPath, Action::Info]
+                        .into_iter()
+                        .map(Row::Action),
+                );
+            }
+            rows.extend(pick.rows().iter().map(|row| Row::Session(row.clone())));
+        } else {
+            rows.extend(pick.model_rows().iter().cloned());
         }
-        rows.extend(pick.rows().iter().map(|row| Row::Session(row.clone())));
         matching(&rows, &pick.filter).into_iter().cloned().collect()
     }
 
@@ -89,9 +133,44 @@ impl crate::tui::view::State {
         self.picker.as_ref().is_some_and(Picker::all_directories)
     }
 
-    /// Why the open list has no row to show, as its panel's own row says
-    /// it. A run that keeps no sessions, or a missing HOME, is said before
-    /// a scan that is still to come: neither ever brings a listing.
+    /// What the open list's hint row says of its own keys.
+    pub(in crate::tui) fn picker_hint_keys(&self) -> crate::tui::picker::HintKeys {
+        match self.picker.as_ref() {
+            Some(pick) if pick.list == List::Sessions => crate::tui::picker::HintKeys::Sessions {
+                every_directory: self.session_scope_all(),
+            },
+            Some(pick) if pick.list == List::Models => crate::tui::picker::HintKeys::Complete {
+                enter: "Enter switches",
+            },
+            _ => crate::tui::picker::HintKeys::Complete {
+                enter: "Enter opens",
+            },
+        }
+    }
+
+    /// Why the open list has no row to show, as its panel's own row
+    /// says it: the session list's reasons where it is the sessions,
+    /// the model list's where it is the models.
+    pub fn picker_empty_reason(&self) -> String {
+        let Some(pick) = self.picker.as_ref() else {
+            return String::new();
+        };
+        if pick.list == List::Models {
+            let filter = pick.filter.trim();
+            if filter.is_empty() {
+                "no models to pick".to_string()
+            } else {
+                format!("no model matches {filter:?}")
+            }
+        } else {
+            self.session_empty_reason()
+        }
+    }
+
+    /// Why the open session list has no row to show, as its panel's own
+    /// row says it. A run that keeps no sessions, or a missing HOME, is
+    /// said before a scan that is still to come: neither ever brings a
+    /// listing.
     pub fn session_empty_reason(&self) -> String {
         let filter = self.picker.as_ref().map_or("", |pick| pick.filter.trim());
         if self.sessions_disabled {
@@ -230,14 +309,14 @@ impl crate::tui::view::State {
         };
     }
 
-    /// Enter: what the highlighted row does: the session it names, or
-    /// the action row's action. The list stays open, filter and all:
-    /// Enter never discards it, so a failed open leaves the user where
-    /// they were, with the panel's error row saying why. The caller
-    /// closes it once the action is done (an open session closes it of
-    /// its own, through `new_session`); `None` when the list is closed,
-    /// or when the filter keeps no row — which the panel's empty row
-    /// says, so nothing goes to the transcript.
+    /// Enter: what the highlighted row does: the session it names, the
+    /// action row's action, or the model row's command. The list stays
+    /// open, filter and all: Enter never discards it, so a failed pick
+    /// leaves the user where they were, with the panel's error row
+    /// saying why. The caller closes it once the action is done (an open
+    /// session closes it of its own, through `new_session`); `None` when
+    /// the list is closed, or when the filter keeps no row — which the
+    /// panel's empty row says, so nothing goes to the transcript.
     pub fn picker_action(&mut self) -> Option<Pick> {
         self.sync_picker();
         let selected = self.picker.as_ref()?.selected;
@@ -249,6 +328,7 @@ impl crate::tui::view::State {
                 Action::CopyPath => Some(Pick::CopyPath),
                 Action::Info => Some(Pick::Info),
             },
+            Row::Model { suggestion, .. } => Some(Pick::Command(suggestion.completion.clone())),
         }
     }
 
@@ -260,6 +340,23 @@ impl crate::tui::view::State {
         if let Some(pick) = self.picker.as_mut() {
             pick.error = Some(error.to_string());
         }
+    }
+
+    /// Tab in the `/model` list: the highlighted row's completion in the
+    /// composer, the list open still: `provider/model` is the filter's
+    /// own text, and the list stays where it was.
+    pub fn picker_tab(&mut self) {
+        let Some(text) = self
+            .picker_matches()
+            .get(self.picker.as_ref().map_or(0, |pick| pick.selected))
+            .and_then(|row| match row {
+                Row::Model { suggestion, .. } => Some(suggestion.completion.clone()),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        self.editor.set_text(&text);
     }
 
     /// Esc: the list closes, and the filter goes with it.
@@ -282,23 +379,33 @@ impl crate::tui::view::State {
             return;
         };
         // No open list, or one for another kind of list: this trigger's
-        // list opens from the cache (even when the cache is empty: an
-        // empty list is a panel row, not a transcript line) and asks for
-        // a scan.
+        // list opens (even when it would be empty: an empty list is a
+        // panel row, not a transcript line). The sessions ask for a
+        // scan; the models read nothing.
         if self
             .picker
             .as_ref()
             .is_none_or(|open| open.list != trigger.list)
         {
-            self.open_picker_from_listing();
-            self.request_session_scan();
+            if trigger.list == crate::tui::picker::List::Sessions {
+                self.request_session_scan();
+            }
+            self.open_picker();
+            return;
         }
-        let Some(pick) = self.picker.as_mut() else {
+        // A changed filter is a new list: the highlight returns to its
+        // default row and the last failed pick goes with the old one. The
+        // rows themselves, and the session list's scope, stay.
+        let Some(pick) = self.picker.as_ref() else {
             return;
         };
-        if pick.filter != trigger.filter {
+        if pick.filter == trigger.filter {
+            return;
+        }
+        let selected = self.default_row(&trigger, pick);
+        if let Some(pick) = self.picker.as_mut() {
             pick.filter = trigger.filter;
-            pick.selected = 0;
+            pick.selected = selected;
             pick.error = None;
         }
     }

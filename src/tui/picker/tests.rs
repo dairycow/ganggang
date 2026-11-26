@@ -50,6 +50,7 @@ fn ids<'a>(rows: &[&'a Row]) -> Vec<&'a str> {
         .map(|row| match row {
             Row::Session(session) => session.id.as_str(),
             Row::Action(_) => "",
+            Row::Model { suggestion, .. } => suggestion.label.as_str(),
         })
         .collect()
 }
@@ -569,22 +570,50 @@ fn the_picker_opens_on_every_project_and_narrows_to_this_one() {
 #[test]
 fn the_hint_names_the_keys_the_scope_and_the_place_in_a_long_list() {
     assert_eq!(
-        row_text(&hint_row(&TRUECOLOR, 80, Some(false), None)),
+        row_text(&hint_row(
+            &TRUECOLOR,
+            80,
+            HintKeys::Sessions {
+                every_directory: false
+            },
+            None
+        )),
         " ↑↓ move · type filters · Tab: all directories · Enter picks · Esc clears"
     );
     assert_eq!(
-        row_text(&hint_row(&TRUECOLOR, 80, Some(true), None)),
+        row_text(&hint_row(
+            &TRUECOLOR,
+            80,
+            HintKeys::Sessions {
+                every_directory: true
+            },
+            None
+        )),
         " ↑↓ move · type filters · Tab: this directory · Enter picks · Esc clears",
         "the hint names the scope Tab switches TO"
     );
-    let long = row_text(&hint_row(&TRUECOLOR, 80, Some(false), Some((2, 57))));
+    let long = row_text(&hint_row(
+        &TRUECOLOR,
+        80,
+        HintKeys::Sessions {
+            every_directory: false,
+        },
+        Some((2, 57)),
+    ));
     assert!(long.starts_with(" ↑↓ move 3/57 · "), "{long}");
     assert!(long.ends_with("Esc clears"), "{long}");
     assert!(
         long.chars().count() <= 80,
         "it all fits an 80-column row: {long}"
     );
-    let three_digits = row_text(&hint_row(&TRUECOLOR, 80, Some(false), Some((104, 230))));
+    let three_digits = row_text(&hint_row(
+        &TRUECOLOR,
+        80,
+        HintKeys::Sessions {
+            every_directory: false,
+        },
+        Some((104, 230)),
+    ));
     assert!(
         three_digits.starts_with(" ↑↓ move 105/230 · "),
         "{three_digits}"
@@ -594,11 +623,41 @@ fn the_hint_names_the_keys_the_scope_and_the_place_in_a_long_list() {
         "a three-digit total still fits: {three_digits}"
     );
     assert_eq!(
-        row_text(&hint_row(&TRUECOLOR, 10, Some(false), Some((2, 57)))),
+        row_text(&hint_row(
+            &TRUECOLOR,
+            10,
+            HintKeys::Sessions {
+                every_directory: false
+            },
+            Some((2, 57))
+        )),
         " ↑↓ move 3",
         "narrow: the keys come first, the rest is cut"
     );
-    assert_eq!(row_text(&hint_row(&TRUECOLOR, 0, Some(true), None)), "");
+    assert_eq!(
+        row_text(&hint_row(
+            &TRUECOLOR,
+            0,
+            HintKeys::Sessions {
+                every_directory: true
+            },
+            None
+        )),
+        ""
+    );
+
+    // A list whose Tab completes the row says its Enter, then that.
+    assert_eq!(
+        row_text(&hint_row(
+            &TRUECOLOR,
+            80,
+            HintKeys::Complete {
+                enter: "Enter switches"
+            },
+            None
+        )),
+        " ↑↓ move · type filters · Enter switches · Tab completes · Esc clears"
+    );
 }
 
 /// The panel's one row of explanation when the list has nothing to
@@ -757,6 +816,7 @@ mod state_tests {
                     Action::CopyPath => "copy path".to_string(),
                     Action::Info => "info".to_string(),
                 },
+                Row::Model { suggestion, .. } => suggestion.label.clone(),
             })
             .collect()
     }
@@ -1156,6 +1216,192 @@ mod state_tests {
         );
     }
 
+    /// The `/model` list's own rules, beside the sessions'.
+    /// The trigger opens it on the bare word, and the rest, trimmed, is
+    /// its filter: nothing else is a model trigger.
+    #[test]
+    fn the_model_trigger_is_the_bare_word_and_its_filter() {
+        let none = view();
+        assert!(!none.picker_open(), "no text: no list");
+        let mut state = view();
+        state.editor.set_text("/model");
+        state.sync_picker();
+        assert!(state.picker_open(), "the bare word opens the list");
+        assert_eq!(state.picker.as_ref().unwrap().list, List::Models);
+        assert!(state.picker.as_ref().unwrap().filter.is_empty());
+        state.editor.set_text("/model  glm ");
+        state.sync_picker();
+        assert_eq!(
+            state.picker.as_ref().unwrap().filter,
+            "glm",
+            "the rest, trimmed, is the filter"
+        );
+        state.editor.set_text("/modelx");
+        state.sync_picker();
+        assert!(!state.picker_open(), "a different word is not a trigger");
+    }
+
+    /// A model row's strings, as the list builds them: the
+    /// `provider/model` label, the completion, and the description's
+    /// context window, status, key state and active mark.
+    #[test]
+    fn the_model_row_says_what_the_popup_s_row_said() {
+        use crate::tui::suggest::ModelChoice;
+        let mut m = ModelChoice {
+            provider: "openai".into(),
+            model: "gpt-5".into(),
+            context_window: 400_000,
+            status: Some("ok".into()),
+            needs_key: true,
+            has_key: false,
+        };
+        let s = crate::tui::picker::model_row(&m, "strata/qwen3.8");
+        assert_eq!(s.label, "openai/gpt-5");
+        assert_eq!(s.completion, "/model openai/gpt-5");
+        assert_eq!(s.description, "ctx 400k · ok · no key");
+        m.needs_key = false;
+        let s = crate::tui::picker::model_row(&m, "openai/gpt-5");
+        assert_eq!(s.description, "ctx 400k · ok · active");
+    }
+
+    fn model_row(provider: &str, model: &str) -> crate::tui::suggest::ModelChoice {
+        crate::tui::suggest::ModelChoice {
+            provider: provider.into(),
+            model: model.into(),
+            context_window: 100_000,
+            status: None,
+            needs_key: false,
+            has_key: true,
+        }
+    }
+
+    /// Three models, the second active: an empty filter highlights it;
+    /// a filter that keeps a row highlights the first match; an active
+    /// model that is not among the rows falls back to the first row.
+    #[test]
+    fn the_model_list_highlights_the_active_model_and_the_first_match() {
+        let mut state = view();
+        state.set_models(std::sync::Arc::new(vec![
+            model_row("strata", "inkling"),
+            model_row("deepseek", "flash"),
+            model_row("glm", "air"),
+        ]));
+        state.set_active_model_for_test("deepseek/flash");
+        state.editor.set_text("/model");
+        state.sync_picker();
+        assert_eq!(
+            names(&state),
+            ["strata/inkling", "deepseek/flash", "glm/air"],
+            "the state's models, in its order"
+        );
+        assert_eq!(highlighted(&state), 1, "the active model's row");
+
+        state.editor.set_text("/model glm");
+        state.sync_picker();
+        assert_eq!(names(&state), ["glm/air"], "the filter's rows");
+        assert_eq!(highlighted(&state), 0, "the first match");
+
+        // A model that is not among the rows: the first row again.
+        state.editor.set_text("");
+        state.sync_picker();
+        state.set_active_model_for_test("gone/model");
+        state.editor.set_text("/model");
+        state.sync_picker();
+        assert_eq!(
+            highlighted(&state),
+            0,
+            "a missing active model: the first row"
+        );
+    }
+
+    /// `picker_action()` on a model row is its row's command; `picker_tab`
+    /// writes it to the composer, and the list stays.
+    #[test]
+    fn the_model_row_acts_on_its_command_and_tab_writes_it() {
+        let mut state = view();
+        state.set_models(std::sync::Arc::new(vec![model_row("deepseek", "flash")]));
+        state.editor.set_text("/model");
+        state.sync_picker();
+        assert_eq!(
+            state.picker_action(),
+            Some(Pick::Command("/model deepseek/flash".into())),
+            "the row's command"
+        );
+        state.picker_tab();
+        assert_eq!(state.editor.text(), "/model deepseek/flash");
+        assert!(state.picker_open(), "the list stays on the completion");
+        assert_eq!(
+            state.picker_matches().len(),
+            1,
+            "the completion is the filter's own text: it keeps one row"
+        );
+        assert_eq!(
+            state.picker_matches()[0].label().map(str::to_string),
+            Some("deepseek/flash".into()),
+            "the one row is the completed model"
+        );
+    }
+
+    /// Rows that arrive while the list is open (a `set_models` refresh)
+    /// keep the highlight on the `provider/model` it stood on, and give
+    /// back the list's default when that model is gone.
+    #[test]
+    fn a_refresh_keeps_the_highlight_on_the_same_model() {
+        let mut state = view();
+        state.set_models(std::sync::Arc::new(vec![
+            model_row("a", "m1"),
+            model_row("a", "m2"),
+        ]));
+        state.editor.set_text("/model");
+        state.sync_picker();
+        state.picker_next();
+        assert_eq!(highlighted(&state), 1, "standing on a/m2");
+
+        // A reordered and grown set: a/m2 is still in it.
+        state.set_models(std::sync::Arc::new(vec![
+            model_row("b", "m9"),
+            model_row("a", "m1"),
+            model_row("a", "m2"),
+        ]));
+        assert!(state.picker_open(), "the list stays on the new rows");
+        assert_eq!(
+            names(&state),
+            ["b/m9", "a/m1", "a/m2"],
+            "the new rows, in their order"
+        );
+        assert_eq!(highlighted(&state), 2, "the model it stood on, by label");
+
+        // It is gone: the default again.
+        state.set_models(std::sync::Arc::new(vec![model_row("a", "m1")]));
+        assert!(state.picker_open(), "still open");
+        assert_eq!(highlighted(&state), 0, "the model is gone: the default");
+    }
+
+    /// A failed model switch keeps the composer text and the list, and
+    /// says the error in the panel's last row.
+    #[test]
+    fn a_failed_model_switch_keeps_the_text_and_the_list_and_sets_the_error() {
+        let mut state = view();
+        let mut no_key = model_row("deepseek", "flash");
+        no_key.needs_key = true;
+        no_key.has_key = false;
+        state.set_models(std::sync::Arc::new(vec![no_key]));
+        state.editor.set_text("/model deepseek");
+        state.sync_picker();
+        assert!(
+            matches!(state.picker_action(), Some(Pick::Command(_))),
+            "the model row's command"
+        );
+        state.pick_failed("no key for deepseek: set GG_DEEPSEEK_API_KEY");
+        assert!(state.picker_open(), "the list stays");
+        assert_eq!(state.editor.text(), "/model deepseek", "the text stays");
+        assert_eq!(
+            state.picker.as_ref().unwrap().error.as_deref(),
+            Some("no key for deepseek: set GG_DEEPSEEK_API_KEY"),
+            "the panel's last row says why"
+        );
+    }
+
     /// `new_session` and `set_directory` close the list or re-file it and
     /// ask for a scan: the new session's file is the newest, and the new
     /// directory is where this directory's rows are filed. The listing
@@ -1225,10 +1471,20 @@ mod trigger_tests {
             "/resume",
             "resume",
             "hello there",
-            "/model",
+            "/modelx",
         ] {
             assert_eq!(of(text), None, "{text:?} opens nothing");
         }
         assert_eq!(of(""), None, "an empty composer opens nothing");
+        assert_eq!(
+            of("/model"),
+            Some((List::Models, String::new())),
+            "the model list's own command"
+        );
+        assert_eq!(
+            of("/model glm fix"),
+            Some((List::Models, "glm fix".into())),
+            "and its filter is the rest of the line, as the session list's"
+        );
     }
 }

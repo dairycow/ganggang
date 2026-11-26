@@ -34,7 +34,7 @@ strata launch
 curl -s 127.0.0.1:8080/health
 ```
 
-`gg` expects Strata at `http://127.0.0.1:8080/v1`, auto-adopts whichever model Strata has loaded, and reads `context_window` from `/health` (unless overridden in config or via `-m`/`GG_MODEL`). `gg --list-models` and `/model` also probe `GET /v1/models` on `strata` and any local OpenAI-compatible provider (such as `llama-server --models-preset`) to list available models and their status. See [Configuration](guide/configuration.md).
+`gg` expects Strata at `http://127.0.0.1:8080/v1`, auto-adopts whichever model Strata has loaded, and reads `context_window` from `/health` (unless overridden in config or via `-m`/`GG_MODEL`). `gg --list-models` also probes `GET /v1/models` on `strata` and any local OpenAI-compatible provider (such as `llama-server --models-preset`) to list available models and their status, and the TUI's `/model` list refreshes from the same probe in the background. See [Configuration](guide/configuration.md).
 
 ### Cloud providers
 

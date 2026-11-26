@@ -51,8 +51,9 @@ pub enum Command {
         name: String,
         args: String,
     },
-    /// No argument lists configured providers/models; an argument
-    /// switches by list number, provider, model, or `provider/model`.
+    /// `/model <provider/model>` switches; the TUI runs the highlighted
+    /// row's own command through here. A bare `/model` that reaches the
+    /// handler anyway points at the list above the composer.
     Model(Option<String>),
     /// No argument shows the current thinking configuration; an argument
     /// sets the effort and/or budget on the active endpoint.

@@ -1,4 +1,5 @@
-//! `/model`: list configured/discovered models or switch the active endpoint.
+//! `/model`: switch the active endpoint; with no argument, point the
+//! user at the list above the composer, which is where the models are.
 
 use super::CmdCtx;
 
@@ -13,67 +14,22 @@ pub(super) async fn handle_model(choice: Option<String>, ctx: CmdCtx<'_>) -> any
 
     match choice {
         None => {
-            let discovered =
-                crate::llm::discovery::discover_local_providers(&config.providers).await;
-            let rows =
-                crate::config::providers::catalog_with_discovered(&config.providers, &discovered);
-            // Keep the `/model` popup in sync with this listing.
-            state.set_models(std::sync::Arc::new(rows.iter().map(Into::into).collect()));
-            state.pending_models = rows
-                .iter()
-                .map(|r| (r.provider.clone(), r.model.clone()))
-                .collect();
-            let mut listing = String::from("models:");
-            for (i, row) in rows.iter().enumerate() {
-                let active = if row.provider == active_endpoint.provider
-                    && row.model == active_endpoint.model
-                {
-                    " [active]"
-                } else {
-                    ""
-                };
-                let proto = match row.api {
-                    crate::llm::ApiKind::OpenAiCompletions => "",
-                    crate::llm::ApiKind::AnthropicMessages => " · anthropic",
-                };
-                let status_note = row
-                    .status
-                    .as_deref()
-                    .map(|s| format!(" · {s}"))
-                    .unwrap_or_default();
-                let key_note = if row.needs_key && !row.has_key {
-                    " [no key]"
-                } else {
-                    ""
-                };
-                listing.push_str(&format!(
-                    "\n  {}) {}/{} (ctx {}k{}{}{}){}",
-                    i + 1,
-                    row.provider,
-                    row.model,
-                    row.context_window / 1000,
-                    status_note,
-                    proto,
-                    key_note,
-                    active,
-                ));
-            }
-            listing.push_str("\n/model <n|provider|provider/model> to switch");
-            state.push_info(&listing);
+            state.push_info("pick a model from the list above the composer: ↑↓ then Enter");
         }
         Some(choice) => {
-            let target = match choice.parse::<usize>() {
-                Ok(n) if n >= 1 => {
-                    let (p, m) = state
-                        .pending_models
-                        .get(n - 1)
-                        .ok_or_else(|| anyhow::anyhow!("{n} is not in the last /model listing"))?;
-                    format!("{p}/{m}")
-                }
-                _ => choice,
-            };
-            let mut endpoint =
-                config.resolve_switch_with_discovered(&target, &state.pending_models)?;
+            // The list's own rows are what a discovered model is known by.
+            let discovered: Vec<(String, String)> = state
+                .models_arc()
+                .iter()
+                .map(|m| (m.provider.clone(), m.model.clone()))
+                .collect();
+            let mut endpoint = config.resolve_switch_with_discovered(&choice, &discovered)?;
+            if endpoint.provider == active_endpoint.provider
+                && endpoint.model == active_endpoint.model
+            {
+                state.push_info(&format!("already on {}", endpoint.label()));
+                return Ok(());
+            }
             endpoint.require_auth()?;
             crate::llm::health::maybe_probe_local_health(&mut endpoint).await;
             let _ = crate::llm::client::LlmClient::from_endpoint(&endpoint)?;

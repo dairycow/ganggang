@@ -455,13 +455,36 @@ pub async fn run(
                                     state.history.record("/session info");
                                     state.close_picker();
                                 }
+                                Some(Pick::Command(text)) => {
+                                    let ctx = shared.ctx(
+                                        &mut state,
+                                        &mut input_tx,
+                                        &mut cwd,
+                                        &mut active_endpoint,
+                                    );
+                                    match pick_command(&text, ctx).await {
+                                        Ok(()) => {
+                                            state.history.record(&text);
+                                            state.close_picker();
+                                        }
+                                        Err(e) => state.pick_failed(&format!("{e:#}")),
+                                    }
+                                }
                                 None => {}
                             }
                         }
                         // Tab in the list: every directory's sessions, or
                         // this directory's.
                         KeyAction::SuggestComplete if state.picker_open() && !state.busy => {
-                            state.toggle_session_scope()
+                            if state
+                                .picker
+                                .as_ref()
+                                .is_some_and(|pick| pick.list == crate::tui::picker::List::Models)
+                            {
+                                state.picker_tab()
+                            } else {
+                                state.toggle_session_scope()
+                            }
                         }
                         // Submissions land between runs: the text stays
                         // in the editor for resubmission, with a line
@@ -701,6 +724,20 @@ pub async fn run(
     match restart {
         Some(plan) => Ok(Exit::Restart(plan)),
         None => Ok(Exit::Done(note)),
+    }
+}
+
+/// The `/model` list's Enter: `text` runs through the submit path's own
+/// classify and handler, one helper for a picked command and a typed
+/// one. `Ok` when it ran; the TUI's quit would be the loop's, so this
+/// one is `Ok(())` where the loop breaks instead.
+async fn pick_command(text: &str, ctx: CmdCtx<'_>) -> anyhow::Result<()> {
+    match classify_submission(text) {
+        Submission::Command(command) => {
+            handle_command(command, ctx).await?;
+            Ok(())
+        }
+        other => anyhow::bail!("{other:?} is not a command the list can run"),
     }
 }
 

@@ -63,8 +63,6 @@ pub struct State {
     /// scan's bookkeeping. The tests sit in the module tree and reach in
     /// through it.
     pub sessions: crate::tui::picker::SessionListing,
-    /// The last `/model` listing, for `/model <n>`.
-    pub pending_models: Vec<(String, String)>,
     /// The `/session` list while it is open; the text after the command
     /// is its filter. `None` = closed.
     pub picker: Option<crate::tui::picker::Picker>,
@@ -140,7 +138,6 @@ impl State {
             tokens_in: 0,
             tokens_out: 0,
             sessions: crate::tui::picker::SessionListing::new(cwd),
-            pending_models: Vec::new(),
             picker: None,
             context_window: context_window as u64,
             last_context_tokens: 0,
@@ -159,6 +156,18 @@ impl State {
         self.palette
     }
 
+    /// The model rows the `/model` list is built from, as an `Arc`: the
+    /// command handler reads the set while a `/reload` cannot swap it out.
+    pub fn models_arc(&self) -> Arc<Vec<crate::tui::suggest::ModelChoice>> {
+        self.models.clone()
+    }
+    /// Test seam: the active model's label, what `set_model` would set
+    /// it to.
+    #[cfg(test)]
+    pub(crate) fn set_active_model_for_test(&mut self, label: &str) {
+        self.active_model = label.to_string();
+    }
+
     /// The shared skill set, as an `Arc`: what a `/reload` replaces and
     /// what the command handler snapshots for its lists.
     pub fn skills_arc(&self) -> Arc<Vec<crate::agent::skills::Skill>> {
@@ -174,12 +183,41 @@ impl State {
         self.suggest_filter.clear();
     }
 
-    /// Replace the model rows the `/model` popup lists from and reset the
-    /// popup's selection, as [`set_skills`](Self::set_skills) does.
+    /// Replace the model rows the `/model` list is built from. While the
+    /// list is open the rows are its new rows: the user's filter is kept,
+    /// and the highlight stays on the `provider/model` it stood on, or
+    /// returns to the list's default when that model is gone. The
+    /// suggestion popup lists built-ins only, so nothing of its is
+    /// touched.
     pub fn set_models(&mut self, models: Arc<Vec<crate::tui::suggest::ModelChoice>>) {
         self.models = models;
-        self.suggest_selected = 0;
-        self.suggest_filter.clear();
+        if self
+            .picker
+            .as_ref()
+            .is_some_and(|open| open.list == crate::tui::picker::List::Models)
+        {
+            let was_on = self
+                .picker_matches()
+                .get(self.picker.as_ref().map_or(0, |open| open.selected))
+                .and_then(|row| row.label().map(str::to_string));
+            let keep_filter = self
+                .picker
+                .as_ref()
+                .map_or_else(String::new, |open| open.filter.clone());
+            self.picker = Some(self.model_list());
+            if let Some(pick) = self.picker.as_mut() {
+                pick.filter = keep_filter;
+            }
+            if let Some(was) = was_on.as_ref() {
+                let at = self
+                    .picker_matches()
+                    .iter()
+                    .position(|row| row.label() == Some(was.as_str()));
+                if let (Some(at), Some(pick)) = (at, self.picker.as_mut()) {
+                    pick.selected = at;
+                }
+            }
+        }
     }
 
     // Test seams: the transcript and scroll offset are view-internal; the

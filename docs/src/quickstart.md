@@ -43,4 +43,4 @@ gg -P deepseek
 gg -m opencode-go/claude-haiku-5-5 -p "summarise this repo"
 ```
 
-In the TUI, `/model` lists models and `/model <n|provider|provider/model>` switches. Next: [Configuration and providers](guide/configuration.md).
+In the TUI, `/model` lists models as you type it: filter, move the highlight and press `Enter` to switch. Next: [Configuration and providers](guide/configuration.md).

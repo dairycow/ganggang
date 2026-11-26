@@ -35,10 +35,10 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
-    /// The late discovery event replaces the popup's rows: `/model ` lists
-    /// exactly the discovered model, and the selection resets.
+    /// The late discovery event replaces the list's rows: `/model` lists
+    /// exactly the discovered model.
     #[tokio::test]
-    async fn apply_models_discovered_refreshes_the_model_popup() {
+    async fn apply_models_discovered_refreshes_the_model_list() {
         let (mut input_tx, _input_rx) = mpsc::channel::<super::super::agent_task::AgentInput>(1);
         let mut state = super::super::view::State::new(
             std::path::Path::new("/tmp/x"),
@@ -47,7 +47,8 @@ mod tests {
             std::sync::Arc::new(Vec::new()),
             super::super::history::History::default(),
         );
-        state.editor.set_text("/model ");
+        state.editor.set_text("/model");
+        state.sync_picker();
         let event = UiEvent::ModelsDiscovered(vec![ModelChoice {
             provider: "llama-cpp".into(),
             model: "local-m".into(),
@@ -60,11 +61,8 @@ mod tests {
             super::super::agent_task::apply(event, &mut state, &mut input_tx).await,
             "the event folds into state without ending the TUI"
         );
-        let labels = state
-            .suggestions()
-            .iter()
-            .map(|s| s.label.clone())
-            .collect::<Vec<_>>();
+        let rows = state.picker_matches();
+        let labels: Vec<&str> = rows.iter().filter_map(|row| row.label()).collect();
         assert_eq!(labels, vec!["llama-cpp/local-m"], "the rows are replaced");
     }
 
