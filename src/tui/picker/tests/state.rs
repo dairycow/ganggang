@@ -434,6 +434,35 @@ fn the_action_rows_act_on_their_actions() {
     );
 }
 
+/// A run in flight holds up neither the list nor its one-line actions:
+/// `/session copy` still highlights `copy path`, the list stays, and the
+/// copy writes the session's path.
+#[test]
+fn the_copy_action_works_while_a_run_is_in_flight() {
+    let mut state = view();
+    list_open_on(&mut state, 1);
+    state.begin_run();
+    state.editor.set_text("/session copy");
+    state.sync_picker();
+    assert!(state.busy, "the run is in flight");
+    assert_eq!(state.picker_action(), Some(Pick::CopyPath));
+    assert!(state.picker_open(), "the list stays open");
+
+    state.session_path = Some(std::path::PathBuf::from("/s/a1b2c3d4.jsonl"));
+    let copied = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let recorded = copied.clone();
+    crate::tui::commands::copy_session_path(&mut state, |text| {
+        recorded.lock().unwrap().push(text.to_string());
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        *copied.lock().unwrap(),
+        ["/s/a1b2c3d4.jsonl"],
+        "the copy wrote the path while the run was in flight"
+    );
+}
+
 /// A failed copy keeps the composer text and the list, and says the
 /// error in the panel's last row.
 #[test]

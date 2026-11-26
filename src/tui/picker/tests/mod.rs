@@ -182,6 +182,22 @@ fn two_rows_are_the_same_row_when_they_are_the_same_session() {
     assert!(!one.same_row(&other), "another session is another row");
 }
 
+/// The two one-line actions act while a run is in flight; opening a
+/// session and running a picked command wait for it.
+#[test]
+fn the_one_line_actions_do_not_need_an_idle_run() {
+    assert!(!Pick::CopyPath.needs_idle(), "the copy reads the view");
+    assert!(!Pick::Info.needs_idle(), "so does the info block");
+    assert!(
+        Pick::Open(filed_for_test(0, "uuid-of", "s")).needs_idle(),
+        "opening a session swaps the agent"
+    );
+    assert!(
+        Pick::Command("/model strata/x".into()).needs_idle(),
+        "a picked command switches the endpoint or starts a run"
+    );
+}
+
 #[test]
 fn ages_read_minutes_hours_days_then_the_date() {
     let age_of = |stamp: &str| age(Some(stamp), NOW);

@@ -115,6 +115,20 @@ impl PartialEq for Pick {
     }
 }
 
+impl Pick {
+    /// Whether acting on this pick has to wait for the run in flight to
+    /// end: opening a session swaps the agent, and a picked command
+    /// switches the endpoint or starts a skill's run. The one-line actions
+    /// only read the view's own session and the clipboard, so a run in
+    /// flight does not hold them up.
+    pub fn needs_idle(&self) -> bool {
+        match self {
+            Pick::CopyPath | Pick::Info => false,
+            Pick::Open(_) | Pick::Command(_) => true,
+        }
+    }
+}
+
 /// An open list: which rows it shows, which of them is highlighted, the
 /// filter text the highlight was last built for, and the last failed
 /// action's error. A changed filter is a new list, so the highlight

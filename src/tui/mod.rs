@@ -418,16 +418,23 @@ pub async fn run(
                                 }
                             }
                         }
-                        // Enter in the `/session` list: the highlighted
-                        // row acts on it: a session opens, an action row
-                        // runs its one line. The list stays until the
-                        // action is done — `new_session` closes it when
-                        // a session opens, and the loop closes it when
-                        // an action runs — so a failure leaves the
-                        // error in the list's panel, filter and all.
-                        KeyAction::Send if state.picker_open() && !state.busy => {
+                        // Enter in the list: the highlighted row acts on
+                        // it: a session opens, an action row runs its one
+                        // line, a model or skill row runs its command. The
+                        // list stays until the action is done — `new_session`
+                        // closes it when a session opens, and the loop closes
+                        // it when an action runs — so a failure leaves the
+                        // error in the list's panel, filter and all. A run in
+                        // flight does not hold up the one-line actions, which
+                        // only read the view and the clipboard; opening a
+                        // session or running a command waits for the run.
+                        KeyAction::Send if state.picker_open() => {
                             use crate::tui::picker::Pick;
-                            match state.picker_action() {
+                            let pick = state.picker_action();
+                            match pick {
+                                Some(pick) if pick.needs_idle() && state.busy => {
+                                    state.push_info(busy_note(&state));
+                                }
                                 Some(Pick::Open(session)) => {
                                     let ctx = shared.ctx(
                                         &mut state,
@@ -477,7 +484,7 @@ pub async fn run(
                         // Tab in the list: every directory's sessions, or
                         // this directory's; the highlighted row's
                         // completion in the `/model` and `/skill` lists.
-                        KeyAction::SuggestComplete if state.picker_open() && !state.busy => {
+                        KeyAction::SuggestComplete if state.picker_open() => {
                             match state.picker.as_ref().map(|pick| pick.list) {
                                 Some(
                                     crate::tui::picker::List::Models
@@ -490,11 +497,7 @@ pub async fn run(
                         // in the editor for resubmission, with a line
                         // saying why nothing happened.
                         KeyAction::Send if state.busy => {
-                            state.push_info(if state.stopping() {
-                                "stopping — the run is still winding down; your input stays in the editor"
-                            } else {
-                                "busy — a run is in flight; your input stays in the editor"
-                            });
+                            state.push_info(busy_note(&state));
                         }
                         KeyAction::Send if !state.busy => {
                             let Some(text) = state.editor.take_submission() else {
@@ -730,6 +733,17 @@ pub async fn run(
     match restart {
         Some(plan) => Ok(Exit::Restart(plan)),
         None => Ok(Exit::Done(note)),
+    }
+}
+
+/// What a submission that cannot act yet says: the run is live, or
+/// already winding down. The text stays in the composer either way, and
+/// an open list stays with it.
+fn busy_note(state: &State) -> &'static str {
+    if state.stopping() {
+        "stopping — the run is still winding down; your input stays in the editor"
+    } else {
+        "busy — a run is in flight; your input stays in the editor"
     }
 }
 
