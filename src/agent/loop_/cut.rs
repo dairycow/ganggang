@@ -291,6 +291,7 @@ impl Agent {
             context_tokens,
             self.context_window,
             self.compact_threshold_tokens,
+            self.max_tokens,
         ) {
             self.maybe_compact(None, events, noop_compaction_warned)
                 .await?;

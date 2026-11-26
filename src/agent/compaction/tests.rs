@@ -22,49 +22,86 @@ fn msg_entry(id: &str, role: Role, content: &str, usage: Option<Usage>) -> Entry
     }
 }
 
-/// The trigger is a strict inequality against `window − reserve`, and a
-/// window smaller than the reserve saturates to "always past the line"
-/// rather than underflowing to "never".
+/// The trigger is a strict inequality against the line the reserve
+/// leaves, and a window smaller than the reserve saturates to "always
+/// past the line" rather than underflowing to "never".
 #[test]
 fn trigger_fires_past_the_reserved_line() {
     let window = 131_072u32;
-    let line = window - RESERVE;
+    let line = window - 24_576;
     assert!(
-        !should_compact(line, window, None),
+        !should_compact(line, window, None, RESERVE),
         "exactly at the line holds"
     );
-    assert!(should_compact(line + 1, window, None), "one past triggers");
-    assert!(!should_compact(0, window, None));
+    assert!(
+        should_compact(line + 1, window, None, RESERVE),
+        "one past triggers"
+    );
+    assert!(!should_compact(0, window, None, RESERVE));
     // Degenerate window: the reserve scales down with it, and the trigger
     // still fires past the remaining line.
-    assert!(should_compact(4, 4, None));
+    assert!(should_compact(4, 4, None, RESERVE));
 
-    // Threshold clamps below window - RESERVE when smaller, and is
-    // clamped by window - RESERVE when larger.
-    assert!(!should_compact(65_536, 262_144, Some(65_536)));
-    assert!(should_compact(65_537, 262_144, Some(65_536)));
-    assert!(!should_compact(window - RESERVE, window, Some(200_000)));
-    assert!(should_compact(window - RESERVE + 1, window, Some(200_000)));
+    // Threshold clamps below the ceiling when smaller, and is clamped
+    // by it when larger.
+    assert!(!should_compact(65_536, 262_144, Some(65_536), RESERVE));
+    assert!(should_compact(65_537, 262_144, Some(65_536), RESERVE));
+    assert!(!should_compact(line, window, Some(200_000), RESERVE));
+    assert!(should_compact(line + 1, window, Some(200_000), RESERVE));
 }
 
 /// The reserve and kept budget scale down with the window, while a large
 /// window keeps the fixed ceilings.
 #[test]
 fn reserve_and_keep_recent_scale_with_the_window() {
-    assert_eq!(effective_reserve(131_072), 16_384);
-    assert_eq!(compact_line(131_072, None), 114_688);
-    assert_eq!(effective_keep_recent(131_072, None), 20_000);
+    assert_eq!(effective_reserve(131_072, RESERVE), 24_576);
+    assert_eq!(compact_line(131_072, None, RESERVE), 106_496);
+    assert_eq!(effective_keep_recent(131_072, None, RESERVE), 20_000);
 
-    assert_eq!(effective_reserve(32_768), 8_192);
-    assert_eq!(compact_line(32_768, None), 24_576);
-    assert_eq!(effective_keep_recent(32_768, None), 12_288);
+    assert_eq!(effective_reserve(32_768, RESERVE), 12_288);
+    assert_eq!(compact_line(32_768, None, RESERVE), 20_480);
+    assert_eq!(effective_keep_recent(32_768, None, RESERVE), 10_240);
 
-    assert_eq!(effective_reserve(262_144), 16_384);
-    assert_eq!(compact_line(262_144, Some(65_536)), 65_536);
-    assert_eq!(effective_keep_recent(262_144, Some(65_536)), 20_000);
+    assert_eq!(effective_reserve(262_144, RESERVE), 24_576);
+    assert_eq!(compact_line(262_144, Some(65_536), RESERVE), 65_536);
+    assert_eq!(
+        effective_keep_recent(262_144, Some(65_536), RESERVE),
+        20_000
+    );
 
     // A threshold below the ceiling still caps the kept budget at half.
-    assert_eq!(effective_keep_recent(131_072, Some(10_000)), 5_000);
+    assert_eq!(effective_keep_recent(131_072, Some(10_000), RESERVE), 5_000);
+}
+
+/// A request that asks for more completion tokens than [`RESERVE`] needs
+/// that much more held free: the server holds its `max_tokens` out of the
+/// window along with the input, and the line sits a headroom below the
+/// input limit that leaves. A smaller `max_tokens` changes nothing, and
+/// the cap keeps a small window workable whatever is asked for.
+#[test]
+fn a_larger_max_tokens_lowers_the_line() {
+    assert_eq!(effective_reserve(262_144, 32_768), 32_768 + 8_192);
+    assert_eq!(compact_line(262_144, None, 32_768), 221_184);
+    assert_eq!(
+        compact_line(262_144, None, 8_192),
+        compact_line(262_144, None, RESERVE)
+    );
+    assert_eq!(effective_reserve(8_192, 65_536), 2_048 + 1_024);
+}
+
+/// An assistant entry with the given usage.
+fn used(id: &str, prompt_tokens: u32, completion_tokens: u32) -> Entry {
+    msg_entry(
+        id,
+        Role::Assistant,
+        "done",
+        Some(Usage {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens: prompt_tokens + completion_tokens,
+            ..Usage::default()
+        }),
+    )
 }
 
 /// Usage comes from the LAST assistant entry that has one — not the
@@ -73,33 +110,49 @@ fn reserve_and_keep_recent_scale_with_the_window() {
 fn context_tokens_come_from_the_last_assistant_usage() {
     let entries = vec![
         msg_entry("u1", Role::User, "hello", None),
-        msg_entry(
-            "a1",
-            Role::Assistant,
-            "hi",
-            Some(Usage {
-                prompt_tokens: 100,
-                completion_tokens: 20,
-                total_tokens: 120,
-                ..Usage::default()
-            }),
-        ),
-        msg_entry("t1", Role::ToolResult, "output", None),
-        msg_entry(
-            "a2",
-            Role::Assistant,
-            "done",
-            Some(Usage {
-                prompt_tokens: 300,
-                completion_tokens: 40,
-                total_tokens: 340,
-                ..Usage::default()
-            }),
-        ),
+        used("a1", 100, 20),
+        msg_entry("t1", Role::ToolResult, &"o".repeat(400), None),
+        used("a2", 300, 40),
     ];
     assert_eq!(context_tokens_of(&entries), Some(340));
-    assert_eq!(context_tokens_of(&entries[..3]), Some(120));
     assert_eq!(context_tokens_of(&entries[..1]), None);
+}
+
+/// The entries appended since the measured response are counted too, at
+/// chars/4: no usage has seen the tool results of the batch just run, and
+/// they are what the next request adds.
+#[test]
+fn entries_appended_since_the_usage_count_toward_the_line() {
+    // The numbers of a delegate run that died on a 400 from the server.
+    // With a 16,384-token completion, a 262,144-token window takes at most
+    // 245,760 tokens of input.
+    let input_limit = 262_144 - RESERVE;
+    let measured = 245_110 + 57;
+    assert!(measured < input_limit, "the usage alone stayed under it");
+
+    let entries = vec![
+        msg_entry("u1", Role::User, "task", None),
+        used("a1", 245_110, 57),
+        big("t1", Role::ToolResult, 1_726),
+    ];
+    let tokens = context_tokens_of(&entries).expect("a1 carries usage");
+    assert_eq!(tokens, measured + 1_726);
+    assert!(tokens > input_limit, "the next request was past the limit");
+    assert!(should_compact(tokens, 262_144, None, RESERVE));
+}
+
+/// Usage from before a compaction measured a context that no longer
+/// exists, so it measures nothing: the count is `None` and the loop falls
+/// back to estimating the request itself.
+#[test]
+fn usage_from_before_a_compaction_is_not_a_measure() {
+    let entries = vec![
+        msg_entry("u1", Role::User, "old", None),
+        used("a1", 100, 20),
+        compaction_entry("u2"),
+        msg_entry("u2", Role::User, "new", None),
+    ];
+    assert_eq!(context_tokens_of(&entries), None);
 }
 
 /// The fallback estimate is chars/4 over the wire view's text mass:

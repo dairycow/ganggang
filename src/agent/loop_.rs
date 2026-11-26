@@ -352,14 +352,16 @@ impl Agent {
 
             // §14: the compaction check sits exactly here — after a tool
             // batch, before the next request builds. Context tokens from
-            // the last usage (chars/4 estimate when the server reports
-            // none); the whole action degrades to a `Warned` on failure.
+            // the last usage plus the entries appended since it (chars/4
+            // estimate when the server reports none); the whole action
+            // degrades to a `Warned` on failure.
             let context_tokens = compaction::context_tokens_of(&self.entries)
                 .unwrap_or_else(|| compaction::estimate_wire_tokens(&messages));
             if compaction::should_compact(
                 context_tokens,
                 self.context_window,
                 self.compact_threshold_tokens,
+                self.max_tokens,
             ) {
                 self.maybe_compact(None, events, &mut noop_compaction_warned)
                     .await?;

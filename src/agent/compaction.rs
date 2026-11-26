@@ -1,7 +1,8 @@
 //! Context compaction (spec §14): trigger math, the cut-point walk, the
 //! summarize call, and the loop hook that sequences them.
 //!
-//! Two pi defaults (`RESERVE` and `KEEP_RECENT`), plus an optional lower
+//! Two pi defaults (`RESERVE` and `KEEP_RECENT`), `HEADROOM` for what the
+//! token count can only estimate, plus an optional lower
 //! `compact_threshold_tokens` ceiling for local-compute KV residency.
 
 use std::sync::atomic::Ordering;
@@ -12,38 +13,79 @@ use super::session::{self, Entry, Message, ReplayReasoning, Role, last_entry_id}
 use crate::events::AgentEvent;
 use crate::llm::types::ChatMessage;
 
-/// Upper bound on the tokens held free in the context window: compaction
-/// triggers once the conversation grows past this line, so the next request
-/// still fits. Smaller windows reserve proportionally less.
+/// Upper bound on the tokens held free in the context window for the
+/// completion: compaction triggers once the conversation grows past this
+/// line, so the next request still fits. A request that asks for more
+/// completion tokens than this (`max_tokens`) holds that much instead.
+/// Smaller windows reserve proportionally less.
 pub const RESERVE: u32 = 16_384;
 
-/// Upper bound on how much recent history compaction tries to keep, in
-/// tokens. Small windows keep half the compaction line instead.
-pub const KEEP_RECENT: u32 = 20_000;
+/// Upper bound on the tokens held free for what the token count can only
+/// estimate. A server refuses a request the moment its input and
+/// `max_tokens` together pass the window, and the count that guards against
+/// that carries the entries appended since the last usage at chars/4, which
+/// runs low on dense output. Smaller windows hold proportionally less.
+pub const HEADROOM: u32 = 8_192;
 
-/// The reserve for `context_window`: never more than a quarter of the
-/// window, so a small window keeps its own room to work.
-pub fn effective_reserve(context_window: u32) -> u32 {
-    RESERVE.min(context_window / 4)
+/// The tokens held free in the context window: the completion's room plus
+/// the headroom. The completion's room is the larger of [`RESERVE`] and the
+/// request's `max_tokens`; the caps (a quarter and an eighth of the window)
+/// keep a small window from reserving more than it can spare.
+pub fn effective_reserve(context_window: u32, max_tokens: u32) -> u32 {
+    RESERVE.max(max_tokens).min(context_window / 4) + HEADROOM.min(context_window / 8)
 }
 
 /// Context tokens per the spec: from the last response's `usage` — the
 /// request the run just made is the best measure of the one it is about
-/// to make. `None` when no assistant entry carries usage yet.
+/// to make — plus an estimate of every entry appended since that response:
+/// the tool results of the batch just run, which no usage has counted yet.
+/// `None` when no assistant entry carries usage, or when the conversation
+/// was compacted after the last one that does: that usage measured a
+/// context that no longer exists.
 pub fn context_tokens_of(entries: &[Entry]) -> Option<u32> {
-    entries.iter().rev().find_map(|entry| match entry {
-        Entry::Message {
-            message:
-                Message {
-                    role: Role::Assistant,
-                    usage: Some(u),
-                    ..
-                },
-            ..
-        } => Some(u.prompt_tokens + u.completion_tokens),
-        _ => None,
-    })
+    let (measured_at, measured) = measured_usage(entries)?;
+    let appended = &entries[measured_at + 1..];
+    if appended
+        .iter()
+        .any(|entry| matches!(entry, Entry::Compaction { .. }))
+    {
+        return None;
+    }
+    let estimate = appended
+        .iter()
+        .map(|entry| u64::from(entry_token_estimate_with(entry, false)))
+        .sum::<u64>();
+    Some((measured + estimate).min(u64::from(u32::MAX)) as u32)
 }
+
+/// The last assistant entry that carries usage: where it sits in the
+/// session, and the token count of its response.
+fn measured_usage(entries: &[Entry]) -> Option<(usize, u64)> {
+    let (at, usage) = entries
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(at, entry)| match entry {
+            Entry::Message {
+                message:
+                    Message {
+                        role: Role::Assistant,
+                        usage: Some(usage),
+                        ..
+                    },
+                ..
+            } => Some((at, usage)),
+            _ => None,
+        })?;
+    Some((
+        at,
+        u64::from(usage.prompt_tokens) + u64::from(usage.completion_tokens),
+    ))
+}
+
+/// Upper bound on how much recent history compaction tries to keep, in
+/// tokens. Small windows keep half the compaction line instead.
+pub const KEEP_RECENT: u32 = 20_000;
 
 /// The chars/4 fallback, for servers that report no usage: the wire
 /// view of the request is what would be counted, so that is what is
@@ -67,9 +109,11 @@ pub fn estimate_wire_tokens(messages: &[ChatMessage]) -> u32 {
 
 /// Effective compaction line: `min(threshold, window - effective_reserve)`
 /// when a positive threshold is configured, otherwise
-/// `window - effective_reserve`.
-pub fn compact_line(context_window: u32, threshold: Option<u32>) -> u32 {
-    let ceiling = context_window.saturating_sub(effective_reserve(context_window));
+/// `window - effective_reserve`. `max_tokens` is the request's own
+/// completion room, which the server holds out of the window along with
+/// the input.
+pub fn compact_line(context_window: u32, threshold: Option<u32>, max_tokens: u32) -> u32 {
+    let ceiling = context_window.saturating_sub(effective_reserve(context_window, max_tokens));
     match threshold.filter(|&t| t > 0) {
         Some(t) => t.min(ceiling),
         None => ceiling,
@@ -79,15 +123,20 @@ pub fn compact_line(context_window: u32, threshold: Option<u32>) -> u32 {
 /// How much recent history compaction keeps: at most `KEEP_RECENT`, and
 /// never more than half the compaction line, so a small window still
 /// leaves room for the summary and the next request.
-pub fn effective_keep_recent(context_window: u32, threshold: Option<u32>) -> u32 {
-    KEEP_RECENT.min(compact_line(context_window, threshold) / 2)
+pub fn effective_keep_recent(context_window: u32, threshold: Option<u32>, max_tokens: u32) -> u32 {
+    KEEP_RECENT.min(compact_line(context_window, threshold, max_tokens) / 2)
 }
 
 /// The trigger (§14): checked after a tool batch, before the next
 /// request builds. `saturating_sub` keeps a window smaller than the
 /// reserve from underflowing into a never-triggering comparison.
-pub fn should_compact(context_tokens: u32, context_window: u32, threshold: Option<u32>) -> bool {
-    context_tokens > compact_line(context_window, threshold)
+pub fn should_compact(
+    context_tokens: u32,
+    context_window: u32,
+    threshold: Option<u32>,
+    max_tokens: u32,
+) -> bool {
+    context_tokens > compact_line(context_window, threshold, max_tokens)
 }
 
 /// Per-entry token estimate for the cut-point walk (§14: "walk back
@@ -333,7 +382,11 @@ impl super::Agent {
         &mut self,
         instructions: Option<&str>,
     ) -> anyhow::Result<CompactOutcome> {
-        let keep_recent = effective_keep_recent(self.context_window, self.compact_threshold_tokens);
+        let keep_recent = effective_keep_recent(
+            self.context_window,
+            self.compact_threshold_tokens,
+            self.max_tokens,
+        );
         let Some(first_kept_id) =
             cut_point_with_budget(&self.entries, self.replay_reasoning, keep_recent)
         else {

@@ -29,7 +29,7 @@ fn tool_call_with_usage(id: &str, args: &str, total: u32) -> String {
 
 /// Four echo-tool runs of ~9k entry-tokens each (12k-char user prompt,
 /// 12k-char tool arguments, 12k-char tool result) under a 131,072-token
-/// window. The usage numbers put the context past the 114,688-token line
+/// window. The usage numbers put the context past the 106,496-token line
 /// after every tool batch. The third run crosses the 20,000-token kept
 /// budget (27k > 20k) and the fourth compacts AGAIN from the first
 /// compaction's boundary: the repeated-compaction rule, exercised
@@ -68,7 +68,7 @@ async fn window_scaled_compaction_runs_between_batches() {
         std::env::temp_dir(),
         None,
         false,
-        131_072, // scaled reserve: 16,384; line 114,688; keep 20,000
+        131_072, // reserve 24,576; line 106,496; keep 20,000
         Default::default(),
     );
 
@@ -243,7 +243,7 @@ async fn summary_failure_warns_and_continues_un_compacted() {
 async fn trigger_without_a_cut_point_warns_once_per_run() {
     let big = "x".repeat(4_000);
     let echo_args = format!(r#"{{"text":"{big}"}}"#);
-    // Three small tool batches in ONE run: each crosses the 114,688-token
+    // Three small tool batches in ONE run: each crosses the 106,496-token
     // trigger line, while total mass stays under KEEP_RECENT (20k).
     let responses = vec![
         tool_call_with_usage("call_c", &echo_args, 120_000),
@@ -424,8 +424,8 @@ async fn single_run_multi_turn_session_compacts_at_assistant_boundary() {
     assert!(final_msgs.contains("original-prompt-keep-me"));
 }
 
-/// A 32K window scales both knobs: 8,192 reserved, a 24,576 compaction
-/// line, and 12,288 tokens kept. Two ~9k-token batches cross the kept
+/// A 32K window scales both knobs: 12,288 reserved, a 20,480 compaction
+/// line, and 10,240 tokens kept. Two ~9k-token batches cross the kept
 /// budget, so compaction drops the first batch and replays the summary
 /// plus the second.
 #[tokio::test]
