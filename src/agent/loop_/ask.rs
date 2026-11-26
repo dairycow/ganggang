@@ -7,6 +7,8 @@
 //! deltas to the event channel and turns "the user stopped before the
 //! response head" into an outcome belongs here.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::Ordering;
 
 use tokio::sync::mpsc::Sender;
@@ -32,12 +34,17 @@ impl Agent {
     /// error; here it becomes an aborted, incomplete outcome rather than a
     /// failed run — `run`'s short-turn path then finishes the run with the
     /// normal abort shape.
+    ///
+    /// `without_reasoning` sends this one request with reasoning switched
+    /// off: the retry a turn earns when reasoning used up the whole
+    /// `max_tokens`. Every other request carries the endpoint's settings.
     pub(super) async fn ask(
         &self,
         messages: &[ChatMessage],
         events: &Sender<AgentEvent>,
+        without_reasoning: bool,
     ) -> anyhow::Result<StreamOutcome> {
-        let outcome = self.request(messages, events).await;
+        let outcome = self.request(messages, events, without_reasoning).await;
         // Whether it succeeded or not, the retries it took are the run's
         // news — passed on before the loop acts on the answer.
         self.relay_notices(events).await?;
@@ -64,6 +71,7 @@ impl Agent {
         &self,
         messages: &[ChatMessage],
         events: &Sender<AgentEvent>,
+        without_reasoning: bool,
     ) -> anyhow::Result<StreamOutcome> {
         if !self.stream {
             // The non-streaming path is complete by construction: the whole
@@ -72,9 +80,20 @@ impl Agent {
             // stop request then comes back as an aborted outcome holding
             // nothing, which is the truth: nothing arrived.
             let tools = self.tools.declarations();
-            let send = self
-                .client
-                .send(&self.model, messages, self.max_tokens, &tools);
+            let send = async {
+                match without_reasoning {
+                    true => {
+                        self.client
+                            .send_without_reasoning(&self.model, messages, self.max_tokens, &tools)
+                            .await
+                    }
+                    false => {
+                        self.client
+                            .send(&self.model, messages, self.max_tokens, &tools)
+                            .await
+                    }
+                }
+            };
             return tokio::select! {
                 biased;
                 _ = super::wait_for_abort(&self.abort) => Ok(StreamOutcome {
@@ -89,28 +108,41 @@ impl Agent {
                 }),
             };
         }
-        let event_tx = events.clone();
-        let send = self
-            .client
-            .send_stream(
+        let send = async {
+            let (model, max_tokens, tools, abort) = (
                 &self.model,
-                messages,
                 self.max_tokens,
-                &self.tools.declarations(),
+                self.tools.declarations(),
                 &self.abort,
-                |delta| {
-                    let tx = event_tx.clone();
-                    Box::pin(async move {
-                        let event = match delta {
-                            Delta::Text(t) => AgentEvent::AssistantText { delta: t },
-                            Delta::Thinking(t) => AgentEvent::Thinking { delta: t },
-                        };
-                        let _ = tx.send(event).await;
-                    })
-                },
-            )
-            .await;
-        match send {
+            );
+            match without_reasoning {
+                true => {
+                    self.client
+                        .send_stream_without_reasoning(
+                            model,
+                            messages,
+                            max_tokens,
+                            &tools,
+                            abort,
+                            forward_deltas(events),
+                        )
+                        .await
+                }
+                false => {
+                    self.client
+                        .send_stream(
+                            model,
+                            messages,
+                            max_tokens,
+                            &tools,
+                            abort,
+                            forward_deltas(events),
+                        )
+                        .await
+                }
+            }
+        };
+        match send.await {
             Ok(outcome) => Ok(outcome),
             Err(_err) if self.abort.load(Ordering::Relaxed) => Ok(StreamOutcome {
                 // Nothing arrived, so there is nothing to keep. The error
@@ -122,6 +154,25 @@ impl Agent {
             }),
             Err(err) => Err(err),
         }
+    }
+}
+
+/// The streaming path's delta forwarder: each text or thinking delta
+/// becomes the matching event on the channel, with the send's boxed future
+/// giving the channel real backpressure.
+fn forward_deltas(
+    events: &Sender<AgentEvent>,
+) -> impl FnMut(Delta) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    let event_tx = events.clone();
+    move |delta| {
+        let tx = event_tx.clone();
+        Box::pin(async move {
+            let event = match delta {
+                Delta::Text(t) => AgentEvent::AssistantText { delta: t },
+                Delta::Thinking(t) => AgentEvent::Thinking { delta: t },
+            };
+            let _ = tx.send(event).await;
+        })
     }
 }
 

@@ -120,6 +120,11 @@ impl Agent {
         let mut notices: HashMap<String, String> = HashMap::new();
         // Continuations this run has spent on a short answer (§ cut).
         let mut continuations = 0u32;
+        // Set when a turn spends the whole `max_tokens` on reasoning: every
+        // request after it in this run goes out with reasoning off.
+        let mut reasoning_off = false;
+        // Set for the one request that asks such a turn again.
+        let mut retrying_without_reasoning = false;
         loop {
             if self.abort.load(Ordering::Acquire) {
                 self.emit_abort(events).await?;
@@ -187,7 +192,27 @@ impl Agent {
             // The request, with the stop request wired in: a stream stops
             // when the user asks and comes back with what arrived, and a
             // non-streaming wait is raced against the same flag.
-            let outcome = self.ask(&messages, events).await?;
+            let outcome = match self.ask(&messages, events, reasoning_off).await {
+                Ok(outcome) => outcome,
+                // The server refused the request without reasoning (it takes
+                // `reasoning_effort` but not `"none"`): the run ends the
+                // way the truncation alone would have ended it, and the
+                // warning says what the server answered. Every other
+                // failure is the request's own, and fails the run.
+                Err(err) if retrying_without_reasoning && crate::llm::client::is_refusal(&err) => {
+                    events
+                        .send(AgentEvent::Warned {
+                            message: format!(
+                                "the request with reasoning off was refused; \
+                                 stopping instead: {err:#}"
+                            ),
+                        })
+                        .await?;
+                    break;
+                }
+                Err(err) => return Err(err),
+            };
+            retrying_without_reasoning = false;
             // Read before `from_response` consumes the response: the wire
             // type stays the single place finish reasons and timings exist.
             let timings = outcome.response.timings.clone();
@@ -219,10 +244,25 @@ impl Agent {
             for warning in warnings {
                 events.send(AgentEvent::Warned { message: warning }).await?;
             }
+            // A `max_tokens` cut that left nothing but reasoning has no
+            // partial to continue, and the same request would think its
+            // way to the same cut. While reasoning was on for this request
+            // and the turn budget is not spent, the turn is asked once more
+            // without it; the next run starts with the configured effort.
+            let retry_without_reasoning = truncated
+                && !has_visible_output
+                && !cut::is_blank(&message)
+                && !reasoning_off
+                && !self.client.reasoning_is_off()
+                && !self.at_turn_limit(turns);
             // A blank turn is no news: skip it on abort, and skip a blank
             // truncated turn too, so a provider that cuts before the first
-            // token leaves no empty assistant entry behind.
-            if !(cut::is_blank(&message) && (outcome.aborted || short.is_some())) {
+            // token leaves no empty assistant entry behind. A turn asked
+            // again without reasoning is not kept either: the retry asks
+            // the same question, so there is nothing to carry forward.
+            if !(cut::is_blank(&message) && (outcome.aborted || short.is_some()))
+                && !retry_without_reasoning
+            {
                 self.push_entry(message.clone())?;
             }
 
@@ -261,6 +301,7 @@ impl Agent {
                         timings: timings.clone(),
                         thinking_pct,
                     },
+                    thought_only: retry_without_reasoning,
                 };
                 let tool_call_ids = message
                     .tool_calls
@@ -282,6 +323,13 @@ impl Agent {
                     // `handle_cut` already sent the TurnEnded carrying the
                     // stop reason that names the truncation.
                     cut::After::Continue => continue,
+                    // Nothing of the thought-only turn was kept, so the next
+                    // request is this one again, now with reasoning off.
+                    cut::After::RetryWithoutReasoning => {
+                        reasoning_off = true;
+                        retrying_without_reasoning = true;
+                        continue;
+                    }
                     cut::After::EndRun => break,
                     cut::After::Aborted => {
                         // The loop's abort shape finishes the run with every

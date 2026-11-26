@@ -155,6 +155,20 @@ pub(super) fn length_response(text: &str) -> String {
     .to_string()
 }
 
+/// A turn the model spent entirely on thinking before `max_tokens` ran
+/// out: `length` finish, no content, reasoning only.
+pub(super) fn thought_only_length_response(reasoning: &str) -> String {
+    json!({
+        "choices": [{
+            "message": {"role": "assistant", "content": null, "reasoning_content": reasoning},
+            "finish_reason": "length",
+        }],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 512, "total_tokens": 522,
+                  "reasoning_tokens": 512},
+    })
+    .to_string()
+}
+
 /// `(id, name, arguments-string)` triples become one assistant tool-call
 /// response with `content: null`.
 pub(super) fn tool_call_response(calls: &[(&str, &str, &str)]) -> String {
@@ -258,6 +272,17 @@ pub(super) fn sse_reasoning_text_response(reasoning: &str, text: &str) -> String
         json!({"choices":[{"index":0,"delta":{"content":b},"finish_reason":null}]}),
         json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
         json!({"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}),
+    ])
+}
+
+/// [`thought_only_length_response`](thought_only_length_response)'s
+/// stream: reasoning fragments, then the `length` finish.
+pub(super) fn sse_thought_only_length_response(reasoning: &str) -> String {
+    sse_stream(vec![
+        json!({"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}),
+        json!({"choices":[{"index":0,"delta":{"reasoning_content":reasoning},"finish_reason":null}]}),
+        json!({"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}),
+        json!({"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":512,"total_tokens":522}}),
     ])
 }
 

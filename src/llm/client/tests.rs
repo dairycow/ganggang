@@ -154,6 +154,10 @@ async fn a_400_is_not_retried() {
         rendered.contains("400") && rendered.contains("bad model name"),
         "{rendered}"
     );
+    assert!(
+        is_refusal(&err),
+        "the server answered the request itself: {rendered}"
+    );
     assert_eq!(server.attempts.load(Ordering::SeqCst), 1);
 }
 
@@ -188,6 +192,10 @@ async fn retries_stop_at_the_budget_and_keep_the_last_error() {
     assert!(
         rendered.contains("503") && rendered.contains("last"),
         "{rendered}"
+    );
+    assert!(
+        !is_refusal(&err),
+        "a 503 is the server failing, not refusing the request: {rendered}"
     );
     assert!(
         !rendered.contains("one"),
@@ -257,6 +265,67 @@ async fn reasoning_effort_and_budget_are_sent_when_configured() {
     let v: serde_json::Value = serde_json::from_str(body).unwrap();
     assert_eq!(v["reasoning_effort"], "medium");
     assert_eq!(v["reasoning_budget_tokens"], 4096);
+}
+
+/// A request without reasoning carries `reasoning_effort: "none"` and no
+/// budget whatever the endpoint configured, and changes nothing the next
+/// ordinary request sends.
+#[tokio::test]
+async fn a_request_without_reasoning_sends_none_and_no_budget() {
+    let (base_url, seen) = echo_request(OK);
+    let client = LlmClient::new(&base_url)
+        .unwrap()
+        .with_reasoning_effort(Some("medium".into()))
+        .with_reasoning_budget_tokens(Some(4096));
+    client
+        .send_without_reasoning("m", &[], 16, &[])
+        .await
+        .unwrap();
+    let raw = seen.lock().unwrap().clone();
+    let body = raw.split("\r\n\r\n").nth(1).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(v["reasoning_effort"], "none");
+    assert!(v.get("reasoning_budget_tokens").is_none(), "{v}");
+    assert_eq!(client.reasoning_effort.as_deref(), Some("medium"));
+    assert_eq!(client.reasoning_budget_tokens, Some(4096));
+}
+
+/// An endpoint already on `none` with no budget sends what a retry without
+/// reasoning would send; only then is there nothing for the retry to
+/// change.
+#[test]
+fn reasoning_is_off_only_when_nothing_but_none_is_configured() {
+    let base = "http://127.0.0.1:1";
+    assert!(
+        !LlmClient::new(base).unwrap().reasoning_is_off(),
+        "the provider's default is not off"
+    );
+    assert!(
+        !LlmClient::new(base)
+            .unwrap()
+            .with_reasoning_effort(Some("low".into()))
+            .reasoning_is_off()
+    );
+    assert!(
+        !LlmClient::new(base)
+            .unwrap()
+            .with_reasoning_budget_tokens(Some(2048))
+            .reasoning_is_off()
+    );
+    assert!(
+        !LlmClient::new(base)
+            .unwrap()
+            .with_reasoning_effort(Some("none".into()))
+            .with_reasoning_budget_tokens(Some(2048))
+            .reasoning_is_off(),
+        "a budget still asks for thinking"
+    );
+    assert!(
+        LlmClient::new(base)
+            .unwrap()
+            .with_reasoning_effort(Some("none".into()))
+            .reasoning_is_off()
+    );
 }
 
 /// Each retry leaves one line for the caller, naming the failure and the

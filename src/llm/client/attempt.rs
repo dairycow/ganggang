@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 
-use super::LlmClient;
+use super::{LlmClient, Refused};
 use crate::llm::retry::{self, Verdict};
 use crate::llm::stream;
 
@@ -121,10 +121,19 @@ impl LlmClient {
                 .and_then(|v| v.to_str().ok()),
         );
         let body = response.text().await.unwrap_or_default();
+        let message = format!("POST {url} {}", status_detail(status, &body));
+        // A 4xx is the server's answer to the request itself, so nothing
+        // is retried. It is typed too: a caller with a fallback for a
+        // refused request has to tell it from a transport failure.
+        let error = if status.is_client_error() {
+            anyhow::Error::new(Refused(message))
+        } else {
+            anyhow::anyhow!(message)
+        };
         Err(Failure {
             retry: retry::classify_status(status, retry_after),
             reason: status.to_string(),
-            error: anyhow::anyhow!("POST {url} {}", status_detail(status, &body)),
+            error,
         })
     }
 

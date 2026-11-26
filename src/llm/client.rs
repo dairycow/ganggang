@@ -157,6 +157,40 @@ impl LlmClient {
         .await
     }
 
+    /// [`send`](Self::send) with reasoning switched off for this one request:
+    /// `reasoning_effort: "none"` and no budget, whatever the endpoint
+    /// configured. It is the retry a turn earns when reasoning used up the
+    /// whole `max_tokens`; every later request goes out as configured again
+    /// unless it goes through this method too.
+    pub async fn send_without_reasoning(
+        &self,
+        model: &str,
+        messages: &[ChatMessage],
+        max_tokens: u32,
+        tools: &[Value],
+    ) -> anyhow::Result<ChatResponse> {
+        self.send_with_reasoning(
+            model,
+            messages,
+            max_tokens,
+            tools,
+            Some(REASONING_OFF),
+            None,
+        )
+        .await
+    }
+
+    /// Whether every request already goes out with reasoning off
+    /// ([`send_without_reasoning`](Self::send_without_reasoning) would send
+    /// the same one again), so a retry without reasoning has nothing to
+    /// change.
+    pub fn reasoning_is_off(&self) -> bool {
+        self.reasoning_effort
+            .as_deref()
+            .is_some_and(|effort| effort.trim().eq_ignore_ascii_case(REASONING_OFF))
+            && self.reasoning_budget_tokens.is_none()
+    }
+
     /// The non-streaming send both call paths share: build the request for
     /// the endpoint's API, send it, parse the response. [`LlmClient::send`]
     /// passes the client's own reasoning settings; [`LlmClient::send_summary`]
@@ -246,7 +280,53 @@ impl LlmClient {
         abort: &AtomicBool,
         on_delta: impl FnMut(stream::Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
     ) -> anyhow::Result<StreamOutcome> {
-        let (url, request) = match self.api {
+        let (url, request) = self.stream_request(
+            model,
+            messages,
+            max_tokens,
+            tools,
+            self.reasoning_effort.as_deref(),
+            self.reasoning_budget_tokens,
+        )?;
+        self.drain_stream(&url, request, abort, on_delta).await
+    }
+
+    /// [`send_stream`](Self::send_stream) with reasoning switched off for
+    /// this one request, as [`send_without_reasoning`](Self::send_without_reasoning)
+    /// does for the plain one.
+    pub async fn send_stream_without_reasoning(
+        &self,
+        model: &str,
+        messages: &[ChatMessage],
+        max_tokens: u32,
+        tools: &[Value],
+        abort: &AtomicBool,
+        on_delta: impl FnMut(stream::Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
+    ) -> anyhow::Result<StreamOutcome> {
+        let (url, request) = self.stream_request(
+            model,
+            messages,
+            max_tokens,
+            tools,
+            Some(REASONING_OFF),
+            None,
+        )?;
+        self.drain_stream(&url, request, abort, on_delta).await
+    }
+
+    /// The streaming request for the endpoint's API, carrying the call's
+    /// own reasoning pair: the endpoint's, or the pair a retry without
+    /// reasoning passes.
+    fn stream_request(
+        &self,
+        model: &str,
+        messages: &[ChatMessage],
+        max_tokens: u32,
+        tools: &[Value],
+        reasoning_effort: Option<&str>,
+        reasoning_budget_tokens: Option<u32>,
+    ) -> anyhow::Result<(String, reqwest::Request)> {
+        match self.api {
             ApiKind::OpenAiCompletions => {
                 let body = ChatRequest {
                     model,
@@ -257,8 +337,8 @@ impl LlmClient {
                     stream_options: Some(StreamOptions {
                         include_usage: true,
                     }),
-                    reasoning_effort: self.reasoning_effort.as_deref(),
-                    reasoning_budget_tokens: self.reasoning_budget_tokens,
+                    reasoning_effort,
+                    reasoning_budget_tokens,
                 };
                 build_request(
                     self.apply_auth(
@@ -267,7 +347,7 @@ impl LlmClient {
                             .json(&body),
                     ),
                     self.request_timeout,
-                )?
+                )
             }
             ApiKind::AnthropicMessages => {
                 let body = anthropic::build_request(model, messages, max_tokens, tools, true);
@@ -279,12 +359,22 @@ impl LlmClient {
                     )
                     .json(&body),
                     self.request_timeout,
-                )?
+                )
             }
-        };
+        }
+    }
+
+    /// Send one built streaming request and assemble its answer.
+    async fn drain_stream(
+        &self,
+        url: &str,
+        request: reqwest::Request,
+        abort: &AtomicBool,
+        on_delta: impl FnMut(stream::Delta) -> Pin<Box<dyn Future<Output = ()> + Send>>,
+    ) -> anyhow::Result<StreamOutcome> {
         // The stop request is part of the send: it ends the wait for the
         // response head and rules out a retry.
-        let response = self.attempts(&url, request, Some(abort)).await?;
+        let response = self.attempts(url, request, Some(abort)).await?;
         match self.api {
             ApiKind::OpenAiCompletions => stream::drain_sse(response, abort, on_delta).await,
             ApiKind::AnthropicMessages => {
@@ -306,6 +396,31 @@ const SUMMARY_REASONING_BUDGET_TOKENS: u32 = 512;
 /// `none` and `low` are already cheap, and an unconfigured client sends
 /// neither field at all.
 const HEAVY_REASONING_EFFORTS: [&str; 4] = ["medium", "high", "xhigh", "max"];
+
+/// The `reasoning_effort` that switches a model's thinking off, as
+/// [`LlmClient::send_without_reasoning`] and
+/// [`LlmClient::send_stream_without_reasoning`] send it.
+const REASONING_OFF: &str = "none";
+
+/// The server's answer to a request it refused to serve: a 4xx status with
+/// its body. `Display` is the error text; a caller with a fallback for a
+/// refused request tells it from a transport failure with [`is_refusal`].
+#[derive(Debug)]
+pub struct Refused(String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
+
+/// Whether an error from the client is the server's [`Refused`] answer to
+/// the request itself, rather than a failure to reach or read it.
+pub fn is_refusal(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<Refused>().is_some()
+}
 
 fn is_opencode_url(base_url: &str) -> bool {
     let Some((_, rest)) = base_url.split_once("://") else {

@@ -24,6 +24,13 @@
 //! (`--max-turns`) is spent on it too, and a short answer at the budget's
 //! end is not continued: the cap would be exceeded by the very request
 //! that asks for the rest.
+//!
+//! A `max_tokens` cut that leaves nothing but reasoning has no partial to
+//! carry forward, and the same request would think its way to the same
+//! cut. While reasoning was on for the request, the loop asks for the turn
+//! once more with it off, keeps nothing of the thought-only turn, and sends
+//! the rest of the run without reasoning too. A server that refuses the
+//! request ends the run the way the truncation alone would have.
 
 use std::sync::atomic::Ordering;
 
@@ -54,6 +61,10 @@ pub(super) struct ShortTurn<'a> {
     pub request: &'a [ChatMessage],
     /// What its `TurnEnded` carries.
     pub telemetry: Telemetry,
+    /// The `max_tokens` cut left nothing but reasoning, and the loop can
+    /// ask the turn again without it: reasoning was on for the request, and
+    /// the run's turn budget is not spent.
+    pub thought_only: bool,
 }
 
 /// How many times one run may ask the model to continue a short answer.
@@ -106,6 +117,9 @@ impl Cut {
 pub(super) struct Plan {
     pub(super) warning: String,
     pub(super) continue_turn: bool,
+    /// The next request asks for this turn again with reasoning off,
+    /// instead of the remainder of the partial answer.
+    pub(super) without_reasoning: bool,
 }
 
 /// `used` is how many continuations this run has already spent;
@@ -113,12 +127,15 @@ pub(super) struct Plan {
 /// nothing is continued whatever the continuation budget says. A short
 /// turn that produced no visible output is not continued either: there is
 /// nothing to carry forward, and asking again would repeat the same cut.
+/// The exception is `thought_only` (see [`ShortTurn`]): the same question
+/// asked without reasoning has not been tried yet.
 fn plan(
     cut: Cut,
     used: u32,
     max_tokens: u32,
     at_turn_limit: bool,
     has_visible_output: bool,
+    thought_only: bool,
 ) -> Plan {
     let head = match cut {
         Cut::StreamEnded => "stream ended early".to_string(),
@@ -130,21 +147,34 @@ fn plan(
             return Plan {
                 warning: String::new(),
                 continue_turn: false,
+                without_reasoning: false,
             };
         }
     };
     if !has_visible_output {
+        if thought_only && !at_turn_limit {
+            return Plan {
+                warning: format!(
+                    "{head} with nothing but reasoning; asking again with reasoning off, \
+                     which stays off for the rest of this run"
+                ),
+                continue_turn: true,
+                without_reasoning: true,
+            };
+        }
         return Plan {
             warning: format!(
                 "{head} before producing visible output; stopping instead of continuing"
             ),
             continue_turn: false,
+            without_reasoning: false,
         };
     }
     if at_turn_limit {
         Plan {
             warning: format!("{head}; reached max_turns — the partial answer stands"),
             continue_turn: false,
+            without_reasoning: false,
         }
     } else if used < MAX_CONTINUATIONS {
         Plan {
@@ -153,6 +183,7 @@ fn plan(
                 used + 1
             ),
             continue_turn: true,
+            without_reasoning: false,
         }
     } else {
         Plan {
@@ -160,6 +191,7 @@ fn plan(
                 "{head}; stopping after {used} continuation(s) — the partial answer stands"
             ),
             continue_turn: false,
+            without_reasoning: false,
         }
     }
 }
@@ -168,6 +200,9 @@ fn plan(
 pub(super) enum After {
     /// The continuation message is appended; ask again.
     Continue,
+    /// Nothing was appended: ask for the same turn again, with reasoning
+    /// off for that request and the rest of the run.
+    RetryWithoutReasoning,
     /// Budget spent: end the run with the partial answer standing.
     EndRun,
     /// The user had already asked to stop.
@@ -194,6 +229,12 @@ pub(super) fn is_blank(message: &Message) -> bool {
 }
 
 impl Agent {
+    /// Whether the run's turn budget is spent at `turn`: nothing is asked
+    /// for past it, since that request would exceed the cap.
+    pub(super) fn at_turn_limit(&self, turn: u32) -> bool {
+        self.max_turns.is_some_and(|limit| turn >= limit)
+    }
+
     /// Record a short turn and decide what follows. The assistant message
     /// is already an entry; its tool calls are the part that must not run
     /// — arguments can be cut mid-JSON and the answer they belong to is
@@ -208,7 +249,10 @@ impl Agent {
     /// [`Cut::Aborted`] turn skips the warning and the turn marker and
     /// answers its calls with the loop's usual "aborted before execution";
     /// the caller's abort shape (marker entry, `run aborted`, `RunAborted`)
-    /// finishes the run.
+    /// finishes the run. A thought-only truncation the loop can retry
+    /// (`turn.thought_only`) is neither continued nor ended: the caller
+    /// kept no entry for it, and asks for the same turn again with
+    /// reasoning off.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn handle_cut(
         &mut self,
@@ -230,7 +274,7 @@ impl Agent {
         }
         // A turn at the run's turn budget is not continued, whatever the
         // continuation budget says.
-        let at_turn_limit = self.max_turns.is_some_and(|limit| turn.number >= limit);
+        let at_turn_limit = self.at_turn_limit(turn.number);
         // A truncation warns about itself, then decides on a continuation;
         // an abort warns about nothing (its own marker covers it) and never
         // continues. Empty warning means nothing to say.
@@ -240,6 +284,7 @@ impl Agent {
             self.max_tokens,
             at_turn_limit,
             has_visible_output,
+            turn.thought_only,
         );
         // A continuation is another request, so it falls under the loop's
         // one guard: the user's stop request — checked before the warning,
@@ -280,6 +325,9 @@ impl Agent {
             } else {
                 After::EndRun
             });
+        }
+        if decision.without_reasoning {
+            return Ok(After::RetryWithoutReasoning);
         }
         *used += 1;
         self.push_message(Role::User, Some(CONTINUE_INSTRUCTION.into()))?;

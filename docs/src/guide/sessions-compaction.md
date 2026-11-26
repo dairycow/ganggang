@@ -28,7 +28,7 @@ Session files are plain JSON you can read, `grep`, or [export](modes.md#html-exp
 ### Aborted and truncated turns
 
 - Aborted runs append `[aborted by user]` after any partial output. Interrupted tool calls receive synthetic `aborted before execution` results so the session stays valid. Aborting before the first token creates no blank assistant entry.
-- A truncated answer is [continued](modes.md#truncated-responses): the next user entry is `[continue exactly where you stopped; do not repeat text you already wrote]`, and any tool call cut off with the answer is answered `not executed: response was truncated` rather than run. A truncation that produced no visible text or tool call is not continued: `gg` warns and stops, and no blank assistant entry is recorded.
+- A truncated answer is [continued](modes.md#truncated-responses): the next user entry is `[continue exactly where you stopped; do not repeat text you already wrote]`, and any tool call cut off with the answer is answered `not executed: response was truncated` rather than run. A truncation that produced no visible text or tool call is not continued: `gg` warns and stops, and no blank assistant entry is recorded. A turn that was nothing but reasoning is asked again with reasoning off instead (see [Truncated responses](modes.md#truncated-responses)), and the cut turn leaves no entry.
 
 ## Compaction
 
