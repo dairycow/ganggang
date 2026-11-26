@@ -419,8 +419,14 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn flush_and_exit(code: i32) -> ! {
+    // `process::exit` runs no destructors, so the group kill `Jobs::drop`
+    // would do happens here instead: a kept background job does not
+    // outlive the process. The second pass catches a deadline that kept a
+    // job while this ran — a second Ctrl-C can land mid-call.
+    crate::agent::tools::bash::kill_jobs_at_exit();
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
+    crate::agent::tools::bash::kill_jobs_at_exit();
     std::process::exit(code);
 }
 

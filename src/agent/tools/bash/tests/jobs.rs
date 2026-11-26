@@ -8,6 +8,16 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
+/// Kept-job tests run one at a time: the exit kill below fires
+/// process-wide, so a parallel test's job must not be in the registry
+/// when it does.
+static KEPT_JOB_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Hold the kept-job slot for the duration of one test.
+async fn one_job_test() -> tokio::sync::MutexGuard<'static, ()> {
+    KEPT_JOB_TESTS.lock().await
+}
+
 /// Start `command` as a job whose first wait ends after `timeout_secs`.
 async fn start(tool: &BashTool, command: &str, timeout_secs: u64) -> ToolResult {
     tool.execute(
@@ -76,6 +86,7 @@ async fn a_job_that_finishes_within_the_deadline_reports_like_any_command() {
 /// doing so.
 #[tokio::test]
 async fn a_job_still_running_at_the_deadline_is_kept_and_can_be_collected() {
+    let _jobs = one_job_test().await;
     let tool = BashTool::new(std::env::temp_dir(), 30, no_nest());
     let started = Instant::now();
     let r = start(&tool, "printf start; sleep 3; echo LATE", 1).await;
@@ -106,6 +117,7 @@ async fn a_job_still_running_at_the_deadline_is_kept_and_can_be_collected() {
 /// running with whatever it has printed.
 #[tokio::test]
 async fn wait_for_reports_a_job_still_running_with_its_output_so_far() {
+    let _jobs = one_job_test().await;
     let tool = BashTool::new(std::env::temp_dir(), 30, no_nest());
     start(&tool, "printf early; sleep 3; echo late", 1).await;
     let r = wait(&tool, 1, Some(1)).await;
@@ -193,6 +205,7 @@ fn the_schema_offers_jobs_and_names_the_ceiling() {
 /// (unique, valid) sleep durations so pgrep can find group members.
 #[tokio::test]
 async fn dropping_the_tool_kills_the_jobs_it_kept() {
+    let _jobs = one_job_test().await;
     let pid = std::process::id();
     let (first, second) = (format!("811.{pid}"), format!("812.{pid}"));
     let patterns = [
@@ -231,6 +244,7 @@ fn matches(pattern: &str) -> bool {
 /// collected under its own number.
 #[tokio::test]
 async fn jobs_are_numbered_from_1_in_the_order_kept() {
+    let _jobs = one_job_test().await;
     let tool = BashTool::new(std::env::temp_dir(), 30, no_nest());
     let r = start(&tool, "sleep 2; echo one", 1).await;
     assert!(r.output.contains("background job 1"), "{}", r.output);
@@ -249,6 +263,7 @@ async fn jobs_are_numbered_from_1_in_the_order_kept() {
 /// carries its output and exit code, as for any command.
 #[tokio::test]
 async fn a_collected_job_with_a_nonzero_exit_is_an_error_with_its_output() {
+    let _jobs = one_job_test().await;
     let tool = BashTool::new(std::env::temp_dir(), 30, no_nest());
     let r = start(&tool, "echo oops; sleep 2; exit 3", 1).await;
     assert!(r.output.contains("background job 1"), "{}", r.output);
@@ -277,6 +292,7 @@ async fn a_job_that_cannot_spawn_keeps_nothing() {
 /// duration so pgrep can find group members.
 #[tokio::test]
 async fn stop_kills_a_kept_job_and_leaves_a_finished_one_alone() {
+    let _jobs = one_job_test().await;
     let pid = std::process::id();
     let marker = format!("831.{pid}");
     let pattern = format!(r"831\.{pid}([^0-9]|$)");
@@ -338,6 +354,7 @@ async fn a_job_number_takes_no_command_and_not_the_other_parameter() {
 /// `sh` keeps it on its command line; the sleep ends by itself.
 #[tokio::test]
 async fn a_job_whose_shell_has_exited_is_not_signalled() {
+    let _jobs = one_job_test().await;
     if std::process::Command::new("setsid")
         .arg("--version")
         .stdout(Stdio::null())
@@ -379,6 +396,7 @@ async fn a_job_whose_shell_has_exited_is_not_signalled() {
 /// pgrep can find group members.
 #[tokio::test]
 async fn a_stop_request_in_the_first_wait_kills_the_job() {
+    let _jobs = one_job_test().await;
     let pid = std::process::id();
     let marker = format!("821.{pid}");
     let pattern = format!(r"821\.{pid}([^0-9]|$)");
@@ -414,6 +432,7 @@ async fn a_stop_request_in_the_first_wait_kills_the_job() {
 /// the job is still there to collect.
 #[tokio::test]
 async fn a_stop_request_ends_a_wait_and_leaves_the_job_running() {
+    let _jobs = one_job_test().await;
     let tool = BashTool::new(std::env::temp_dir(), 30, no_nest());
     start(&tool, "sleep 3; echo done", 1).await;
     let (cancel, setter) = stop_after(100);
@@ -431,4 +450,26 @@ async fn a_stop_request_ends_a_wait_and_leaves_the_job_running() {
     );
     let r = wait(&tool, 1, None).await;
     assert!(r.output.contains("done"), "{}", r.output);
+}
+
+/// `process::exit` runs no destructors, so the exit path carries the group
+/// kill itself: the registry takes down a kept job with no tool drop in
+/// sight. The tool is forgotten rather than dropped, so the exit kill is
+/// the only thing that could have worked. The marker doubles as the
+/// (unique, valid) sleep duration so pgrep can find group members.
+#[tokio::test]
+async fn the_exit_kill_takes_down_a_kept_job_without_a_drop() {
+    let _jobs = one_job_test().await;
+    let pid = std::process::id();
+    let marker = format!("851.{pid}");
+    let pattern = format!(r"851\.{pid}([^0-9]|$)");
+    let tool = BashTool::new(std::env::temp_dir(), 30, no_nest());
+    let r = start(&tool, &format!("sleep {marker} | sleep {marker}"), 1).await;
+    assert!(r.output.contains("background job 1"), "{}", r.output);
+    assert!(matches(&pattern), "{pattern}");
+
+    let killed = kill_jobs_at_exit();
+    assert!(killed >= 1, "the exit kill signalled {killed} groups");
+    std::mem::forget(tool);
+    require_dead(&pattern, "the exit kill").await;
 }

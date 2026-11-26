@@ -10,7 +10,9 @@
 //! limits and lineage of a `gg -p` the command starts.
 //!
 //! A command longer than the deadline can be kept as a background job
-//! instead of being killed ([`jobs`]); every call still ends in time.
+//! instead of being killed ([`jobs`]); every call still ends in time, and
+//! a kept job dies with the process, even at an exit that skips
+//! destructors.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,6 +28,8 @@ mod hint;
 mod jobs;
 mod output;
 mod process;
+
+pub(crate) use jobs::kill_jobs_at_exit;
 
 use output::{OUTPUT_CAP, render_capture};
 use process::{Stop, drain_and_wait, settle, spawn};
