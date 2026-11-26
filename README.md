@@ -4,7 +4,7 @@ A small, sharp agentic harness in Rust. One agent loop, eight tools, and a termi
 
 **[Read the user guide](https://dairycow.github.io/ganggang/)**
 
-`gg` defaults to a local [Strata](https://github.com/Niko1221/Strata) server: no cloud, no accounts, no telemetry. It also speaks OpenAI Chat Completions and Anthropic Messages endpoints, with built-in provider presets and custom `[providers.<name>]` configs.
+`gg` defaults to the `glm-coding-plan` preset and its `glm-5.3-flash` model while you hold a key for it (`ZHIPU_API_KEY`, `GG_API_KEY` or one in your config), and to a local [Strata](https://github.com/Niko1221/Strata) server otherwise. It also speaks OpenAI Chat Completions and Anthropic Messages endpoints, with built-in provider presets and custom `[providers.<name>]` configs.
 
 ## Install and run
 
@@ -20,7 +20,14 @@ cargo build --release
 ./target/release/gg -p "…"     # one-shot print mode
 ```
 
-Start Strata and verify its health endpoint:
+With a Z.ai coding plan key, the default provider is ready to use:
+
+```sh
+export ZHIPU_API_KEY=...         # https://z.ai
+./target/release/gg --list-models
+```
+
+Without the key, `gg` starts on a local Strata server instead. With the key, select Strata with `gg -P strata`:
 
 ```sh
 strata launch
@@ -46,7 +53,7 @@ Precedence: CLI flags > environment (`GG_PROVIDER`, `GG_BASE_URL`, `GG_MODEL`, `
 
 ```toml
 # ~/.gg/config.toml
-provider = "strata"
+# provider = "glm-coding-plan"    # names it outright; unset, the first default you hold a key for wins
 max_tokens = 16384
 # context_window = 131072   # auto-probed from Strata /health when unset
 bash_timeout_secs = 30

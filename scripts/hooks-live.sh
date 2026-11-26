@@ -2,6 +2,8 @@
 # Live gate for §22 hooks: runs the built gg against Strata with a temp
 # HOME and workspace, and checks the deny path, the observe paths, the
 # --no-hooks escape hatch, and that project hooks are ignored.
+# `-P strata` names that server: with a provider key in the environment,
+# the first ranked default would otherwise take these prompts.
 # Usage: scripts/hooks-live.sh  (from the repo root; cargo build first)
 set -euo pipefail
 
@@ -54,7 +56,7 @@ EOF
 echo "== 1. pre_tool deny prevents the side effect =="
 (
   cd "$work"
-  HOME="$home" "$GG" --no-session --tools bash -p \
+  HOME="$home" "$GG" -P strata --no-session --tools bash -p \
     "Run the command 'touch pwned' with the bash tool, then tell me exactly what the tool returned." \
     >"$scratch/answer" 2>"$scratch/stderr"
 )
@@ -79,7 +81,7 @@ printf '[package]\nname = "fixture"\nversion = "9.9.9"\n' > "$work/Cargo.toml"
 rm -f "$scratch/post-read"
 (
   cd "$work"
-  HOME="$home" "$GG" --no-session --tools read -p \
+  HOME="$home" "$GG" -P strata --no-session --tools read -p \
     "Read Cargo.toml from this directory and reply with just the version number." \
     >"$scratch/answer2" 2>"$scratch/stderr2"
 )
@@ -103,7 +105,7 @@ echo "== 3. --no-hooks bypasses the guard =="
 rm -f "$scratch/run-end"
 (
   cd "$work"
-  HOME="$home" "$GG" --no-session --no-hooks --tools bash -p \
+  HOME="$home" "$GG" -P strata --no-session --no-hooks --tools bash -p \
     "Run the command 'touch pwned' with the bash tool." >/dev/null 2>&1
 )
 if [[ ! -e "$work/pwned" ]]; then
@@ -126,7 +128,7 @@ EOF
 rm -f "$scratch/project-marker"
 (
   cd "$work"
-  HOME="$home" "$GG" --no-session --tools read -p "reply with exactly: ok" \
+  HOME="$home" "$GG" -P strata --no-session --tools read -p "reply with exactly: ok" \
     >/dev/null 2>"$scratch/project-stderr"
 )
 if [[ -e "$scratch/project-marker" ]]; then

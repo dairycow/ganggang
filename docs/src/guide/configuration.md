@@ -16,11 +16,11 @@ Merging is shallow: a higher-precedence key replaces the lower value completely.
 
 ```toml
 # ~/.gg/config.toml
-provider = "strata"
+# provider = "glm-coding-plan"    # names it outright: no ranking, and its key is required
 max_tokens = 16384
 # context_window = 131072   # auto-probed from Strata /health when unset
-# reasoning_effort = "medium"       # strata default
-# reasoning_budget_tokens = 4096    # strata default (0 disables)
+# reasoning_effort = "high"         # empty string clears it
+# reasoning_budget_tokens = 8192    # 0 disables
 bash_timeout_secs = 30
 max_retries = 5
 request_timeout_secs = 600
@@ -51,7 +51,19 @@ Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `a
 
 ## Providers
 
-Built-in providers: `strata` (local default), `glm-coding-plan` (alias `zai-coding-plan`), `opencode-go` (routes OpenAI Completions and Anthropic Messages per model), `deepseek`, and `openrouter` (OpenAI Completions). Their models, endpoints and limits are in [Providers and models](../reference/providers-and-models.md); `gg --list-models` probes `GET /v1/models` on `strata` and any local OpenAI-compatible provider (such as `llama-server --models-preset`) to show live models, `loaded`/`unloaded` status, and context windows alongside cloud providers and key status; the TUI's `/model` list is refreshed by the same probe in the background.
+When nothing names a provider (no `provider` key, `-P`, `GG_PROVIDER`, or a `provider/model` prefix in `-m` or `GG_MODEL`), `gg` takes the first of the ranked defaults you hold a key for: `glm-coding-plan` while you hold a key for it (`ZHIPU_API_KEY`, `GG_API_KEY`, or an `api_key` in this file, at the top or under `[providers.glm-coding-plan]`), otherwise `strata`, which needs no key. A bare `model` key, a bare `-m` id or a bare `GG_MODEL` names no provider: it applies to whichever of the two is chosen, with the flat keys set for it, and the notice names that model. When the choice passes over `glm-coding-plan`, `gg` prints one line on stderr, naming the model in use as a local `/health` probe may have replaced it:
+
+```text
+gg: passed over glm-coding-plan (no ZHIPU_API_KEY): using strata/qwen3.8-flash-next-iq3_s
+```
+
+Naming the provider (`provider = "glm-coding-plan"` or `-P glm-coding-plan`) turns the ranking off: `gg` uses what you named, and reports the missing key if there is none.
+
+A `base_url` key, or `GG_BASE_URL`, is for a server of your own. With no provider named, no key of a provider's own is sent to that address: `gg` takes the first ranked default that neither needs nor holds a key, sends whatever key you gave outright (`GG_API_KEY` or a top-level `api_key`), and the notice says so when that passes one over. To send a provider's own key there, name the provider in the same file, or set the address with `GG_BASE_URL` and use `-P`. If no default can run without a key of its own, `gg` refuses to start.
+
+The ranked list is generated into [Providers and models](../reference/providers-and-models.md).
+
+Built-in providers: `glm-coding-plan` (alias `zai-coding-plan`), `strata` (local), `opencode-go` (routes OpenAI Completions and Anthropic Messages per model), `deepseek`, and `openrouter` (OpenAI Completions). Their models, endpoints and limits are in [Providers and models](../reference/providers-and-models.md); `gg --list-models` probes `GET /v1/models` on `strata` and any local OpenAI-compatible provider (such as `llama-server --models-preset`) to show live models, `loaded`/`unloaded` status, and context windows alongside cloud providers and key status; the TUI's `/model` list is refreshed by the same probe in the background.
 
 Patch a built-in or define your own under `[providers.<name>]`. A custom provider must set `base_url` and `model`:
 

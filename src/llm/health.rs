@@ -264,7 +264,11 @@ mod tests {
             }
         });
 
-        let mut ep = crate::config::Config::default().active_endpoint();
+        // These are Strata's `/health` answers, so the endpoints are
+        // Strata's own, not whatever the first shipped choice is.
+        let all = crate::config::Config::default();
+        let strata = all.providers.get("strata").unwrap();
+        let mut ep = strata.resolve(None);
         ep.base_url = format!("http://{addr}/v1");
         ep.model_explicit = false;
         ep.context_window_explicit = false;
@@ -272,7 +276,7 @@ mod tests {
         assert_eq!(ep.model, "inkling-2-mini-sq-15");
         assert_eq!(ep.context_window, 32_768);
 
-        let mut explicit_ep = crate::config::Config::default().active_endpoint();
+        let mut explicit_ep = strata.resolve(None);
         explicit_ep.base_url = format!("http://{addr}/v1");
         explicit_ep.model = "my-forced-model".into();
         explicit_ep.model_explicit = true;
@@ -314,7 +318,11 @@ mod tests {
         assert_eq!(custom_ep.model, "gemma4-26b-200k");
         assert_eq!(custom_ep.context_window, 200_000);
 
-        let mut strata_ep = crate::config::Config::default().active_endpoint();
+        let mut strata_ep = crate::config::Config::default()
+            .providers
+            .get("strata")
+            .expect("built-in strata provider")
+            .resolve(None);
         strata_ep.base_url = format!("http://{addr}/v1");
         strata_ep.model_explicit = false;
         strata_ep.context_window_explicit = false;

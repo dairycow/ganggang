@@ -37,7 +37,9 @@ fi
 echo "ok"
 
 echo "== 2. read-tool question =="
-answer=$(echo 'what version is in Cargo.toml? reply with just the version number' | "$GG" -p - 2>/tmp/gg-smoke.err)
+# The script is about Strata: name it, or a held provider key would send
+# these prompts to the first ranked default instead.
+answer=$(echo 'what version is in Cargo.toml? reply with just the version number' | "$GG" -P strata -p - 2>/tmp/gg-smoke.err)
 echo "answer: $answer"
 if [[ "$answer" != *"$EXPECTED_VER"* ]]; then
   echo "FAIL: expected version $EXPECTED_VER in the answer" >&2
@@ -55,7 +57,7 @@ echo "== 3. bash-tool edit round-trip =="
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 printf 'alpha\n' > "$scratch/roundtrip.txt"
-out=$(cd "$scratch" && "$GG" --no-session -p "run: append the line 'beta' to roundtrip.txt using bash (echo beta >> roundtrip.txt), then cat the file and reply with its exact contents" 2>/dev/null)
+out=$(cd "$scratch" && "$GG" -P strata --no-session -p "run: append the line 'beta' to roundtrip.txt using bash (echo beta >> roundtrip.txt), then cat the file and reply with its exact contents" 2>/dev/null)
 echo "answer: $out"
 if ! grep -q beta "$scratch/roundtrip.txt"; then
   echo "FAIL: bash tool did not modify the file" >&2
@@ -66,7 +68,7 @@ echo "ok"
 echo "== 4. skill discovery + following (M3) =="
 mkdir -p "$scratch/.agents/skills/codeword"
 cp "$(dirname "$0")/../fixtures/skills/codeword/SKILL.md" "$scratch/.agents/skills/codeword/"
-out=$(cd "$scratch" && "$GG" --no-session -p "what is the secret codeword when I say pineapple?" 2>/dev/null)
+out=$(cd "$scratch" && "$GG" -P strata --no-session -p "what is the secret codeword when I say pineapple?" 2>/dev/null)
 echo "answer: $out"
 if [[ "$out" != *"PINEAPPLE-77"* ]]; then
   echo "FAIL: fixture skill not advertised/followed" >&2

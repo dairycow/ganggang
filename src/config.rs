@@ -16,9 +16,12 @@ use crate::agent::session::ReplayReasoning;
 use crate::llm::{ApiKind, AuthStyle};
 pub use providers::{Endpoint, ProviderConfig};
 
+/// `GG_BASE_URL` and `GG_API_KEY`: the environment's endpoint keys, for a
+/// provider switched to later.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct EnvOverrides {
     base_url: Option<String>,
+    /// `Some(None)` clears the key.
     api_key: Option<Option<String>>,
 }
 
@@ -29,6 +32,83 @@ impl EnvOverrides {
         }
         if let Some(v) = &self.api_key {
             ep.api_key = v.clone();
+        }
+    }
+}
+
+/// The flat provider-level keys of the config files, as merged, and the
+/// one provider they belong to. [`merge`] applies them to that provider's
+/// endpoint, and a later bare model switch that lands on that provider
+/// applies them again, so `-m x` and `GG_MODEL=x` resolve alike. They never
+/// reach another provider, whoever is active later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FlatKeys {
+    /// The provider these keys were set for.
+    owner: String,
+    base_url: Option<String>,
+    api: Option<ApiKind>,
+    auth: Option<AuthStyle>,
+    max_tokens: Option<u32>,
+    /// An empty string clears the key.
+    api_key: Option<String>,
+    context_window: Option<u32>,
+    replay_reasoning: Option<ReplayReasoning>,
+    reasoning_effort: Option<String>,
+    reasoning_budget_tokens: Option<u32>,
+    compact_threshold_tokens: Option<u32>,
+}
+
+impl FlatKeys {
+    /// No flat key is set, so there is nothing to carry.
+    fn is_empty(&self) -> bool {
+        self.base_url.is_none()
+            && self.api.is_none()
+            && self.auth.is_none()
+            && self.max_tokens.is_none()
+            && self.api_key.is_none()
+            && self.context_window.is_none()
+            && self.replay_reasoning.is_none()
+            && self.reasoning_effort.is_none()
+            && self.reasoning_budget_tokens.is_none()
+            && self.compact_threshold_tokens.is_none()
+    }
+
+    /// Only an endpoint of the provider these keys belong to.
+    fn apply(&self, ep: &mut Endpoint) {
+        if ep.provider != self.owner {
+            return;
+        }
+        if let Some(v) = &self.base_url {
+            ep.base_url = v.clone();
+        }
+        if let Some(v) = self.api {
+            ep.api = v;
+        }
+        if let Some(v) = self.auth {
+            ep.auth = v;
+        }
+        if let Some(v) = self.max_tokens {
+            ep.max_tokens = v;
+        }
+        if let Some(v) = &self.api_key {
+            ep.api_key = (!v.is_empty()).then_some(v.clone());
+        }
+        if let Some(v) = self.context_window {
+            ep.context_window = v;
+            ep.context_window_explicit = true;
+        }
+        if let Some(v) = self.replay_reasoning {
+            ep.replay_reasoning = v;
+        }
+        if let Some(v) = &self.reasoning_effort {
+            ep.reasoning_effort = (!v.is_empty()).then_some(v.clone());
+        }
+        if let Some(v) = self.reasoning_budget_tokens {
+            ep.reasoning_budget_tokens = (v > 0).then_some(v);
+        }
+        if let Some(v) = self.compact_threshold_tokens {
+            ep.compact_threshold_tokens = (v > 0).then_some(v);
+            ep.compact_threshold_explicit = true;
         }
     }
 }
@@ -68,15 +148,30 @@ pub struct Config {
     /// `disabled = true`. Kept so a later `-P`/`-m` naming one says why it
     /// is gone instead of blaming a typo.
     pub disabled_providers: BTreeSet<String>,
+    /// The ranked defaults passed over to reach the active one, each with
+    /// its reason, as `name (no VARIABLE)` or `name (base_url is set and no
+    /// provider is named)`. Empty when the first choice stands. Read it
+    /// through [`Config::fallback_note`]; a flag that names a provider
+    /// clears it.
+    pub fallback_skipped: Vec<String>,
+    /// Set when a `base_url` override has no provider to belong to and a
+    /// default's own key would be sent there. [`Config::require_provider_for_base_url`]
+    /// raises it once flags have been applied; one that names a provider
+    /// clears it.
+    pub base_url_without_provider: bool,
     env_overrides: EnvOverrides,
+    /// The flat keys of the config files and the provider they belong to,
+    /// for a model switched on that provider. `None` when the file's keys
+    /// did not apply.
+    flat: Option<FlatKeys>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         let providers = providers::builtin_providers();
         let ep = providers
-            .get("strata")
-            .expect("built-in strata provider")
+            .get(&providers::default_provider())
+            .expect("default_provider names a preset")
             .resolve(None);
         Self {
             provider: ep.provider,
@@ -105,6 +200,9 @@ impl Default for Config {
                 .collect(),
             providers,
             disabled_providers: BTreeSet::new(),
+            fallback_skipped: Vec::new(),
+            base_url_without_provider: false,
+            flat: None,
             env_overrides: EnvOverrides::default(),
         }
     }
@@ -136,6 +234,32 @@ impl Config {
         }
     }
 
+    /// The startup notice for a fallback: what was passed over, and the
+    /// provider and model in use as `endpoint` resolved them, since a local
+    /// server's `/health` can replace the model. `None` when the first
+    /// choice stands.
+    pub fn fallback_note(&self, endpoint: &Endpoint) -> Option<String> {
+        (!self.fallback_skipped.is_empty()).then(|| {
+            format!(
+                "passed over {}: using {}",
+                self.fallback_skipped.join(", "),
+                endpoint.label()
+            )
+        })
+    }
+
+    /// The error for a `base_url` override that no provider owns while a
+    /// default's own key would be sent to that address. Called once the
+    /// flags are applied, since they can name the provider.
+    pub fn require_provider_for_base_url(&self) -> anyhow::Result<()> {
+        if self.base_url_without_provider {
+            anyhow::bail!(
+                "base_url is set and no provider is named, and a default provider's own key would be sent there: name one with `provider` in the config file, or with -P beside GG_BASE_URL"
+            );
+        }
+        Ok(())
+    }
+
     pub fn apply_cli(&mut self, provider: Option<&str>, model: Option<&str>) -> anyhow::Result<()> {
         if provider.is_none() && model.is_none() {
             return Ok(());
@@ -162,6 +286,14 @@ impl Config {
         {
             anyhow::bail!("--provider {cp:?} conflicts with --model provider prefix {mp:?}");
         }
+        // A flag that names a provider ends any fallback. A bare model id
+        // lands on the provider the ranking picked, so the notice stays and
+        // names the model now in use.
+        let names_provider = cli_provider.is_some() || model_provider.is_some();
+        if names_provider {
+            self.fallback_skipped.clear();
+            self.base_url_without_provider = false;
+        }
         let target_provider = cli_provider
             .or(model_provider)
             .unwrap_or_else(|| self.provider.clone());
@@ -172,6 +304,15 @@ impl Config {
         let pcfg = lookup_provider(&self.providers, &target_provider)?;
         let mut ep = pcfg.resolve(model_id);
         ep.model_explicit = model_id.is_some();
+        // A bare model id stays on the active provider, so the file's flat
+        // keys still apply when it is the provider they were set for, as
+        // they do to `GG_MODEL`. Rebuilt from the provider table alone, the
+        // endpoint would carry that provider's own key to an address the
+        // user supplied, or pair the user's address with the preset's wire
+        // API.
+        if !names_provider && let Some(flat) = &self.flat {
+            flat.apply(&mut ep);
+        }
         self.env_overrides.apply(&mut ep);
         self.apply_endpoint(&ep);
         validate(self)
@@ -222,6 +363,7 @@ impl Config {
             anyhow::bail!("provider {p:?} is disabled by `[providers.{p}] disabled = true`");
         }
         let canon = providers::canonical_provider_name(spec);
+        let mut bare = false;
         let mut ep = if let Some(pcfg) = self.providers.get(canon) {
             let mut ep = pcfg.resolve(None);
             ep.model_explicit = false;
@@ -235,6 +377,7 @@ impl Config {
             && cur.models.iter().any(|m| m.id == spec)
         {
             let mut ep = cur.resolve(Some(spec));
+            bare = true;
             ep.model_explicit = true;
             ep
         } else {
@@ -262,9 +405,15 @@ impl Config {
                     );
                 }
             };
+            bare = true;
             ep.model_explicit = true;
             ep
         };
+        // A bare model id keeps the file's flat keys when it lands on the
+        // provider they were set for, as a bare `-m` does.
+        if bare && let Some(flat) = &self.flat {
+            flat.apply(&mut ep);
+        }
         if ep.api_key.is_none()
             && ep.api_key_env.is_some()
             && let Some(Some(key)) = &self.env_overrides.api_key
@@ -368,9 +517,20 @@ pub fn merge(
     let pick_list =
         |u: &Option<Vec<String>>, p: &Option<Vec<String>>| p.clone().or_else(|| u.clone());
 
-    let file_provider = pick(&user.provider, &project.provider)
-        .map(|p| providers::canonical_provider_name(&p).to_string())
-        .unwrap_or_else(|| defaults.provider.clone());
+    // A key given for whichever provider is active, `GG_API_KEY` or the flat
+    // `api_key` key, stands for every key the ranking could ask for.
+    let generic_key = env_value(env, "GG_API_KEY").is_some_and(|k| !k.trim().is_empty())
+        || pick(&user.api_key, &project.api_key).is_some_and(|k| !k.trim().is_empty());
+    // A `base_url` override is for a server of the user's own. With no
+    // provider named, no provider's stored key may follow it.
+    let own_server = pick(&user.base_url, &project.base_url).is_some()
+        || env_value(env, "GG_BASE_URL").is_some_and(|u| !u.trim().is_empty());
+    let named = pick(&user.provider, &project.provider)
+        .map(|p| providers::canonical_provider_name(&p).to_string());
+    let ranked = ranked_default(&providers, generic_key, own_server);
+    // The file names no provider: the first ranked default you can use, and
+    // the file's flat keys then apply to it.
+    let file_provider = named.clone().unwrap_or_else(|| ranked.provider.clone());
 
     let env_provider = env_value(env, "GG_PROVIDER")
         .filter(|s| !s.trim().is_empty())
@@ -389,9 +549,21 @@ pub fn merge(
         anyhow::bail!("GG_PROVIDER={ep:?} conflicts with GG_MODEL provider prefix {mp:?}");
     }
 
+    // Only a config that names no provider, in a file or in the
+    // environment, leaves the ranked pick active, notice included: either
+    // can name the very provider the ranking picked, and then the user
+    // asked for it.
+    let env_names_provider = env_provider.is_some() || env_model_provider.is_some();
+    let ranked_applies = named.is_none() && !env_names_provider;
+    let base_url_without_provider = ranked_applies && ranked.refused;
     let active_provider = env_provider
         .or(env_model_provider)
         .unwrap_or_else(|| file_provider.clone());
+    let fallback_skipped = if ranked_applies {
+        ranked.passed_over
+    } else {
+        Vec::new()
+    };
     anyhow::ensure!(
         !removed.contains(&active_provider),
         "provider {active_provider:?} is disabled by `[providers.{active_provider}] disabled = true`"
@@ -408,45 +580,30 @@ pub fn merge(
     let mut ep = pcfg.resolve(chosen_model);
     ep.model_explicit = env_model_id.is_some();
 
-    if apply_file_flat {
-        if let Some(v) = pick(&user.base_url, &project.base_url) {
-            ep.base_url = v;
-        }
-        if let Some(v) = project.api.or(user.api) {
-            ep.api = v;
-        }
-        if let Some(v) = project.auth.or(user.auth) {
-            ep.auth = v;
-        }
-        if let Some(v) = project.max_tokens.or(user.max_tokens) {
-            ep.max_tokens = v;
-        }
-        if let Some(v) = pick(&user.api_key, &project.api_key) {
-            ep.api_key = (!v.is_empty()).then_some(v);
-        }
-        if let Some(v) = project.context_window.or(user.context_window) {
-            ep.context_window = v;
-            ep.context_window_explicit = true;
-        }
-        if let Some(v) = project.replay_reasoning.or(user.replay_reasoning) {
-            ep.replay_reasoning = v;
-        }
-        if let Some(v) = pick(&user.reasoning_effort, &project.reasoning_effort) {
-            ep.reasoning_effort = (!v.is_empty()).then_some(v);
-        }
-        if let Some(v) = project
-            .reasoning_budget_tokens
-            .or(user.reasoning_budget_tokens)
-        {
-            ep.reasoning_budget_tokens = (v > 0).then_some(v);
-        }
-        if let Some(v) = project
-            .compact_threshold_tokens
-            .or(user.compact_threshold_tokens)
-        {
-            ep.compact_threshold_tokens = (v > 0).then_some(v);
-            ep.compact_threshold_explicit = true;
-        }
+    // The file's flat keys belong to the active provider only. They apply
+    // after the provider table and before the environment, as always, and
+    // are kept for a model switched on that provider later.
+    let flat = apply_file_flat
+        .then(|| FlatKeys {
+            owner: file_provider.clone(),
+            base_url: pick(&user.base_url, &project.base_url),
+            api: project.api.or(user.api),
+            auth: project.auth.or(user.auth),
+            max_tokens: project.max_tokens.or(user.max_tokens),
+            api_key: pick(&user.api_key, &project.api_key),
+            context_window: project.context_window.or(user.context_window),
+            replay_reasoning: project.replay_reasoning.or(user.replay_reasoning),
+            reasoning_effort: pick(&user.reasoning_effort, &project.reasoning_effort),
+            reasoning_budget_tokens: project
+                .reasoning_budget_tokens
+                .or(user.reasoning_budget_tokens),
+            compact_threshold_tokens: project
+                .compact_threshold_tokens
+                .or(user.compact_threshold_tokens),
+        })
+        .filter(|flat| !flat.is_empty());
+    if let Some(flat) = &flat {
+        flat.apply(&mut ep);
     }
 
     let mut env_overrides = EnvOverrides::default();
@@ -454,7 +611,7 @@ pub fn merge(
         env_overrides.base_url = Some(v);
     }
     if let Some(v) = env_value(env, "GG_API_KEY") {
-        env_overrides.api_key = Some((!v.is_empty()).then_some(v));
+        env_overrides.api_key = Some((!v.trim().is_empty()).then_some(v));
     }
     env_overrides.apply(&mut ep);
     let file_max_turns = project
@@ -528,10 +685,98 @@ pub fn merge(
         tools: pick_list(&user.tools, &project.tools).unwrap_or(defaults.tools),
         providers,
         disabled_providers: removed,
+        fallback_skipped,
+        base_url_without_provider,
         env_overrides,
+        flat,
     };
     validate(&cfg)?;
     Ok(cfg)
+}
+
+/// The outcome of ranking when nothing names a provider.
+struct Ranked {
+    /// The provider nothing else names.
+    provider: String,
+    /// The ranked defaults passed over to reach it, each with its reason.
+    passed_over: Vec<String>,
+    /// A `base_url` override is in play, no choice is free of a key of its
+    /// own, and one holds a key, so the caller refuses rather than guess.
+    refused: bool,
+}
+
+/// The provider nothing else names: the first of the shipped ranked defaults
+/// ([`providers::default_provider_order`]) that config left in place and
+/// you can use, with the providers passed over to reach it.
+fn ranked_default(
+    providers: &BTreeMap<String, ProviderConfig>,
+    generic_key: bool,
+    own_server: bool,
+) -> Ranked {
+    let ranked = providers::default_provider_order();
+    let present: Vec<&ProviderConfig> = ranked
+        .iter()
+        .filter_map(|name| providers.get(name))
+        .collect();
+    let Some(&first) = present.first() else {
+        // Config disabled every choice: the head of the list names the
+        // removal in the caller's error.
+        return Ranked {
+            provider: ranked[0].clone(),
+            passed_over: Vec::new(),
+            refused: false,
+        };
+    };
+    let Some((chosen, skipped)) = pick_ranked(&present, |p| usable(p, generic_key, own_server))
+    else {
+        // Nothing usable. The first stands, and the auth check names its
+        // missing key. Under an override that is safe only while no key of
+        // a provider's own would be sent.
+        let refused = own_server && present.iter().any(|p| p.api_key.is_some());
+        return Ranked {
+            provider: first.name.clone(),
+            passed_over: Vec::new(),
+            refused,
+        };
+    };
+    Ranked {
+        provider: chosen.name.clone(),
+        passed_over: skipped.iter().map(|p| passed_over(p, own_server)).collect(),
+        refused: false,
+    }
+}
+
+/// Whether a provider can be the one nothing else names. It must need no
+/// key or hold one, and `generic_key` would serve any provider. With a
+/// `base_url` override in play (`own_server`) only a provider that holds no
+/// key of its own will do, whatever key was given for the endpoint: none
+/// may be sent to an address the user supplied.
+fn usable(p: &ProviderConfig, generic_key: bool, own_server: bool) -> bool {
+    match &p.api_key_env {
+        // Needs no key, unless the config attached one.
+        None => !own_server || p.api_key.is_none(),
+        Some(_) => !own_server && (generic_key || p.api_key.is_some()),
+    }
+}
+
+/// A provider the ranking passed over, with the reason: no key is held for
+/// it, or a `base_url` override leaves it out.
+fn passed_over(p: &ProviderConfig, own_server: bool) -> String {
+    match &p.api_key_env {
+        Some(var) if !own_server => format!("{} (no {var})", p.name),
+        // A provider that needs no key is passed over only by an override.
+        _ => format!("{} (base_url is set and no provider is named)", p.name),
+    }
+}
+
+/// The first usable of `present`, in ranked order, with the providers passed
+/// over to reach it. `None` when nothing is usable. `present` is not empty.
+fn pick_ranked<'a>(
+    present: &[&'a ProviderConfig],
+    usable: impl Fn(&ProviderConfig) -> bool,
+) -> Option<(&'a ProviderConfig, Vec<&'a ProviderConfig>)> {
+    let at = present.iter().position(|p| usable(p))?;
+    Some((present[at], present[..at].to_vec()))
 }
 
 fn lookup_provider<'a>(

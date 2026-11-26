@@ -4,6 +4,8 @@
 
 Built-in provider presets, generated from the provider table. `zai-coding-plan` is an alias for `glm-coding-plan`. Custom providers are covered in [Configuration](../guide/configuration.md).
 
+Shipped default, when no flag, environment variable or config file names a provider: the first of these you hold a key for, in order: `glm-coding-plan` (model `glm-5.3-flash`, needs `ZHIPU_API_KEY`), `strata` (model `qwen3.8-flash-next-iq3_s`, needs no key). `GG_API_KEY`, or an `api_key` in the config, counts as the key for any of them. With a `base_url` key or `GG_BASE_URL` and no provider named, no key of a provider's own is sent to that address: `gg` takes the first default that neither needs nor holds a key.
+
 | Provider | Default model | Wire API | API key variable | Base URL | Max tokens | Context window |
 |---|---|---|---|---|---|---|
 | `deepseek` | `deepseek-flash` | `openai-completions` | `DEEPSEEK_API_KEY` | `https://api.deepseek.com` | 16384 | 1000000 |

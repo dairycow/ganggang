@@ -88,8 +88,24 @@ pub(super) fn cli_reference() -> String {
 
 pub(super) fn providers_reference() -> String {
     let providers = crate::config::providers::builtin_providers();
+    let ranked: Vec<String> = crate::config::providers::default_provider_order()
+        .iter()
+        .filter_map(|name| providers.get(name))
+        .map(|p| {
+            let key = match &p.api_key_env {
+                Some(var) => format!("needs {}", code(var)),
+                None => "needs no key".to_string(),
+            };
+            format!(
+                "{} (model {}, {key})",
+                code(&p.name),
+                code(&p.default_model)
+            )
+        })
+        .collect();
     let mut out = format!(
-        "{HEADER}\n# Providers and models\n\nBuilt-in provider presets, generated from the provider table. `zai-coding-plan` is an alias for `glm-coding-plan`. Custom providers are covered in [Configuration](../guide/configuration.md).\n\n"
+        "{HEADER}\n# Providers and models\n\nBuilt-in provider presets, generated from the provider table. `zai-coding-plan` is an alias for `glm-coding-plan`. Custom providers are covered in [Configuration](../guide/configuration.md).\n\nShipped default, when no flag, environment variable or config file names a provider: the first of these you hold a key for, in order: {}. `GG_API_KEY`, or an `api_key` in the config, counts as the key for any of them. With a `base_url` key or `GG_BASE_URL` and no provider named, no key of a provider's own is sent to that address: `gg` takes the first default that neither needs nor holds a key.\n\n",
+        ranked.join(", ")
     );
     out.push_str("| Provider | Default model | Wire API | API key variable | Base URL | Max tokens | Context window |\n|---|---|---|---|---|---|---|\n");
     for p in providers.values() {

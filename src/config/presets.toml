@@ -7,6 +7,12 @@
 # `context_window`/`compact_threshold_tokens` never count as explicit, so
 # `strata` keeps probing `/health`.
 
+# Providers tried in order when no flag, environment variable or config file
+# names one: the first you hold a key for wins. Each provider's own `model`
+# picks its model, so the shipped default model is the chosen line plus that
+# one.
+default_provider = ["glm-coding-plan", "strata"]
+
 [providers.strata]
 base_url = "http://127.0.0.1:8080/v1"
 api = "open-ai-completions"

@@ -7,7 +7,7 @@
 - The `bash` tool runs with **your user permissions**, in the session's working directory. There is no sandbox and no approval prompt, by design.
 - [Hooks](hooks.md) run with the same permissions and are equally unsandboxed.
 - Anything the model reads (files, `@file` attachments, command output, skills) can influence what it does next. Do not point `gg` at a repository or prompt you do not trust on a sensitive host.
-- Your messages and tool output are sent to whichever provider you configured. The default, a local Strata server, keeps them on your machine; `gg` itself has no telemetry.
+- Your messages and tool output are sent to whichever provider you configured. While you hold a key for it (`ZHIPU_API_KEY`, `GG_API_KEY` or an `api_key` in your config) the default is the cloud-based `glm-coding-plan` preset; otherwise `gg` uses the local `strata` preset, which keeps them on your machine. A `base_url` you set without naming a provider never receives a provider's own key. `gg` itself has no telemetry.
 
 ## Guardrails (not sandboxes)
 

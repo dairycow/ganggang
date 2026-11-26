@@ -168,8 +168,10 @@ async fn main() -> anyhow::Result<()> {
     if cli.list_models {
         let mut cfg = config::load()?;
         cfg.apply_cli(cli.provider.as_deref(), cli.model.as_deref())?;
+        cfg.require_provider_for_base_url()?;
         let mut active = cfg.active_endpoint();
         llm::health::maybe_probe_local_health(&mut active).await;
+        report_fallback(&cfg, &active);
         if let Some(p) = cfg.providers.get_mut(&active.provider)
             && !p.context_window_explicit
         {
@@ -182,9 +184,20 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 " "
             };
+            // The table labels keys from the provider table, which never
+            // sees `GG_API_KEY` or a flat `api_key` key, and knows nothing
+            // of a blank `GG_API_KEY` clearing one: a row of the active
+            // provider shows the key the run would use. The table itself is
+            // left alone, so discovery does not carry that key to the
+            // provider's own address.
+            let has_key = if row.provider == active.provider {
+                active.api_key.is_some()
+            } else {
+                row.has_key
+            };
             let key_status = if !row.needs_key {
                 "local"
-            } else if row.has_key {
+            } else if has_key {
                 "ok"
             } else {
                 "no key"
@@ -266,12 +279,14 @@ async fn main() -> anyhow::Result<()> {
         let cwd = std::env::current_dir()?;
         let mut cfg = config::load()?;
         cfg.apply_cli(cli.provider.as_deref(), cli.model.as_deref())?;
+        cfg.require_provider_for_base_url()?;
         cfg.apply_reasoning_cli(cli.reasoning_effort.as_deref(), cli.thinking_budget);
         cfg.apply_max_turns_cli(cli.max_turns);
         cfg.apply_max_seconds_cli(cli.max_seconds);
         let mut endpoint = cfg.active_endpoint();
         endpoint.require_auth()?;
         crate::llm::health::maybe_probe_local_health(&mut endpoint).await;
+        report_fallback(&cfg, &endpoint);
         cfg.model = endpoint.model.clone();
         cfg.model_explicit = endpoint.model_explicit;
         cfg.context_window = endpoint.context_window;
@@ -499,6 +514,16 @@ fn pick_of(cli: &Cli) -> tui::SessionPick {
     }
 }
 
+/// Say when ranking passed over the first shipped default. Startup only,
+/// and on stderr: stdout carries the answer, the table or the events. It
+/// takes the endpoint as last resolved, after any local `/health` probe, so
+/// it names the model in use.
+fn report_fallback(cfg: &config::Config, endpoint: &config::Endpoint) {
+    if let Some(note) = cfg.fallback_note(endpoint) {
+        eprintln!("gg: {note}");
+    }
+}
+
 /// Build the Agent print mode runs (every mode persists by default, §13;
 /// -c/--resume replay an existing file). A nested boot clamps to the run
 /// that started it, whatever its flags ask for.
@@ -521,6 +546,7 @@ async fn open_agent(
             .flatten()
     });
     cfg.apply_cli(cli.provider.as_deref(), model.as_deref())?;
+    cfg.require_provider_for_base_url()?;
     cfg.apply_reasoning_cli(cli.reasoning_effort.as_deref(), cli.thinking_budget);
     cfg.apply_max_turns_cli(cli.max_turns);
     cfg.apply_max_seconds_cli(cli.max_seconds);
@@ -531,6 +557,7 @@ async fn open_agent(
     let mut endpoint = cfg.active_endpoint();
     endpoint.require_auth()?;
     crate::llm::health::maybe_probe_local_health(&mut endpoint).await;
+    report_fallback(&cfg, &endpoint);
     let cwd = std::env::current_dir()?;
     // A nested run keeps its parent's hooks, on or off.
     let no_hooks = match nested_boot.as_ref() {

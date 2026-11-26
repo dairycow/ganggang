@@ -469,6 +469,9 @@ async fn model_command_switches_endpoints() {
     let factory: super::super::Factory =
         Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
     let mut config = crate::config::Config::default();
+    // The session is on `strata` (the label above), whichever provider is
+    // the shipped default.
+    config.apply_cli(Some("strata"), None).unwrap();
     config.providers.get_mut("deepseek").unwrap().api_key = Some("test-key".into());
     config.providers.get_mut("openrouter").unwrap().api_key = Some("test-key".into());
     let mut active_endpoint = config.active_endpoint();

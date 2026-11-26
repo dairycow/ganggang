@@ -13,6 +13,8 @@ UPDATE_DOCS=1 cargo test doc_sync      # regenerate only
 
 A plain `cargo test` **fails** when a generated page is stale, with a message naming the page and the command above. A change to a flag, tool, provider or command cannot merge without its reference page.
 
+The providers `gg` starts on, in the order it tries them, are data: `default_provider` in `src/config/presets.toml`. The reference page and the test suite read it from there, so reordering the list, or swapping one preset for another, usually needs no Rust edits. Three cases do not follow the data. A list with a single entry fails the two tests that say they need two entries. `openrouter` first fails `replay_reasoning_compact_threshold_max_turns_and_explicit_ctx`, because the preset gives its default model a `context_window` that counts as explicit. `opencode-go` as the only entry makes the guide's `disabled = true` example disable the active provider. The pages that name the default in prose (the README, installation, introduction, configuration and security pages) are hand-written, so update them in the same commit.
+
 ## 2. Contract tests for the guide
 
 `src/doc_sync/contracts.rs` ties the hand-written pages to the code:

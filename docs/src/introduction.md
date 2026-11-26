@@ -4,7 +4,7 @@
 
 - **One loop.** Each turn sends a request, executes tool calls, records results, and repeats until the model finishes. Contiguous read-only tool calls run concurrently, responses stream, `Esc` or `SIGTERM` aborts the run, and `--max-turns` caps iterations.
 - **Eight tools.** `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `outline`. Every truncation is visible in the tool output, and tool failures are returned to the model as values rather than crashing the run. See [Tools](guide/tools.md).
-- **Local first.** By default `gg` talks to a local [Strata](https://github.com/Niko1221/Strata) server: requiring no cloud service, account, or telemetry. It also speaks OpenAI Chat Completions and Anthropic Messages endpoints, with built-in presets and custom providers. See [Configuration and providers](guide/configuration.md).
+- **Bring your own backend.** While you hold a key for it, `gg` talks to the `glm-coding-plan` preset (`glm-5.3-flash`), and to a local [Strata](https://github.com/Niko1221/Strata) server otherwise. OpenAI Chat Completions and Anthropic Messages endpoints, built-in presets and custom providers are all supported. See [Configuration and providers](guide/configuration.md).
 - **Three interfaces on one core.** A fullscreen [TUI](guide/tui.md), a pipeable print mode, and a JSON event stream. See [Output modes and export](guide/modes.md).
 - **No permission prompts.** `gg` does not ask before running tools. Read the [Security model](guide/security.md) before pointing it at untrusted work.
 

@@ -224,27 +224,99 @@ pub fn canonical_provider_name(name: &str) -> &str {
 /// overridable or removable from config like any other provider.
 const PRESETS_TOML: &str = include_str!("presets.toml");
 
+/// `default_provider` in the presets: one provider, or the providers to try
+/// in order (see [`default_provider_order`]).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum DefaultProvider {
+    One(String),
+    Ranked(Vec<String>),
+}
+
 #[derive(Deserialize)]
 struct PresetFile {
+    default_provider: Option<DefaultProvider>,
     #[serde(default)]
     providers: BTreeMap<String, FileProviderConfig>,
 }
 
-/// Parse the embedded presets through the same path a user's
-/// `[providers.<name>]` table takes, so presets and config cannot drift
-/// apart. Their values are *defaults*: only config marks a limit explicit,
-/// which is what suppresses `/health` probing.
-pub fn builtin_providers() -> BTreeMap<String, ProviderConfig> {
-    let parsed: PresetFile =
-        toml::from_str(PRESETS_TOML).expect("embedded provider presets parse as TOML");
-    let mut map = BTreeMap::new();
-    apply_provider_layer(&mut map, parsed.providers, &mut BTreeSet::new())
-        .expect("embedded provider presets are complete provider tables");
-    for provider in map.values_mut() {
-        provider.context_window_explicit = false;
-        provider.compact_threshold_explicit = false;
+/// The embedded presets, parsed.
+struct Presets {
+    /// Providers to try in order when no flag, environment variable or
+    /// config file names one. Each is a key of `providers`.
+    default_provider: Vec<String>,
+    providers: BTreeMap<String, ProviderConfig>,
+}
+
+impl Presets {
+    /// Parse the embedded presets through the same path a user's
+    /// `[providers.<name>]` table takes, so presets and config cannot drift
+    /// apart. Their values are *defaults*: only config marks a limit explicit,
+    /// which is what suppresses `/health` probing.
+    fn load() -> Self {
+        let parsed: PresetFile =
+            toml::from_str(PRESETS_TOML).expect("embedded provider presets parse as TOML");
+        let mut map = BTreeMap::new();
+        apply_provider_layer(&mut map, parsed.providers, &mut BTreeSet::new())
+            .expect("embedded provider presets are complete provider tables");
+        for provider in map.values_mut() {
+            provider.context_window_explicit = false;
+            provider.compact_threshold_explicit = false;
+        }
+        let default_provider = match parsed.default_provider {
+            Some(DefaultProvider::One(name)) => vec![name],
+            Some(DefaultProvider::Ranked(names)) => names,
+            None => panic!("embedded provider presets set default_provider"),
+        }
+        .into_iter()
+        .map(|name| canonical_provider_name(&name).to_string())
+        .collect::<Vec<_>>();
+        assert!(
+            !default_provider.is_empty(),
+            "embedded default_provider names at least one provider"
+        );
+        let mut seen = BTreeSet::new();
+        for name in &default_provider {
+            assert!(
+                seen.insert(name),
+                "embedded default_provider names {name:?} twice"
+            );
+            assert!(
+                map.contains_key(name),
+                "embedded default_provider {name:?} is not a preset"
+            );
+        }
+        Self {
+            default_provider,
+            providers: map,
+        }
     }
-    map
+}
+
+/// The embedded presets, parsed on first use.
+fn presets() -> &'static Presets {
+    static PRESETS: std::sync::OnceLock<Presets> = std::sync::OnceLock::new();
+    PRESETS.get_or_init(Presets::load)
+}
+
+/// The shipped provider table (see [`PRESETS_TOML`]).
+pub fn builtin_providers() -> BTreeMap<String, ProviderConfig> {
+    presets().providers.clone()
+}
+
+/// The first provider tried when nothing names one: the head of
+/// [`default_provider_order`].
+pub fn default_provider() -> String {
+    presets().default_provider[0].clone()
+}
+
+/// The providers tried in order when no flag, environment variable or config
+/// file names one: the first you hold a key for wins (`config::merge`). It is
+/// data (`default_provider` in `presets.toml`), so re-pointing the shipped
+/// default is a one-line edit there: no Rust changes, and the generated
+/// reference page follows.
+pub fn default_provider_order() -> Vec<String> {
+    presets().default_provider.clone()
 }
 
 pub(super) fn apply_provider_layer(
