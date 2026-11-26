@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use super::output::{prefix_string, suffix_string};
 use super::*;
 use crate::nested::{DEPTH, MAX_TURNS_CAP, PARENT_MODEL, PARENT_SESSION, TOOL_CAP};
 
