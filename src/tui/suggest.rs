@@ -48,7 +48,7 @@ impl From<&CatalogRow> for ModelChoice {
 /// One popup row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Suggestion {
-    /// What the row shows, args hint included: `/resume [filter]`.
+    /// What the row shows, args hint included: `/session [filter|copy|info]`.
     pub label: String,
     /// What Tab puts in the composer: the command plus a trailing space,
     /// ready for arguments.
@@ -62,16 +62,15 @@ pub struct Suggestion {
 pub(crate) const BUILTINS: &[(&str, &str, &str)] = &[
     ("/new", "", "start a fresh session"),
     (
-        "/resume",
-        " [filter]",
-        "pick a saved session from any directory",
-    ),
-    (
         "/compact",
         " [instructions]",
         "summarise and rebuild the context",
     ),
-    ("/session", "", "session path, entries, token totals"),
+    (
+        "/session",
+        " [filter|copy|info]",
+        "pick a saved session, copy its path, or show session info",
+    ),
     ("/context", "", "show the assembled system prompt"),
     ("/hooks", "", "list loaded hooks"),
     ("/skill:", "<name> [args]", "run a skill now"),

@@ -5,11 +5,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
-use super::super::{CmdCtx, Command, handle_command};
 use super::*;
 use crate::tui::history::History;
 
-/// A `/resume` rig: a state, the channels the handler writes to, and a
+/// A `/session` rig: a state, the channels the handler writes to, and a
 /// factory that records what it is asked for, and the directory, and then
 /// refuses (no agent is built in these tests).
 struct ResumeRig {
@@ -94,10 +93,6 @@ impl ResumeRig {
         }
     }
 
-    async fn run(&mut self, command: Command) -> anyhow::Result<bool> {
-        handle_command(command, self.ctx()).await
-    }
-
     fn asked(&self) -> Vec<String> {
         self.asked.lock().unwrap().clone()
     }
@@ -135,21 +130,6 @@ fn filed_elsewhere(id: &str, title: &str) -> crate::agent::session::io::SessionF
     session.cwd = "/home/u/other".into();
     session.path = std::path::PathBuf::from(format!("/s/-home-u-other/20261125-120000-{id}.jsonl"));
     session
-}
-
-/// A `/resume` that is submitted anyway: the list already is open from
-/// the text, so the handler has one line to say and nothing to do. No
-/// factory is asked for, no picker touched.
-#[tokio::test]
-async fn a_submitted_resume_says_the_list_opens_as_you_type() {
-    let mut rig = ResumeRig::new();
-    rig.state.editor.set_text("/resume");
-    assert!(!rig.run(Command::Resume).await.unwrap());
-    assert_eq!(
-        rig.state.line_texts_for_test(),
-        ["the session list opens as you type /resume"]
-    );
-    assert!(rig.asked().is_empty(), "nothing was asked for");
 }
 
 /// The listing a finished scan found: stored on the state's cache, the
@@ -230,7 +210,7 @@ fn the_listed_sessions_are_stored_whatever_the_loop_is_doing() {
     );
 
     let mut draft = ResumeRig::new();
-    draft.state.editor.set_text("/resume other");
+    draft.state.editor.set_text("/session other");
     sessions_listed(
         &mut draft.state,
         vec![filed("a1b2c3d4", "newest")],
@@ -239,7 +219,7 @@ fn the_listed_sessions_are_stored_whatever_the_loop_is_doing() {
     assert_eq!(draft.listing().0.len(), 1, "nor does a filter");
     assert_eq!(
         draft.state.editor.text(),
-        "/resume other",
+        "/session other",
         "the text is the user's: it stays"
     );
     let lines = draft.state.line_texts_for_test();
@@ -298,7 +278,7 @@ fn the_picked_row_opens_through_the_factory_by_its_file_in_its_own_directory() {
     let mut pick = super::super::super::picker::tests::pick_for_test(2);
     pick.selected = 1;
     rig.state.picker = Some(pick);
-    rig.state.editor.set_text("/resume other");
+    rig.state.editor.set_text("/session other");
 
     let error = open_session(session, rig.ctx()).unwrap_err();
     assert_eq!(
@@ -309,7 +289,7 @@ fn the_picked_row_opens_through_the_factory_by_its_file_in_its_own_directory() {
     assert!(rig.state.picker_open(), "a failed open loses no picker");
     assert_eq!(
         rig.state.editor.text(),
-        "/resume other",
+        "/session other",
         "nor the text that opened it"
     );
     assert_eq!(
@@ -339,6 +319,128 @@ fn the_picked_row_opens_through_the_factory_by_its_file_in_its_own_directory() {
         rig.state.line_texts_for_test()
     );
     let _ = std::fs::remove_dir_all(&own);
+}
+
+/// The four lines a session's info says: the path, the model, the
+/// entries, the token totals.
+#[test]
+fn session_info_says_the_path_the_model_the_entries_and_the_tokens() {
+    let mut rig = ResumeRig::new();
+    let file = std::env::temp_dir().join(format!("gg-session-info-{}.jsonl", std::process::id()));
+    std::fs::write(&file, "{}\n").unwrap();
+    rig.state.session_path = Some(file.clone());
+    rig.state.entries = 12;
+    rig.state.tokens_in = 1_000;
+    rig.state.tokens_out = 50;
+    session_info(&mut rig.state, "strata/qwen3.8");
+    assert_eq!(
+        rig.state.line_texts_for_test(),
+        [
+            format!("session: {}", file.display()),
+            "model: strata/qwen3.8".to_string(),
+            "entries: 12".to_string(),
+            "tokens: 1000 in / 50 out".to_string(),
+        ]
+    );
+    let _ = std::fs::remove_file(&file);
+}
+
+/// A fresh session's file is written on its first message, which the
+/// path line says while it does not exist; a `--no-session` run has no
+/// path at all, and the block says so.
+#[test]
+fn session_info_says_when_the_file_is_written_and_when_it_is_not_persisted() {
+    let mut rig = ResumeRig::new();
+    let missing =
+        std::env::temp_dir().join(format!("gg-session-info-{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&missing);
+    rig.state.session_path = Some(missing.clone());
+    session_info(&mut rig.state, "m");
+    let expected = format!(
+        "session: {} (not written until the first message)",
+        missing.display()
+    );
+    assert!(
+        rig.state
+            .line_texts_for_test()
+            .iter()
+            .any(|line| line.starts_with(&expected)),
+        "the missing file is said: {:?}",
+        rig.state.line_texts_for_test()
+    );
+    let _ = std::fs::remove_file(&missing);
+
+    let mut no_session = ResumeRig::new();
+    no_session.state.sessions_disabled = true;
+    session_info(&mut no_session.state, "m");
+    assert!(
+        no_session
+            .state
+            .line_texts_for_test()
+            .iter()
+            .any(|line| line.starts_with("session: not persisted (--no-session)")),
+        "no path: not persisted: {:?}",
+        no_session.state.line_texts_for_test()
+    );
+}
+
+/// `copy path` on a session with a file: the write gets the path, and
+/// the transcript says where it went.
+#[test]
+fn copy_session_path_copies_the_session_file_path() {
+    let mut rig = ResumeRig::new();
+    rig.state.session_path = Some(std::path::PathBuf::from("/s/a1b2c3d4.jsonl"));
+    let copied = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let recorded = copied.clone();
+    let result = copy_session_path(&mut rig.state, |text| {
+        recorded.lock().unwrap().push(text.to_string());
+        Ok(())
+    });
+    assert!(
+        result.is_ok(),
+        "a write that succeeds is no error: {result:?}"
+    );
+    assert_eq!(
+        *copied.lock().unwrap(),
+        ["/s/a1b2c3d4.jsonl"],
+        "the path, as it is on disk"
+    );
+    assert!(
+        rig.state
+            .line_texts_for_test()
+            .iter()
+            .any(|line| line == "copied /s/a1b2c3d4.jsonl"),
+        "the transcript says what was copied: {:?}",
+        rig.state.line_texts_for_test()
+    );
+}
+
+/// `copy path` with no session file says the run is `--no-session`, and
+/// a write that fails says the write failed.
+#[test]
+fn copy_session_path_says_no_session_and_says_when_the_write_fails() {
+    let mut no_session = ResumeRig::new();
+    no_session.state.sessions_disabled = true;
+    let error = copy_session_path(&mut no_session.state, |text| {
+        panic!("nothing to write: {text:?}")
+    })
+    .unwrap_err();
+    assert_eq!(error, "no session file to copy: this run is --no-session");
+    assert!(
+        no_session.state.line_texts_for_test().is_empty(),
+        "nothing is copied, nothing is said"
+    );
+
+    let mut failing = ResumeRig::new();
+    failing.state.session_path = Some(std::path::PathBuf::from("/s/a1b2c3d4.jsonl"));
+    let error = copy_session_path(&mut failing.state, |_text| {
+        Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no tty"))
+    })
+    .unwrap_err();
+    assert!(
+        error.starts_with("cannot write to /dev/tty"),
+        "the failed write is the error: {error:?}"
+    );
 }
 
 /// A session continues in the directory it started in for as long as that

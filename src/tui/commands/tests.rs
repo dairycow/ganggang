@@ -142,25 +142,51 @@ async fn skills_command_is_removed_with_a_hint() {
 }
 
 #[test]
-fn resume_argument_shapes() {
+fn resume_is_not_a_command_and_session_takes_any_argument() {
     assert_eq!(
         classify_submission("/resume"),
-        Submission::Command(Command::Resume)
+        Submission::Command(Command::Unknown("resume".into()))
     );
     assert_eq!(
         classify_submission("/resume   "),
-        Submission::Command(Command::Resume)
-    );
-    // An id or name typed after the command is a filter the list keeps;
-    // the submission is the bare command either way.
-    assert_eq!(
-        classify_submission("/resume 3"),
-        Submission::Command(Command::Resume)
+        Submission::Command(Command::Unknown("resume".into()))
     );
     assert_eq!(
-        classify_submission("/resume ab12cd"),
-        Submission::Command(Command::Resume)
+        classify_submission("/session"),
+        Submission::Command(Command::Session)
     );
+    // The action rows' words and a filter: the argument is ignored, the
+    // command is the bare one.
+    assert_eq!(
+        classify_submission("/session copy"),
+        Submission::Command(Command::Session)
+    );
+    assert_eq!(
+        classify_submission("/session 3fa9"),
+        Submission::Command(Command::Session)
+    );
+}
+
+/// The catalogue: no `/resume` row, the `/session` row's argument words,
+/// and the unknown-command line's valid set says so.
+#[test]
+fn the_catalogue_names_session_not_resume() {
+    let builtins: Vec<String> = super::super::suggest::BUILTINS
+        .iter()
+        .map(|(name, args, description)| format!("{name}{args} {description}"))
+        .collect();
+    assert!(
+        builtins.iter().all(|row| !row.starts_with("/resume")),
+        "no /resume row: {builtins:?}"
+    );
+    assert!(
+        builtins
+            .iter()
+            .any(|row| row == "/session [filter|copy|info] pick a saved session, copy its path, or show session info"),
+        "the /session row: {builtins:?}"
+    );
+    assert!(known_commands().contains("/session [filter|copy|info]"));
+    assert!(!known_commands().contains("/resume"));
 }
 
 #[test]

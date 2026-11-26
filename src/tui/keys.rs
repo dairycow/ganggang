@@ -48,7 +48,7 @@ pub enum KeyAction {
     /// aside (readline's muscle memory, gap §4).
     HistoryPrev,
     HistoryNext,
-    /// Tab while the suggestion popup is open, or the `/resume` picker.
+    /// Tab while the suggestion popup is open, or the `/session` list.
     SuggestComplete,
     /// Ctrl+G: edit the draft in the external editor, which takes the
     /// terminal until it exits.

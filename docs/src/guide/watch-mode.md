@@ -22,5 +22,5 @@ cargo build        # or --release; watch follows the binary you launched
 - `--watch` is a TUI mode: it cannot combine with `-p`, `--mode json`, `--export` or `--list-models`.
 - It refuses `--no-session`, because a restart needs a session file to resume.
 - It refuses any workspace that does not build the ganggang `gg` binary, so it executes only the binary built from the current workspace.
-- Watch sessions create their file at startup. Header-only watch sessions sort below real conversations for `-c` and the `/resume` list, but filtering the list on their id still reaches them.
-- A restart continues the session in the directory gg was launched in. A session opened with `/resume` from another directory is continued by its file, in the launch directory.
+- Watch sessions create their file at startup. Header-only watch sessions sort below real conversations for `-c` and the `/session` list, but filtering the list on their id still reaches them.
+- A restart continues the session in the directory gg was launched in. A session opened with `/session` from another directory is continued by its file, in the launch directory.

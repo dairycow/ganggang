@@ -39,7 +39,6 @@ use tokio::sync::mpsc;
 use crate::agent::Agent;
 use crate::agent::skills::Skill;
 use agent_task::{AgentInput, UiEvent, agent_task};
-use clipboard::osc52_sequence;
 use commands::{CmdCtx, Command, Submission, classify_submission, handle_command};
 use external::Outcome;
 use history::Arrow;
@@ -59,7 +58,7 @@ const SCROLL_STEP: u16 = 10;
 pub struct Boot {
     pub agent: Agent,
     pub session_path: Option<PathBuf>,
-    /// `--no-session`: `/resume` is disabled for this run.
+    /// `--no-session`: `/session` is disabled for this run.
     pub sessions_disabled: bool,
 }
 
@@ -71,7 +70,7 @@ pub enum SessionPick {
     Path(PathBuf),
 }
 
-/// Rebuilds an Agent for `/new` and `/resume`, running in the directory
+/// Rebuilds an Agent for `/new` and `/session`, running in the directory
 /// given: the one gg was launched in, or the one the session being opened
 /// started in. The TUI owns the lifetime decisions and the directory;
 /// main owns construction (config, client, registry).
@@ -142,13 +141,13 @@ impl Shared<'_> {
 }
 
 /// Run the TUI until the user quits. `first` is consumed by the first
-/// agent task; `/new` and `/resume` rebuild agents through `factory`.
+/// agent task; `/new` and `/session` rebuild agents through `factory`.
 /// What comes back is for the user, to read once the screen is the shell's
 /// again (it is: screen and guard drop, in that order, on the way out).
 ///
 /// `watch` enables dev rebuilds; `draft` is composer text carried over
 /// from the process a restart replaced. `cwd` is the directory gg was
-/// launched in: it stays the working directory until `/resume` opens a
+/// launched in: it stays the working directory until `/session` opens a
 /// session that started in another one, and follows it from then on.
 // One flat list, like [`Agent::new`]: each parameter has a distinct owner
 // (boot, lifetime, discovery, location, limits, transport, dev loop) and
@@ -210,7 +209,7 @@ pub async fn run(
     }
     state.session_path = boot.session_path.clone();
     state.sessions_disabled = boot.sessions_disabled;
-    // The `/resume` list is built from a listing read off the loop: the
+    // The `/session` list is built from a listing read off the loop: the
     // first scan is owed from the start, so the list has rows the first
     // time it opens (the loop starts it after a draw).
     state.request_session_scan();
@@ -312,7 +311,7 @@ pub async fn run(
             terminal
                 .draw(|frame| render(frame, &mut state))
                 .map_err(|e| anyhow::anyhow!("drawing: {e}"))?;
-            // The `/resume` list's scan, owed after a draw: its rows are
+            // The `/session` list's scan, owed after a draw: its rows are
             // built from the listing it brings, and a request made while
             // one is in flight is kept and runs when that scan returns.
             if state.session_scan_ready() {
@@ -367,7 +366,7 @@ pub async fn run(
                         },
                         // Esc keeps its meaning: the run's abort key, and it
                         // marks the run stopping so the footer shows the
-                        // cancel took. Idle, it closes the `/resume` picker
+                        // cancel took. Idle, it closes the `/session` list
                         // when one is open, and otherwise does nothing.
                         KeyAction::Abort if state.picker_open() => state.close_picker(),
                         KeyAction::Abort if state.busy => {
@@ -418,25 +417,45 @@ pub async fn run(
                                 }
                             }
                         }
-                        // Enter in the `/resume` picker: the highlighted
-                        // session opens. The picker stays until the
-                        // session is open — `new_session` closes it and
-                        // clears the filter — so a failed open leaves
-                        // the error in the picker's panel, filter and
-                        // all.
+                        // Enter in the `/session` list: the highlighted
+                        // row acts on it: a session opens, an action row
+                        // runs its one line. The list stays until the
+                        // action is done — `new_session` closes it when
+                        // a session opens, and the loop closes it when
+                        // an action runs — so a failure leaves the
+                        // error in the list's panel, filter and all.
                         KeyAction::Send if state.picker_open() && !state.busy => {
-                            if let Some(crate::tui::picker::Pick::Open(session)) =
-                                state.picker_action()
-                            {
-                                let ctx = shared.ctx(
-                                    &mut state,
-                                    &mut input_tx,
-                                    &mut cwd,
-                                    &mut active_endpoint,
-                                );
-                                if let Err(e) = commands::open_session(session, ctx) {
-                                    state.pick_failed(&format!("{e:#}"));
+                            use crate::tui::picker::Pick;
+                            match state.picker_action() {
+                                Some(Pick::Open(session)) => {
+                                    let ctx = shared.ctx(
+                                        &mut state,
+                                        &mut input_tx,
+                                        &mut cwd,
+                                        &mut active_endpoint,
+                                    );
+                                    if let Err(e) = commands::open_session(session, ctx) {
+                                        state.pick_failed(&format!("{e:#}"));
+                                    }
                                 }
+                                Some(Pick::CopyPath) => {
+                                    match commands::copy_session_path(
+                                        &mut state,
+                                        clipboard::copy,
+                                    ) {
+                                        Ok(()) => {
+                                            state.history.record("/session copy");
+                                            state.close_picker();
+                                        }
+                                        Err(msg) => state.pick_failed(&msg),
+                                    }
+                                }
+                                Some(Pick::Info) => {
+                                    commands::session_info(&mut state, &active_endpoint.label());
+                                    state.history.record("/session info");
+                                    state.close_picker();
+                                }
+                                None => {}
                             }
                         }
                         // Tab in the list: every directory's sessions, or
@@ -523,7 +542,7 @@ pub async fn run(
                         KeyAction::ScrollUp => state.scroll_up(SCROLL_STEP),
                         KeyAction::ScrollDown => state.scroll_down(SCROLL_STEP),
                         // ↑/↓ belong to the open popup (the suggestion
-                        // list or the `/resume` picker) while it is
+                        // list or the `/session` list) while it is
                         // open; otherwise they recall history (from an empty
                         // or single-line composer) or move between the
                         // composer's lines — the rule itself is
@@ -718,20 +737,16 @@ async fn next_watch_event(rx: &mut Option<mpsc::Receiver<watch::Event>>) -> Opti
     }
 }
 
-/// Ctrl+X: copy the last assistant answer via OSC 52 (terminal-native
-/// clipboard, no dependencies). Feedback lands in the transcript either
-/// way — silent clipboards are indistinguishable from broken ones.
+/// Ctrl+X: copy the last assistant answer to the clipboard (the same
+/// OSC 52 copy the `/session` list's `copy path` row uses). Feedback
+/// lands in the transcript either way — silent clipboards are
+/// indistinguishable from broken ones.
 fn copy_last_answer(state: &mut State) {
     let Some(answer) = state.last_answer() else {
         state.push_warning("nothing to copy yet");
         return;
     };
-    let sequence = osc52_sequence(&answer);
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .open("/dev/tty")
-        .and_then(|mut tty| std::io::Write::write_all(&mut tty, sequence.as_bytes()));
-    match written {
+    match clipboard::copy(&answer) {
         Ok(()) => state.push_info(&format!("copied {} chars", answer.chars().count())),
         Err(e) => state.push_warning(&format!("cannot write to /dev/tty: {e}")),
     }

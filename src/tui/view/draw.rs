@@ -1,7 +1,7 @@
 //! Drawing one frame: the theme's ground, the transcript (wrapped, bottom-
 //! anchored, scrollbar when it overflows, welcome block while it is empty),
 //! the composer, the footer, and, floating above the composer, the
-//! suggestion popup or the `/resume` picker.
+//! suggestion popup or the `/session` list.
 //!
 //! State is read, never written, except for two figures the loop needs
 //! back: the wrapped-row count that clamps scrolling, and the number of
@@ -219,10 +219,11 @@ fn draw_popup(frame: &mut Frame, state: &mut State, areas: Areas) {
     frame.render_widget(Paragraph::new(popup), area);
 }
 
-/// The `/resume` picker: the same floating panel as the suggestion popup,
+/// The `/session` list: the same floating panel as the suggestion popup,
 /// over the transcript and directly above the composer, with one row per
-/// session the composer's filter keeps. The panel shows a window of the
-/// rows and the window follows the highlight, so a directory with a
+/// session the composer's filter keeps, and the action rows `copy path`
+/// and `info` above them while a filter is typed. The panel shows a
+/// window of the rows and the window follows the highlight, so a directory with a
 /// hundred sessions is scrolled rather than cut to what fits. A scope
 /// with no row at all — an empty directory, or a filter that keeps no
 /// row — draws a two-row panel that says why in its own ground: the

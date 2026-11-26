@@ -29,9 +29,9 @@ impl crate::tui::view::State {
     }
 
     /// What one Ctrl+C does (gap §5), in one place so the four cases are
-    /// testable without a terminal: cancel a live run, close the `/resume`
-    /// picker, clear a draft, or —
-    /// when there is nothing left to cancel — end the TUI. The caller (the
+    /// testable without a terminal: cancel a live run, close the `/session`
+    /// list, clear a draft, or, when there is nothing left to cancel, end
+    /// the TUI. The caller (the event loop) sets the abort flag and quits,
     /// event loop) sets the abort flag and quits, because those are the two
     /// things the view cannot do.
     pub fn interrupt(&mut self) -> Cancel {
@@ -148,7 +148,7 @@ pub enum Cancel {
     Stopping,
     /// A second Ctrl+C on a run already stopping: set the flag, then end.
     ForceQuit,
-    /// Idle: the `/resume` picker was open and is closed, filter and all.
+    /// Idle: the `/session` list was open and is closed, filter and all.
     PickerClosed,
     /// Idle: the composer's text is gone, and the next Ctrl+C quits.
     DraftCleared,

@@ -1,12 +1,14 @@
-//! `/resume`: the session scan the list is built from, read off the
-//! loop, and opening the chosen session in the directory it continues
-//! in. The list itself opens from the composer's text as it is typed;
-//! [`handle_command`](super::handle_command) keeps the arms, and the
-//! logic lives here so `commands.rs` stays small.
+//! `/session`: the session scan the list is built from, read off the
+//! loop, opening the chosen session in the directory it continues in,
+//! and the one-line actions `copy path` and `info` run on the current
+//! session. The list itself opens from the composer's text as it is
+//! typed; [`handle_command`](super::handle_command) keeps the arms, and
+//! the logic lives here so `commands.rs` stays small.
 
 use super::CmdCtx;
+use crate::tui::view::State;
 
-/// The `/resume` list's store scan, read off the loop: it reads every
+/// The `/session` list's store scan, read off the loop: it reads every
 /// file of every directory, so it runs on a blocking thread, and the
 /// listing comes back as `UiEvent::SessionsListed`, which the loop
 /// answers with [`sessions_listed`].
@@ -120,6 +122,48 @@ fn continuation(
         directory: own.to_path_buf(),
         note,
     }
+}
+
+/// The current session's one-line block: where its file is, which model
+/// it runs, and the run's totals. `--no-session` runs have no file to
+/// point at, and a fresh session's file is written only on its first
+/// message, which the path line says.
+pub(in crate::tui) fn session_info(state: &mut State, model_label: &str) {
+    let path = match state.session_path.as_ref() {
+        Some(path) => {
+            let mut shown = path.display().to_string();
+            if !path.exists() {
+                shown.push_str(" (not written until the first message)");
+            }
+            shown
+        }
+        None => "not persisted (--no-session)".to_string(),
+    };
+    state.push_info(&format!(
+        "session: {path}\nmodel: {model_label}\nentries: {}\ntokens: {} in / {} out",
+        state.entries, state.tokens_in, state.tokens_out,
+    ));
+}
+
+/// The list's `copy path` row on the current session: its `.jsonl`
+/// file's path, copied through `write` (the loop passes
+/// [`clipboard::copy`](super::super::clipboard::copy), a test passes a
+/// recorder). A run without a session file has nothing to copy, and a
+/// write that fails is the terminal's problem, reported as an error.
+pub(in crate::tui) fn copy_session_path(
+    state: &mut State,
+    write: impl Fn(&str) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let path = state
+        .session_path
+        .as_ref()
+        .ok_or_else(|| "no session file to copy: this run is --no-session".to_string())?;
+    let path_text = path.display().to_string();
+    if let Err(e) = write(&path_text) {
+        return Err(format!("cannot write to /dev/tty: {e}"));
+    }
+    state.push_info(&format!("copied {path_text}"));
+    Ok(())
 }
 
 #[cfg(test)]

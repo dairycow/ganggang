@@ -44,11 +44,12 @@ fn row(id: &str, title: Option<&str>, preview: Option<&str>) -> SessionRow {
     SessionRow::new(session(id, "20261125-090000", title, preview), NOW)
 }
 
-/// The ids of the rows a filter keeps.
+/// The session ids of the rows a filter keeps.
 fn ids<'a>(rows: &[&'a Row]) -> Vec<&'a str> {
     rows.iter()
         .map(|row| match row {
             Row::Session(session) => session.id.as_str(),
+            Row::Action(_) => "",
         })
         .collect()
 }
@@ -569,16 +570,16 @@ fn the_picker_opens_on_every_project_and_narrows_to_this_one() {
 fn the_hint_names_the_keys_the_scope_and_the_place_in_a_long_list() {
     assert_eq!(
         row_text(&hint_row(&TRUECOLOR, 80, Some(false), None)),
-        " ↑↓ move · type filters · Tab: all directories · Enter opens · Esc closes"
+        " ↑↓ move · type filters · Tab: all directories · Enter picks · Esc clears"
     );
     assert_eq!(
         row_text(&hint_row(&TRUECOLOR, 80, Some(true), None)),
-        " ↑↓ move · type filters · Tab: this directory · Enter opens · Esc closes",
+        " ↑↓ move · type filters · Tab: this directory · Enter picks · Esc clears",
         "the hint names the scope Tab switches TO"
     );
     let long = row_text(&hint_row(&TRUECOLOR, 80, Some(false), Some((2, 57))));
     assert!(long.starts_with(" ↑↓ move 3/57 · "), "{long}");
-    assert!(long.ends_with("Esc closes"), "{long}");
+    assert!(long.ends_with("Esc clears"), "{long}");
     assert!(
         long.chars().count() <= 80,
         "it all fits an 80-column row: {long}"
@@ -742,7 +743,7 @@ mod state_tests {
     fn list_open_on(state: &mut State, n: usize) {
         let (listing, _) = listing_for_test(n);
         state.sessions = listing;
-        state.editor.set_text("/resume");
+        state.editor.set_text("/session");
         state.sync_picker();
     }
 
@@ -752,6 +753,10 @@ mod state_tests {
             .iter()
             .map(|row| match row {
                 Row::Session(session) => session.name.clone(),
+                Row::Action(action) => match action {
+                    Action::CopyPath => "copy path".to_string(),
+                    Action::Info => "info".to_string(),
+                },
             })
             .collect()
     }
@@ -760,7 +765,7 @@ mod state_tests {
         state.picker.as_ref().map_or(0, |pick| pick.selected)
     }
 
-    /// Setting the text to `/resume` against a cached listing of three
+    /// Setting the text to `/session` against a cached listing of three
     /// sessions, one of them the current one, opens the list with the
     /// other two, newest first, and the top row highlighted.
     #[test]
@@ -776,7 +781,7 @@ mod state_tests {
             current.clone(),
             filed_for_test(1, "uuid-of", "s"),
         ];
-        state.editor.set_text("/resume");
+        state.editor.set_text("/session");
         state.sync_picker();
         assert_eq!(
             names(&state),
@@ -796,14 +801,14 @@ mod state_tests {
         list_open_on(&mut state, 3);
         state.picker_next();
         assert_eq!(highlighted(&state), 1);
-        state.editor.set_text("/resume s02");
+        state.editor.set_text("/session s02");
         state.sync_picker();
         assert_eq!(
             highlighted(&state),
             0,
             "a changed filter: the top row again"
         );
-        state.editor.set_text("/resume s02 ");
+        state.editor.set_text("/session s02 ");
         state.sync_picker();
         assert_eq!(
             highlighted(&state),
@@ -812,7 +817,7 @@ mod state_tests {
         );
         state.pick_failed("boom");
         assert!(state.picker.as_ref().unwrap().error.is_some());
-        state.editor.set_text("/resume s01");
+        state.editor.set_text("/session s01");
         state.sync_picker();
         assert!(
             state.picker.as_ref().unwrap().error.is_none(),
@@ -874,7 +879,7 @@ mod state_tests {
         state.editor.set_text("");
         state.sync_picker();
         state.sessions_listed(elsewhere_for_test(1), Vec::new());
-        state.editor.set_text("/resume");
+        state.editor.set_text("/session");
         state.sync_picker();
         assert_eq!(names(&state), ["a00"]);
         assert_eq!(
@@ -891,7 +896,7 @@ mod state_tests {
         let mut state = view();
         // A store to scan, wherever the test itself runs.
         state.sessions.dir = Some(PathBuf::from("/s"));
-        state.editor.set_text("/resume");
+        state.editor.set_text("/session");
         state.sync_picker();
         assert!(
             state.picker_open(),
@@ -915,7 +920,7 @@ mod state_tests {
 
         let mut disabled = view();
         disabled.sessions_disabled = true;
-        disabled.editor.set_text("/resume");
+        disabled.editor.set_text("/session");
         disabled.sync_picker();
         assert!(disabled.picker_open());
         assert_eq!(
@@ -936,7 +941,7 @@ mod state_tests {
     fn the_state_words_why_the_list_is_empty() {
         let mut state = view();
         // No HOME: said before anything else, since no scan can run.
-        state.editor.set_text("/resume");
+        state.editor.set_text("/session");
         state.sync_picker();
         state.sessions.dir = None;
         assert_eq!(
@@ -951,7 +956,7 @@ mod state_tests {
         listing.everywhere = vec![sessions[1].clone()];
         state.session_path = Some(sessions[1].path.clone());
         state.sessions = listing;
-        state.editor.set_text("/resume");
+        state.editor.set_text("/session");
         state.sync_picker();
         assert_eq!(state.session_empty_reason(), "no sessions yet");
 
@@ -960,7 +965,7 @@ mod state_tests {
         state.sync_picker();
         state.session_path = None;
         state.sessions_listed(elsewhere_for_test(2), Vec::new());
-        state.editor.set_text("/resume");
+        state.editor.set_text("/session");
         state.sync_picker();
         assert_eq!(names(&state).len(), 2, "every directory's");
         state.session_scope_this_directory();
@@ -971,7 +976,7 @@ mod state_tests {
 
         // A filter that keeps no row.
         state.session_scope_all_directories();
-        state.editor.set_text("/resume  fix  ");
+        state.editor.set_text("/session  fix  ");
         state.sync_picker();
         assert_eq!(
             state.session_empty_reason(),
@@ -1032,6 +1037,125 @@ mod state_tests {
         );
     }
 
+    /// A filter keeps the matching action rows above the matching
+    /// sessions, in `copy path`, then `info` order: the label is the
+    /// row's whole search text, and an empty filter keeps no action row
+    /// at all.
+    #[test]
+    fn a_filter_keeps_the_matching_action_rows_above_the_sessions() {
+        let mut state = view();
+        let (listing, _sessions) = listing_for_test(0);
+        state.sessions = listing;
+        state.editor.set_text("/session");
+        state.sync_picker();
+        assert!(
+            names(&state).is_empty(),
+            "no filter, no sessions: no action rows"
+        );
+
+        state.editor.set_text("/session copy");
+        state.sync_picker();
+        assert_eq!(
+            names(&state),
+            ["copy path"],
+            "the label's word keeps its row, above the matching sessions"
+        );
+        assert_eq!(highlighted(&state), 0, "and the top row is the new top row");
+
+        state.editor.set_text("/session path");
+        state.sync_picker();
+        assert_eq!(
+            names(&state),
+            ["copy path"],
+            "a word of the other label is not this one"
+        );
+
+        state.editor.set_text("/session info");
+        state.sync_picker();
+        assert_eq!(names(&state), ["info"]);
+
+        state.editor.set_text("/session cop");
+        state.sync_picker();
+        assert_eq!(
+            names(&state),
+            ["copy path"],
+            "the label is the row's whole search text: no session's text has cop"
+        );
+
+        state.editor.set_text("/session i");
+        state.sync_picker();
+        assert_eq!(
+            names(&state),
+            ["info"],
+            "i matches no session row: no copy path either"
+        );
+
+        state.editor.set_text("/session zzz");
+        state.sync_picker();
+        assert!(
+            names(&state).is_empty(),
+            "a filter that matches nothing: no rows at all"
+        );
+    }
+
+    /// `picker_action()` on an action row is the action itself.
+    #[test]
+    fn the_action_rows_act_on_their_actions() {
+        let mut state = view();
+        let (listing, _sessions) = listing_for_test(0);
+        let mut with_copy = listing;
+        let mut copy_session = sessions_for_test(1)[0].clone();
+        copy_session.title = Some("copy the tests".into());
+        with_copy.everywhere = vec![copy_session.clone()];
+        state.sessions = with_copy;
+        state.editor.set_text("/session");
+        state.sync_picker();
+        state.editor.set_text("/session copy");
+        state.sync_picker();
+        assert_eq!(
+            state.picker_action(),
+            Some(Pick::CopyPath),
+            "the top row is copy path"
+        );
+        state.picker_next();
+        assert_eq!(
+            state.picker_action(),
+            Some(Pick::Open(copy_session.clone())),
+            "the session the filter keeps is the next row"
+        );
+        state.picker_next();
+        assert_eq!(
+            state.picker_action(),
+            Some(Pick::Open(copy_session.clone())),
+            "it stops at the last row the filter keeps"
+        );
+        state.picker_next();
+        assert_eq!(
+            state.picker_action(),
+            Some(Pick::Open(copy_session)),
+            "and a further key moves it nowhere"
+        );
+    }
+
+    /// A failed copy keeps the composer text and the list, and says the
+    /// error in the panel's last row.
+    #[test]
+    fn a_failed_copy_keeps_the_text_and_the_list_and_sets_the_error() {
+        let mut state = view();
+        list_open_on(&mut state, 1);
+        state.editor.set_text("/session copy");
+        state.sync_picker();
+        assert_eq!(state.picker_action(), Some(Pick::CopyPath));
+        state.pick_failed("cannot write to /dev/tty: no such device");
+        assert!(state.picker_open(), "the list stays");
+        assert_eq!(state.editor.text(), "/session copy", "the text stays");
+        assert_eq!(
+            state.picker.as_ref().unwrap().error.as_deref(),
+            Some("cannot write to /dev/tty: no such device"),
+            "the panel's last row says why"
+        );
+    }
+
     /// `new_session` and `set_directory` close the list or re-file it and
     /// ask for a scan: the new session's file is the newest, and the new
     /// directory is where this directory's rows are filed. The listing
@@ -1072,26 +1196,33 @@ mod trigger_tests {
     }
 
     #[test]
-    fn the_resume_command_opens_the_session_list_with_the_rest_as_its_filter() {
+    fn the_session_command_opens_the_session_list_with_the_rest_as_its_filter() {
         assert_eq!(
-            of("/resume"),
+            of("/session"),
             Some((List::Sessions, String::new())),
             "the bare command: an empty filter"
         );
         assert_eq!(
-            of("/resume glm fix"),
+            of("/session copy"),
+            Some((List::Sessions, "copy".into())),
+            "the action's word is a filter like any other"
+        );
+        assert_eq!(
+            of("/session glm fix"),
             Some((List::Sessions, "glm fix".into())),
             "every word after the command is the filter"
         );
         assert_eq!(
-            of("/resume   "),
+            of("/session "),
             Some((List::Sessions, String::new())),
             "trailing whitespace is no filter"
         );
         for text in [
+            "/sessionx",
             "/resum",
             "/resumex",
             "/resume:x",
+            "/resume",
             "resume",
             "hello there",
             "/model",

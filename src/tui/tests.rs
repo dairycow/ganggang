@@ -8,7 +8,7 @@ use super::agent_task::{UiEvent, apply, usage_totals};
 use super::footer::Footer;
 use super::history::{Arrow, History};
 use super::keys::{KeyAction, classify};
-use super::picker::{Pick, Row};
+use super::picker::{Action, Pick, Row};
 use super::transcript::LineKind;
 use super::view::{Cancel, State};
 use crate::agent::session::{Entry, Message, Role};
@@ -340,13 +340,12 @@ fn suggestion_popup_tracks_the_composer() {
     assert!(!state.suggest_open(), "plain composer: no popup");
     state.editor.insert_char('/');
     assert!(state.suggest_open(), "a bare slash opens the catalog");
-    assert_eq!(state.suggestions().len(), 11, "the built-in set");
+    assert_eq!(state.suggestions().len(), 10, "the built-in set");
 
-    // Filtering: two down and one up leaves the highlight on /compact.
-    state.suggest_next();
-    state.suggest_next();
+    // Filtering: one down and one up leaves the highlight on /compact.
     state.suggest_next();
     state.suggest_prev();
+    state.suggest_next();
     state.complete_suggestion();
     assert_eq!(state.editor.text(), "/compact ");
     assert!(!state.suggest_open(), "whitespace closes the popup");
@@ -620,7 +619,7 @@ fn the_selection_stops_at_the_last_drawn_row_on_short_terminals() {
         state.suggest_next();
     }
     state.complete_suggestion();
-    assert_eq!(state.editor.text(), "/context ", "row 4 of the catalog");
+    assert_eq!(state.editor.text(), "/hooks ", "row 4 of the catalog");
 
     // Never rendered: the whole list is reachable.
     state.editor.set_text("/");
@@ -933,14 +932,22 @@ fn highlighted(state: &State) -> usize {
         .unwrap_or(usize::MAX)
 }
 
-/// The names of the rows the list's filter keeps, in listing order.
+/// The labels of the rows the list's filter keeps, in listing order.
+fn row_label(row: &Row) -> &str {
+    match row {
+        Row::Session(row) => &row.name,
+        Row::Action(action) => match action {
+            Action::CopyPath => "copy path",
+            Action::Info => "info",
+        },
+    }
+}
+
 fn picker_names(state: &State) -> Vec<String> {
     state
         .picker_matches()
         .iter()
-        .map(|row| match row {
-            Row::Session(row) => row.name.clone(),
-        })
+        .map(|row| row_label(row).to_string())
         .collect()
 }
 
@@ -960,13 +967,13 @@ fn list_on(sessions: Vec<crate::agent::session::io::SessionFile>, text: &str) ->
 /// rows at all.
 #[test]
 fn the_list_filters_the_listing_through_the_composer() {
-    let mut state = list_on(super::picker::tests::sessions_for_test(3), "/resume");
+    let mut state = list_on(super::picker::tests::sessions_for_test(3), "/session");
     assert!(state.picker_open() && state.popup_open());
     assert_eq!(picker_names(&state), ["s00", "s01", "s02"], "listing order");
-    state.editor.set_text("/resume S02");
+    state.editor.set_text("/session S02");
     state.sync_picker();
     assert_eq!(picker_names(&state), ["s02"], "case-insensitive");
-    state.editor.set_text("/resume s01 s02");
+    state.editor.set_text("/session s01 s02");
     state.sync_picker();
     assert!(
         picker_names(&state).is_empty(),
@@ -984,7 +991,7 @@ fn the_list_filters_the_listing_through_the_composer() {
 /// history and the suggestion list included.
 #[test]
 fn the_list_owns_the_arrows_and_keeps_its_highlight_on_a_matching_row() {
-    let mut state = list_on(super::picker::tests::sessions_for_test(3), "/resume");
+    let mut state = list_on(super::picker::tests::sessions_for_test(3), "/session");
 
     state.popup_next();
     assert_eq!(
@@ -1003,7 +1010,7 @@ fn the_list_owns_the_arrows_and_keeps_its_highlight_on_a_matching_row() {
     // A changed filter is a new list: the highlight returns to the top
     // row before any key is pressed (render syncs it every frame).
     state.picker_next();
-    state.editor.set_text("/resume s");
+    state.editor.set_text("/session s");
     state.sync_picker();
     assert_eq!(highlighted(&state), 0);
     for _ in 0..5 {
@@ -1024,11 +1031,13 @@ fn the_list_owns_the_arrows_and_keeps_its_highlight_on_a_matching_row() {
 /// way.
 #[test]
 fn enter_takes_the_highlighted_session_and_closes_the_list() {
-    let mut state = list_on(super::picker::tests::sessions_for_test(3), "/resume");
+    let mut state = list_on(super::picker::tests::sessions_for_test(3), "/session");
     let newest = state.picker_action().expect("the top row");
     assert_eq!(
         match &newest {
             Pick::Open(session) => &session.id,
+            Pick::CopyPath => "copy path",
+            Pick::Info => "info",
         },
         "uuid-of-00000000",
         "no filter: the listing's first session"
@@ -1037,7 +1046,7 @@ fn enter_takes_the_highlighted_session_and_closes_the_list() {
     assert!(state.popup_open());
     assert_eq!(
         state.editor.text(),
-        "/resume",
+        "/session",
         "the text stays with the list"
     );
 
@@ -1049,19 +1058,21 @@ fn enter_takes_the_highlighted_session_and_closes_the_list() {
     assert!(state.picker_action().is_none(), "closed: nothing to take");
     let transcript_after_new_session = state_line_texts(&state);
 
-    state.editor.set_text("/resume s01");
+    state.editor.set_text("/session s01");
     state.sync_picker();
     assert_eq!(
         match state.picker_action().expect("the one row") {
             Pick::Open(session) => session.id,
+            Pick::CopyPath => "copy path".to_string(),
+            Pick::Info => "info".to_string(),
         },
         "uuid-of-00000001",
         "the one row a filter keeps is the one that opens"
     );
     assert!(state.picker_open(), "and the text stays");
-    assert_eq!(state.editor.text(), "/resume s01");
+    assert_eq!(state.editor.text(), "/session s01");
 
-    state.editor.set_text("/resume zzz");
+    state.editor.set_text("/session zzz");
     state.sync_picker();
     assert!(
         state.picker_action().is_none(),
@@ -1070,7 +1081,7 @@ fn enter_takes_the_highlighted_session_and_closes_the_list() {
     assert!(state.picker_open(), "nothing to open: the list stays");
     assert_eq!(
         state.editor.text(),
-        "/resume zzz",
+        "/session zzz",
         "and so does what was typed"
     );
     assert_eq!(
@@ -1082,7 +1093,7 @@ fn enter_takes_the_highlighted_session_and_closes_the_list() {
     assert!(!state.picker_open());
     assert_eq!(state.editor.text(), "");
 
-    state.editor.set_text("/resume s01");
+    state.editor.set_text("/session s01");
     state.sync_picker();
     state.close_picker();
     assert!(!state.picker_open());
@@ -1090,7 +1101,7 @@ fn enter_takes_the_highlighted_session_and_closes_the_list() {
     assert!(state.picker_matches().is_empty());
 }
 
-/// Typing `/resume` opens the list and builds its rows from the cached
+/// Typing `/session` opens the list and builds its rows from the cached
 /// listing: the session, its id from the file name, its name, and an
 /// age, ready to be chosen.
 #[test]
@@ -1104,14 +1115,14 @@ fn opening_the_list_builds_rows_from_the_listing() {
         preview: Some("first question".into()),
         path: std::path::PathBuf::from("/s/20261125-120000-a1b2c3d4.jsonl"),
     };
-    let mut state = list_on(vec![session], "/resume");
+    let mut state = list_on(vec![session], "/session");
     assert!(state.picker_open());
     assert!(state.popup_open());
     {
         let rows = state.picker_matches();
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
-        assert_eq!(row.session().id, "uuid-of-a1b2c3d4");
+        assert_eq!(row.session().unwrap().id, "uuid-of-a1b2c3d4");
         assert!(
             matches!(row, Row::Session(row) if row.name == "first question"),
             "no title: the preview: {row:?}"
@@ -1124,6 +1135,8 @@ fn opening_the_list_builds_rows_from_the_listing() {
     assert_eq!(
         match state.picker_action().expect("the one row") {
             Pick::Open(session) => session.id,
+            Pick::CopyPath => "copy path".to_string(),
+            Pick::Info => "info".to_string(),
         },
         "uuid-of-a1b2c3d4"
     );
@@ -1145,12 +1158,13 @@ fn the_cached_listing_is_the_lists_rows() {
         super::picker::tests::elsewhere_for_test(2),
     ]
     .concat();
-    let state = list_on(sessions.clone(), "/resume");
+    let state = list_on(sessions.clone(), "/session");
     let rows = state.picker_matches();
     assert_eq!(
         rows.iter()
             .map(|row| match row {
                 Row::Session(session) => session.id.as_str(),
+                Row::Action(_) => "",
             })
             .collect::<Vec<_>>(),
         ["00000000", "00000001", "00000002", "00000000", "00000001"],
@@ -1158,7 +1172,7 @@ fn the_cached_listing_is_the_lists_rows() {
     );
     for (row, session) in rows.iter().zip(sessions.iter()) {
         assert_eq!(
-            row.session().path,
+            row.session().unwrap().path,
             session.path,
             "the row keeps the session"
         );
@@ -1179,7 +1193,7 @@ fn tab_narrows_the_list_to_this_directory_and_widens_it_back() {
         super::picker::tests::elsewhere_for_test(2),
     ]
     .concat();
-    let mut state = list_on(everywhere, "/resume");
+    let mut state = list_on(everywhere, "/session");
     assert!(
         state.session_scope_all(),
         "every directory's sessions, to begin with"
@@ -1205,7 +1219,7 @@ fn tab_narrows_the_list_to_this_directory_and_widens_it_back() {
     );
 
     // The filter applies across the scope change, to the directory too.
-    state.editor.set_text("/resume wt01");
+    state.editor.set_text("/session wt01");
     state.sync_picker();
     state.toggle_session_scope();
     assert!(state.session_scope_all());
@@ -1219,6 +1233,7 @@ fn tab_narrows_the_list_to_this_directory_and_widens_it_back() {
         .iter()
         .map(|row| match row {
             Row::Session(session) => session.project.as_deref().unwrap_or(""),
+            Row::Action(_) => "",
         })
         .collect();
     assert_eq!(directories, ["~/repo/.worktrees/wt01"]);
@@ -1228,7 +1243,7 @@ fn tab_narrows_the_list_to_this_directory_and_widens_it_back() {
         picker_names(&state).is_empty(),
         "this directory's rows are not in that worktree"
     );
-    state.editor.set_text("/resume");
+    state.editor.set_text("/session");
     state.sync_picker();
     assert_eq!(picker_names(&state), ["s00", "s01", "s02"]);
 }
@@ -1238,7 +1253,7 @@ fn tab_narrows_the_list_to_this_directory_and_widens_it_back() {
 /// draws its own row of explanation, so the view must say so.
 #[test]
 fn the_lists_scope_can_be_empty_and_the_panel_says_why() {
-    let mut state = list_on(super::picker::tests::elsewhere_for_test(2), "/resume");
+    let mut state = list_on(super::picker::tests::elsewhere_for_test(2), "/session");
     assert!(
         !state.session_scope_empty(),
         "the wide listing is not empty"
@@ -1248,7 +1263,7 @@ fn the_lists_scope_can_be_empty_and_the_panel_says_why() {
         state.session_scope_empty(),
         "a directory with no sessions is empty, whatever the filter keeps"
     );
-    state.editor.set_text("/resume a01");
+    state.editor.set_text("/session a01");
     state.sync_picker();
     assert!(
         state.session_scope_empty(),
@@ -1277,7 +1292,7 @@ fn a_failed_open_says_its_error_in_the_lists_panel() {
         state_line_texts(&state)
     );
 
-    state = list_on(super::picker::tests::sessions_for_test(3), "/resume");
+    state = list_on(super::picker::tests::sessions_for_test(3), "/session");
     state.pick_failed("boom");
     let pick = state.picker.as_ref().unwrap();
     assert_eq!(pick.error.as_deref(), Some("boom"), "stored in the list");
@@ -1286,7 +1301,7 @@ fn a_failed_open_says_its_error_in_the_lists_panel() {
         "and kept in the transcript at the same time"
     );
 
-    state.editor.set_text("/resume s01");
+    state.editor.set_text("/session s01");
     state.sync_picker();
     assert!(
         state.picker.as_ref().unwrap().error.is_none(),
@@ -1353,7 +1368,7 @@ fn ctrl_c_cancels_a_run_clears_a_draft_and_only_then_quits() {
     state.sessions.dir = None;
     state.sessions.loaded = true;
     state.sessions.everywhere = super::picker::tests::sessions_for_test(3);
-    state.editor.set_text("/resume");
+    state.editor.set_text("/session");
     state.sync_picker();
     assert!(state.picker_open());
     assert_eq!(state.interrupt(), Cancel::PickerClosed);

@@ -16,7 +16,7 @@ impl crate::tui::view::State {
     }
 
     /// Whether the popup should draw: a bare command word that matches
-    /// at least one row. The `/resume` picker has the composer while it
+    /// at least one row. The `/session` list has the composer while it
     /// is open, so a filter that happens to start with `/` is a filter.
     pub fn suggest_open(&self) -> bool {
         self.picker.is_none()
@@ -25,13 +25,13 @@ impl crate::tui::view::State {
     }
 
     /// Whether a popup has the arrows: the suggestion list or the
-    /// `/resume` picker.
+    /// `/session` list.
     pub fn popup_open(&self) -> bool {
         self.picker.is_some() || self.suggest_open()
     }
 
-    /// ↑ while a popup is open: the picker's highlight when the `/resume`
-    /// picker is open, the suggestion list's otherwise.
+    /// ↑ while a popup is open: the list's highlight when the `/session`
+    /// list is open, the suggestion list's otherwise.
     pub fn popup_prev(&mut self) {
         if self.picker.is_some() {
             self.picker_prev();

@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 
 use ratatui::text::{Line as UiLine, Span};
 
+use super::suggest::{Suggestion, suggestion_row, take_chars};
+use super::theme::Palette;
 use crate::agent::session::io::SessionFile;
 
 use self::sessions::{SessionRow, row_line};
-use super::suggest::take_chars;
-use super::theme::Palette;
 
 pub(in crate::tui) mod sessions;
 
@@ -25,7 +25,7 @@ pub enum List {
     Sessions,
 }
 
-/// The session listing a `/resume` list is built from: the last scan's
+/// The session listing a `/session` list is built from: the last scan's
 /// result, the directory this run's sessions are filed in (where
 /// `list_all_sessions`'s rows get their this-directory mark), and the
 /// scan's bookkeeping. Built once, from `cwd`, when the state is made
@@ -73,48 +73,100 @@ pub struct Trigger {
     pub filter: String,
 }
 
-/// `text`'s first word is `/resume`: the list it opens, with the rest of
-/// the line, trimmed, as its filter. Nothing else is a trigger: `/resum`,
-/// `/resumex`, `/resume:x` and a plain prompt open nothing.
+/// `text`'s first word is `/session`: the list it opens, with the rest of
+/// the line, trimmed, as its filter. Nothing else is a trigger: `/sessionx`
+/// and a plain prompt open nothing.
 pub(in crate::tui) fn trigger(text: &str) -> Option<Trigger> {
     let (head, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
-    (head == "/resume").then(|| Trigger {
+    (head == "/session").then(|| Trigger {
         list: List::Sessions,
         filter: rest.trim().to_string(),
     })
 }
 
+/// The one-line actions the session list's rows act on, beside the
+/// sessions themselves: the copy runs only when a filter is typed, which
+/// is what `/session copy` and `/session info` submit as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// Copy the current session's `.jsonl` path to the clipboard.
+    CopyPath,
+    /// Show the current session's path, model, entries and tokens.
+    Info,
+}
+
+impl Action {
+    /// The action's row text: its label.
+    fn label(&self) -> &'static str {
+        match self {
+            Action::CopyPath => "copy path",
+            Action::Info => "info",
+        }
+    }
+}
+
+/// One action row of the session list, as the popup's row builders draw
+/// it: the label, the description that says what it does.
+pub fn action_row(action: Action) -> Suggestion {
+    match action {
+        Action::CopyPath => Suggestion {
+            label: "copy path".to_string(),
+            completion: String::new(),
+            description: "copy this session's .jsonl path to the clipboard".to_string(),
+        },
+        Action::Info => Suggestion {
+            label: "info".to_string(),
+            completion: String::new(),
+            description: "session path, model, entries, token totals".to_string(),
+        },
+    }
+}
+
 /// One row of the list.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Row {
     /// A session's row, as the panel draws it.
     Session(SessionRow),
+    /// An action row, beside the sessions: it shows above them while a
+    /// filter is typed, and its search text is its label.
+    Action(Action),
 }
 
 impl Row {
     /// Lower-cased text a filter word has to appear in.
     pub fn search_text(&self) -> &str {
-        let Row::Session(row) = self;
-        &row.haystack
+        match self {
+            Row::Session(row) => &row.haystack,
+            Row::Action(action) => action.label(),
+        }
     }
 
     /// The row as the panel draws it.
     pub fn line(&self, palette: &Palette, selected: bool, width: usize) -> UiLine<'static> {
-        let Row::Session(row) = self;
-        row_line(palette, row, selected, width)
+        match self {
+            Row::Session(row) => row_line(palette, row, selected, width),
+            Row::Action(action) => suggestion_row(palette, &action_row(*action), selected, width),
+        }
     }
 
     /// Whether both rows are the same thing: what keeps the highlight
     /// across a refresh.
     pub fn same_row(&self, other: &Row) -> bool {
-        let (Row::Session(a), Row::Session(b)) = (self, other);
-        a.session.path == b.session.path
+        match (self, other) {
+            (Row::Session(a), Row::Session(b)) => a.session.path == b.session.path,
+            (Row::Action(a), Row::Action(b)) => a == b,
+            _ => false,
+        }
     }
 
-    /// The session the row was built from.
-    pub fn session(&self) -> &SessionFile {
-        let Row::Session(row) = self;
-        &row.session
+    /// The session the row was built from; `None` on an action row.
+    #[allow(dead_code)]
+    pub fn session(&self) -> Option<&SessionFile> {
+        match self {
+            Row::Session(row) => Some(&row.session),
+            Row::Action(_) => None,
+        }
     }
 }
 
@@ -123,12 +175,17 @@ impl Row {
 pub enum Pick {
     /// Open the session.
     Open(SessionFile),
+    /// Copy the current session's `.jsonl` path to the clipboard.
+    CopyPath,
+    /// Show the current session's path, model, entries and tokens.
+    Info,
 }
 
 impl PartialEq for Pick {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Pick::Open(a), Pick::Open(b)) => a.path == b.path,
+            (a, b) => std::mem::discriminant(a) == std::mem::discriminant(b),
         }
     }
 }
@@ -295,7 +352,7 @@ pub(in crate::tui) fn hint_row(
         hint.push_str(&format!(" {}/{}", selected + 1, total));
     }
     hint.push_str(&format!(
-        " · type filters · {scope} · Enter opens · Esc closes"
+        " · type filters · {scope} · Enter picks · Esc clears"
     ));
     UiLine::from(Span::styled(take_chars(&hint, width), palette.popup_hint()))
 }

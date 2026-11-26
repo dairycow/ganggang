@@ -290,11 +290,11 @@ fn a_transcript_that_overflows_shows_a_scrollbar_and_one_that_fits_does_not() {
 #[test]
 fn the_suggestion_popup_is_a_panel_of_its_own() {
     let (mut terminal, mut state) = fresh(80, 24);
-    state.editor.set_text("/re");
+    state.editor.set_text("/se");
     draw(&mut terminal, &mut state);
     let text = screen(&terminal);
-    assert!(shows(&terminal, "/resume [filter]"), "{text}");
-    assert!(shows(&terminal, "▸ /resume"), "the marker: {text}");
+    assert!(shows(&terminal, "/session [filter|copy|info]"), "{text}");
+    assert!(shows(&terminal, "▸ /session"), "the marker: {text}");
     assert!(shows(&terminal, "↑↓ select"), "{text}");
     // The selection is the theme's `selection`, not an inversion — so a
     // 256-colour terminal gets the same look, and the terminal's own
@@ -365,7 +365,7 @@ fn the_resume_list_is_a_window_that_follows_the_highlight() {
         &mut terminal,
         &mut state,
         super::picker::tests::sessions_for_test(30),
-        "/resume",
+        "/session",
         25,
     );
 
@@ -391,7 +391,7 @@ fn the_resume_list_is_a_window_that_follows_the_highlight() {
         hint.starts_with(" ↑↓ move 26/30 · "),
         "the highlight's place in the list: {hint}"
     );
-    assert!(hint.ends_with("Esc closes"), "{hint}");
+    assert!(hint.ends_with("Esc clears"), "{hint}");
     assert!(
         row(&terminal, 20).contains(" compose "),
         "the composer is untouched below the panel: {text}"
@@ -421,7 +421,7 @@ fn the_resume_list_is_a_window_that_follows_the_highlight() {
         &mut terminal,
         &mut state,
         super::picker::tests::sessions_for_test(3),
-        "/resume",
+        "/session",
         0,
     );
     state.session_scope_this_directory();
@@ -431,7 +431,7 @@ fn the_resume_list_is_a_window_that_follows_the_highlight() {
     assert!(row(&terminal, 18).contains("s02"), "{text}");
     assert_eq!(
         row(&terminal, 19),
-        " ↑↓ move · type filters · Tab: all directories · Enter opens · Esc closes"
+        " ↑↓ move · type filters · Tab: all directories · Enter picks · Esc clears"
     );
     assert!(
         !row(&terminal, 15).contains("↑↓"),
@@ -440,14 +440,15 @@ fn the_resume_list_is_a_window_that_follows_the_highlight() {
 
     // Every directory's sessions: each row shows its session's directory
     // in the model's place, and the hint offers the way back to this
-    // directory's. Five rows make a panel six high, its first row at 14.
+    // directory's. Five sessions make a panel six high, its first row at
+    // 14 (no filter: the action rows stay away).
     let everywhere = [
         super::picker::tests::sessions_for_test(3),
         super::picker::tests::elsewhere_for_test(2),
     ]
     .concat();
     state.close_picker();
-    open_list(&mut terminal, &mut state, everywhere, "/resume", 0);
+    open_list(&mut terminal, &mut state, everywhere, "/session", 0);
     let text = screen(&terminal);
     assert!(row(&terminal, 14).contains("s00"), "{text}");
     assert!(
@@ -474,10 +475,13 @@ fn the_resume_list_is_a_window_that_follows_the_highlight() {
         "{text}"
     );
 
-    // A filter that keeps no row still draws the panel, in two rows: the
-    // empty row that says why, then the hint. The panel floats over the
-    // transcript's newest rows, so it cannot vanish and say nothing.
-    state.editor.set_text("/resume zzz");
+    // A filter that keeps no row at all still draws the panel, in two
+    // rows: the empty row that says why, then the hint. The panel floats
+    // over the transcript's newest rows, so it cannot vanish and say
+    // nothing. The narrow scope (this directory's sessions) is in view:
+    // the empty row is at the panel's top, the hint just above the
+    // composer.
+    state.editor.set_text("/session zzz");
     draw(&mut terminal, &mut state);
     let text = screen(&terminal);
     assert_eq!(
@@ -487,11 +491,11 @@ fn the_resume_list_is_a_window_that_follows_the_highlight() {
     );
     assert_eq!(
         row(&terminal, 19),
-        " ↑↓ move · type filters · Tab: all directories · Enter opens · Esc closes",
+        " ↑↓ move · type filters · Tab: all directories · Enter picks · Esc clears",
         "the hint row stays the last: {text}"
     );
     assert!(!shows(&terminal, "s00"), "{text}");
-    assert!(shows(&terminal, "/resume zzz"), "{text}");
+    assert!(shows(&terminal, "/session zzz"), "{text}");
 
     // Tab into a directory with no sessions: its own empty row, over a
     // hint that offers the wider listing.
@@ -500,7 +504,7 @@ fn the_resume_list_is_a_window_that_follows_the_highlight() {
         &mut terminal,
         &mut state,
         super::picker::tests::elsewhere_for_test(2),
-        "/resume",
+        "/session",
         0,
     );
     state.session_scope_this_directory();
@@ -524,7 +528,7 @@ fn the_resume_list_is_a_window_that_follows_the_highlight() {
         &mut terminal,
         &mut state,
         super::picker::tests::sessions_for_test(3),
-        "/resume",
+        "/session",
         0,
     );
     state.session_scope_this_directory();
@@ -538,12 +542,12 @@ fn the_resume_list_is_a_window_that_follows_the_highlight() {
     );
     assert!(!shows(&terminal, "↑↓ move"), "{text}");
     assert!(shows(&terminal, "s00"), "the rows stay: {text}");
-    state.editor.set_text("/resume s01");
+    state.editor.set_text("/session s01");
     draw(&mut terminal, &mut state);
     let text = screen(&terminal);
     assert_eq!(
         row(&terminal, 19),
-        " ↑↓ move · type filters · Tab: all directories · Enter opens · Esc closes",
+        " ↑↓ move · type filters · Tab: all directories · Enter picks · Esc clears",
         "a new list brings the hint row back: {text}"
     );
 }
@@ -693,7 +697,7 @@ fn degenerate_terminals_do_not_panic() {
     // And the list's empty scope, with no row at all to show.
     for (w, h) in [(1, 1), (4, 2), (5, 3), (80, 1), (1, 40), (3, 6)] {
         let (mut terminal, mut state) = fresh(w, h);
-        state.editor.set_text("/resume");
+        state.editor.set_text("/session");
         state.sync_picker();
         state.picker_next();
         draw(&mut terminal, &mut state);

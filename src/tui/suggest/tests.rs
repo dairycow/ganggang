@@ -47,9 +47,8 @@ fn a_bare_slash_lists_the_whole_builtin_set() {
         got,
         vec![
             "/new",
-            "/resume [filter]",
             "/compact [instructions]",
-            "/session",
+            "/session [filter|copy|info]",
             "/context",
             "/hooks",
             "/skill:<name> [args]",
@@ -64,8 +63,8 @@ fn a_bare_slash_lists_the_whole_builtin_set() {
 
 #[test]
 fn the_typed_prefix_filters_and_keeps_order() {
-    assert_eq!(labels("/re", &[]), vec!["/resume [filter]", "/reload"]);
-    assert_eq!(labels("/res", &[]), vec!["/resume [filter]"]);
+    assert_eq!(labels("/re", &[]), vec!["/reload"]);
+    assert_eq!(labels("/ses", &[]), vec!["/session [filter|copy|info]"]);
     assert_eq!(
         labels("/c", &[]),
         vec!["/compact [instructions]", "/context"]
@@ -78,8 +77,8 @@ fn the_typed_prefix_filters_and_keeps_order() {
 
 #[test]
 fn completions_carry_a_trailing_space_for_arguments() {
-    let got = suggestions("/res", &[], &[], "");
-    assert_eq!(got[0].completion, "/resume ");
+    let got = suggestions("/ses", &[], &[], "");
+    assert_eq!(got[0].completion, "/session ");
     // The generic skill row completes to the colon, not a space —
     // the name is still to come.
     let got = suggestions("/ski", &[], &[], "");
@@ -142,7 +141,7 @@ fn anything_that_is_not_a_bare_command_word_closes_the_list() {
     for text in [
         "",
         "hello",
-        "/resume 2",  // arguments: the command word is done
+        "/session 2", // arguments: the command word is done
         "/new\nmore", // multi-line composer text
         "  /new",     // submission trims, the popup does not
         "!",
@@ -158,7 +157,7 @@ fn anything_that_is_not_a_bare_command_word_closes_the_list() {
 fn the_cap_keeps_the_list_at_max_rows() {
     assert_eq!(
         suggestions("/", &[], &[], "").len(),
-        MAX_ROWS,
+        BUILTINS.len(),
         "the whole built-in set"
     );
     let skills: Vec<_> = (0..14).map(|i| skill(&format!("s{i:02}"), "f")).collect();
@@ -275,13 +274,16 @@ fn suggestion(label: &str, description: &str) -> Suggestion {
 /// line up, and the marker is the only thing a highlight adds.
 #[test]
 fn the_marker_column_is_reserved_on_every_row() {
-    let s = suggestion("/resume [filter]", "pick a saved session");
+    let s = suggestion("/session [filter|copy|info]", "pick a saved session");
     let unselected = row_text(&suggestion_row(&TRUECOLOR, &s, false, 80));
     let selected = row_text(&suggestion_row(&TRUECOLOR, &s, true, 80));
-    assert_eq!(unselected, "  /resume [filter]  pick a saved session");
+    assert_eq!(
+        unselected,
+        "  /session [filter|copy|info]  pick a saved session"
+    );
     assert_eq!(
         selected.trim_end(),
-        "▸ /resume [filter]  pick a saved session",
+        "▸ /session [filter|copy|info]  pick a saved session",
         "the marker is the only thing the text of a highlight adds"
     );
 }
@@ -317,10 +319,10 @@ fn the_selection_runs_to_the_popup_edge() {
 
 #[test]
 fn rows_truncate_to_the_width_and_never_wrap() {
-    let s = suggestion("/resume [filter]", "pick a saved session");
+    let s = suggestion("/session [filter|copy|info]", "pick a saved session");
     // Narrow: the marker fits, the label is cut, no description.
     let cut = suggestion_row(&TRUECOLOR, &s, true, 8);
-    assert_eq!(row_text(&cut), "▸ /resum");
+    assert_eq!(row_text(&cut), "▸ /sessi");
     assert_eq!(row_text(&cut).chars().count(), 8);
     // Width 0 draws nothing and does not panic.
     assert_eq!(row_text(&suggestion_row(&TRUECOLOR, &s, false, 0)), "");
@@ -334,7 +336,7 @@ fn rows_truncate_to_the_width_and_never_wrap() {
 /// pale grey with a dim description.
 #[test]
 fn the_selected_row_is_marked_not_inverted() {
-    let s = suggestion("/resume", "list sessions");
+    let s = suggestion("/session", "list sessions");
     let on = suggestion_row(&TRUECOLOR, &s, true, 60);
     let off = suggestion_row(&TRUECOLOR, &s, false, 60);
     assert_eq!(on.spans[0].content, "▸ ");

@@ -34,7 +34,7 @@ gg -c                  # continue the newest session for this directory
 gg --resume 3fa9       # a specific session, by id or prefix
 ```
 
-In the TUI, `/new` and `/resume` do the same. See [Sessions and compaction](guide/sessions-compaction.md).
+In the TUI, `/new` and `/session` do the same. See [Sessions and compaction](guide/sessions-compaction.md).
 
 ## Switch models
 

@@ -26,7 +26,7 @@ pub struct Restart {
 /// conversation.
 ///
 /// `cwd` is the directory the next process starts in — the launch
-/// directory, where `--resume <id>` is resolved — not wherever a `/resume`
+/// directory, where `--resume <id>` is resolved — not wherever a `/session`
 /// has since moved the session. A session filed under another directory is
 /// continued by its file instead.
 pub fn restart_plan(

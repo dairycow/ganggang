@@ -5,7 +5,7 @@
 //! are [`picker`](crate::tui::picker)'s; the trigger is its.
 
 use crate::agent::session::io::SessionFile;
-use crate::tui::picker::{Pick, Picker, Row, matching, trigger};
+use crate::tui::picker::{Action, Pick, Picker, Row, matching, trigger};
 
 impl crate::tui::view::State {
     /// The session list's rows, built from the state's listing cache: the
@@ -62,22 +62,26 @@ impl crate::tui::view::State {
             .is_some_and(|pick| pick.rows().is_empty())
     }
 
-    /// The rows the open list's filter keeps, in listing order: empty
+    /// The rows the open list's filter keeps, in listing order: with a
+    /// filter, the matching action rows (`copy path`, then `info`) above
+    /// the matching sessions; with no filter, the sessions alone. Empty
     /// with the list closed, and when the filter matches nothing. A
     /// listing is about a hundred rows and this runs once per frame, so
     /// the kept rows are cloned, not borrowed.
     pub fn picker_matches(&self) -> Vec<Row> {
-        match &self.picker {
-            Some(pick) => {
-                let rows: Vec<Row> = pick
-                    .rows()
-                    .iter()
-                    .map(|row| Row::Session(row.clone()))
-                    .collect();
-                matching(&rows, &pick.filter).into_iter().cloned().collect()
-            }
-            None => Vec::new(),
+        let Some(pick) = &self.picker else {
+            return Vec::new();
+        };
+        let mut rows = Vec::new();
+        if !pick.filter.is_empty() {
+            rows.extend(
+                [Action::CopyPath, Action::Info]
+                    .into_iter()
+                    .map(Row::Action),
+            );
         }
+        rows.extend(pick.rows().iter().map(|row| Row::Session(row.clone())));
+        matching(&rows, &pick.filter).into_iter().cloned().collect()
     }
 
     /// Whether the list shows every directory's sessions.
@@ -192,7 +196,7 @@ impl crate::tui::view::State {
         }
     }
 
-    /// Tab in the `/resume` list: the scope narrows from every
+    /// Tab in the `/session` list: the scope narrows from every
     /// directory's sessions to this directory's, or widens back. Both
     /// listings were read when the list opened, so this reads nothing.
     pub fn toggle_session_scope(&mut self) {
@@ -226,20 +230,25 @@ impl crate::tui::view::State {
         };
     }
 
-    /// Enter: what the highlighted row does. The list stays open, filter
-    /// and all: Enter never discards it, so a failed open leaves the user
-    /// where they were, with the panel's error row saying why. The caller
-    /// closes it once the session is open (or the list closes of its own
-    /// Esc); `None` when the list is closed, or when the filter keeps no
-    /// row — which the panel's empty row says, so nothing goes to the
-    /// transcript.
+    /// Enter: what the highlighted row does: the session it names, or
+    /// the action row's action. The list stays open, filter and all:
+    /// Enter never discards it, so a failed open leaves the user where
+    /// they were, with the panel's error row saying why. The caller
+    /// closes it once the action is done (an open session closes it of
+    /// its own, through `new_session`); `None` when the list is closed,
+    /// or when the filter keeps no row — which the panel's empty row
+    /// says, so nothing goes to the transcript.
     pub fn picker_action(&mut self) -> Option<Pick> {
         self.sync_picker();
         let selected = self.picker.as_ref()?.selected;
         let rows = self.picker_matches();
         let row = rows.get(selected)?;
         match row {
-            Row::Session(_) => Some(Pick::Open(row.session().clone())),
+            Row::Session(row) => Some(Pick::Open(row.session.clone())),
+            Row::Action(action) => match action {
+                Action::CopyPath => Some(Pick::CopyPath),
+                Action::Info => Some(Pick::Info),
+            },
         }
     }
 

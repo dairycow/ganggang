@@ -10,7 +10,9 @@ mod think;
 /// The event loop calls these two (mod.rs answers
 /// `UiEvent::SessionsListed` with `sessions_listed`, and starts the
 /// list's scan with `spawn_session_scan` after a draw).
-pub(super) use session::{open_session, sessions_listed, spawn_session_scan};
+pub(super) use session::{
+    copy_session_path, open_session, session_info, sessions_listed, spawn_session_scan,
+};
 
 #[cfg(test)]
 use think::parse_think_args;
@@ -35,12 +37,11 @@ pub enum Submission {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     New,
-    /// A typed `/resume` no longer opens the list: it already is one, open
-    /// from the text. One that reaches the handler anyway says so.
-    Resume,
     /// Compact the context now; an argument becomes focus instructions
     /// for the summarize call (§14's manual path).
     Compact(Option<String>),
+    /// Show the session's path, model, entries and tokens; an argument
+    /// is ignored, as the list's `info` row's is.
     Session,
     /// Dump the assembled system prompt (§12's debugging affordance).
     Context,
@@ -92,7 +93,6 @@ pub fn classify_submission(text: &str) -> Submission {
         let arg = parts.next().unwrap_or_default().trim().to_string();
         return Submission::Command(match head {
             "new" => Command::New,
-            "resume" => Command::Resume,
             "compact" => Command::Compact(Some(arg)).filter_arg(),
             "session" => Command::Session,
             "context" => Command::Context,
@@ -125,7 +125,7 @@ impl Command {
 
 /// The valid commands, for unknown-command feedback.
 pub fn known_commands() -> &'static str {
-    "/new /resume [filter] /compact [instructions] /session /context /hooks /skill:<name> [args] /model [provider/model] /think [effort|off|default] [budget] /reload /quit"
+    "/new /compact [instructions] /session [filter|copy|info] /context /hooks /skill:<name> [args] /model [provider/model] /think [effort|off|default] [budget] /reload /quit"
 }
 
 /// Everything a command needs to act: view state, the agent channels, the
@@ -133,7 +133,7 @@ pub fn known_commands() -> &'static str {
 /// directory. One struct instead of seven parameters.
 ///
 /// `cwd` is the directory gg is working in: where the agent's tools run
-/// and where `@mentions` and `!shell` lines resolve. `/resume` moves it
+/// and where `@mentions` and `!shell` lines resolve. `/session` moves it
 /// when it opens a session that started in another directory.
 /// `skills` is the view's shared set, taken by value as a snapshot of
 /// its `Arc` at command start, so a `/reload` mid-command cannot swap
@@ -260,11 +260,6 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
         Command::New => {
             let boot = factory(super::SessionPick::New, cwd, active_endpoint, abort.clone())?;
             swap_agent(boot, state, input_tx, ui_tx, cwd);
-        }
-        Command::Resume => {
-            // The list opens from the text as it is typed: a `/resume`
-            // that is submitted anyway has nothing to do but say so.
-            state.push_info("the session list opens as you type /resume");
         }
         Command::Model(choice) => {
             model::handle_model(

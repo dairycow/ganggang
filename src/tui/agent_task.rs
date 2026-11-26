@@ -62,7 +62,7 @@ pub enum UiEvent {
     /// the `/model` popup, replacing the catalog seed (and any earlier
     /// discovery result).
     ModelsDiscovered(Vec<super::suggest::ModelChoice>),
-    /// A bare `/resume`'s session-store scan finished, off the loop:
+    /// A bare `/session`'s session-store scan finished, off the loop:
     /// the picker's rows and the scan's warnings. The event loop takes
     /// this before [`apply`] sees it (it opens the picker from it), so
     /// [`apply`] only names it to stay exhaustive.

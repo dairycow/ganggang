@@ -1,6 +1,7 @@
 //! Clipboard copy without dependencies (§15's Ctrl+X): the OSC 52
-//! escape sequence, terminal-native and SSH-safe. Terminals without
-//! clipboard support ignore it silently.
+//! escape sequence, terminal-native and SSH-safe, written to the
+//! terminal's `/dev/tty`. Terminals without clipboard support ignore it
+//! silently.
 
 /// The OSC 52 clipboard sequence for `text` (spec §15: Ctrl+X copies the
 /// last answer). Terminal-native, zero dependencies, works over SSH;
@@ -14,6 +15,17 @@ pub fn osc52_sequence(text: &str) -> String {
         end -= 1;
     }
     format!("\x1b]52;c;{}\x07", base64(&text.as_bytes()[..end]))
+}
+
+/// Copy `text` to the terminal's clipboard: its OSC 52 sequence, written
+/// to `/dev/tty`, the terminal's own file, so it works even when the
+/// process's file descriptors point elsewhere. A terminal without
+/// clipboard support ignores the sequence; a terminal without a tty is
+/// an error the caller reports.
+pub fn copy(text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut tty = std::fs::OpenOptions::new().write(true).open("/dev/tty")?;
+    tty.write_all(osc52_sequence(text).as_bytes())
 }
 
 /// Standard base64 (RFC 4648, padded) — OSC 52 payloads require it and

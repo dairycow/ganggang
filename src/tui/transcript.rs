@@ -47,7 +47,7 @@ enum Block {
     Warning {
         message: String,
     },
-    /// Command feedback: session info, skill lists, the /resume picker.
+    /// Command feedback: session info, skill lists, the /session list.
     /// Plain dim lines, no warning glyph — nothing went wrong.
     Info {
         text: String,

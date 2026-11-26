@@ -154,7 +154,7 @@ impl Footer {
         self.model = model.to_string();
     }
 
-    /// The directory gg is working in. It changes when `/resume` opens a
+    /// The directory gg is working in. It changes when `/session` opens a
     /// session that started in another one.
     pub fn set_directory(&mut self, cwd: &std::path::Path) {
         self.cwd_short = shorten(cwd);

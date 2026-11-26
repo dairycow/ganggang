@@ -25,7 +25,7 @@ impl super::super::State {
     }
 
     /// The directory gg is working in, as the footer shows it: where the
-    /// run's session file lives, so where the `/resume` list files this
+    /// run's session file lives, so where the `/session` list files this
     /// directory's rows. The listing itself stays until the next scan
     /// replaces it; the new directory is owed a scan of its own.
     pub fn set_directory(&mut self, directory: &std::path::Path) {
@@ -88,7 +88,7 @@ impl super::super::State {
         self.record_totals(tokens_in, tokens_out, entries.len());
     }
 
-    /// `/new` / `/resume`: the view starts describing the new session.
+    /// `/new` / `/session`: the view starts describing the new session.
     /// The transcript keeps prior content — it is what the human saw.
     pub fn new_session(
         &mut self,
@@ -134,8 +134,8 @@ impl super::super::State {
         });
     }
 
-    /// Command failures (a bad /resume index, a missing skill) are local
-    /// mistakes, not run failures — their own shape, no alarm prefix.
+    /// Command failures (a failed model switch, a missing skill) are
+    /// local mistakes, not run failures — their own shape, no alarm prefix.
     pub fn push_command_error(&mut self, message: &str) {
         self.transcript.push_command_error(message);
     }

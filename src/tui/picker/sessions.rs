@@ -39,7 +39,7 @@ pub struct SessionRow {
     /// built: `just now`, `5m ago`, `3h ago`, `2d ago`, then the date.
     /// Empty when the file name carries no readable stamp.
     pub age: String,
-    /// The 8-hex id from the file name: what `/resume <prefix>` takes.
+    /// The 8-hex id from the file name: what a `/session` filter matches.
     pub id: String,
     /// The title, else the first message's preview, else a stand-in, on
     /// one line and whole. [`row_line`] cuts it to the row.

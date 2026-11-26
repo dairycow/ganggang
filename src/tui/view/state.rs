@@ -10,7 +10,7 @@
 //! what it is about: [`log`] is the conversation (what is pushed, seeded,
 //! and measured), [`turn`] the live run (starting, stopping, recalling,
 //! scrolling), [`popup`] the suggestion list's selection and which popup
-//! has the arrows, and [`resume`] the `/resume` picker.
+//! has the arrows, and [`picker`] the `/session` list.
 
 mod log;
 mod picker;
@@ -58,14 +58,14 @@ pub struct State {
     pub entries: usize,
     pub tokens_in: u64,
     pub tokens_out: u64,
-    /// The session listing the `/resume` list is built from: the last
+    /// The session listing the `/session` list is built from: the last
     /// scan's result, where this directory's sessions are filed, and the
     /// scan's bookkeeping. The tests sit in the module tree and reach in
     /// through it.
     pub sessions: crate::tui::picker::SessionListing,
     /// The last `/model` listing, for `/model <n>`.
     pub pending_models: Vec<(String, String)>,
-    /// The `/resume` list while it is open; the text after the command
+    /// The `/session` list while it is open; the text after the command
     /// is its filter. `None` = closed.
     pub picker: Option<crate::tui::picker::Picker>,
     /// Configured context window — the denominator of the footer's %.

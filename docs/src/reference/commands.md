@@ -7,9 +7,8 @@ Generated from the command catalogue that drives the `/` suggestion popup.
 | Command | Arguments | Description |
 |---|---|---|
 | `/new` |  | start a fresh session |
-| `/resume` | [filter] | pick a saved session from any directory |
 | `/compact` | [instructions] | summarise and rebuild the context |
-| `/session` |  | session path, entries, token totals |
+| `/session` | [filter\|copy\|info] | pick a saved session, copy its path, or show session info |
 | `/context` |  | show the assembled system prompt |
 | `/hooks` |  | list loaded hooks |
 | `/skill:` | &lt;name> [args] | run a skill now |
