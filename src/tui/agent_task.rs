@@ -18,8 +18,12 @@ pub enum UiEvent {
     RunComplete {
         tokens_in: u64,
         tokens_out: u64,
-        /// Session cache-read tokens: the footer's `cache NN%` hit rate.
+        /// Session cache-read tokens, for `/session info`.
         cache_read_tokens: u64,
+        /// Cache-read tokens and prompt tokens of the LAST assistant entry
+        /// with usage: the footer's `cache NN%` divides the first by the
+        /// second.
+        cache_tokens: (u64, u64),
         /// Prompt+completion tokens of the LAST assistant entry — the
         /// footer's context % (§15) is this against the context window.
         context_tokens: u64,
@@ -193,6 +197,7 @@ pub(super) async fn agent_task(
             Ok((agent_back, Ok(()))) => {
                 agent = agent_back;
                 let (tokens_in, tokens_out, cache_read) = usage_totals(agent.entries());
+                let cache_tokens = last_cache_tokens(agent.entries());
                 let context_tokens = last_context_tokens(agent.entries());
                 let entries = agent.entries().len();
                 let _ = ui
@@ -200,6 +205,7 @@ pub(super) async fn agent_task(
                         tokens_in,
                         tokens_out,
                         cache_read_tokens: cache_read,
+                        cache_tokens,
                         context_tokens,
                         entries,
                     })
@@ -241,12 +247,15 @@ pub(super) async fn apply(
             tokens_in,
             tokens_out,
             cache_read_tokens,
+            cache_tokens,
             context_tokens,
             entries,
         } => {
             state
                 .footer
                 .set_usage(tokens_in, tokens_out, cache_read_tokens);
+            let (cache_read, prompt) = cache_tokens;
+            state.footer.set_cache(cache_read, prompt);
             state.set_context_tokens(context_tokens);
             state.record_totals(tokens_in, tokens_out, entries);
             state.run_finished();
@@ -341,6 +350,30 @@ pub(super) fn last_context_tokens(entries: &[Entry]) -> u64 {
             _ => None,
         })
         .unwrap_or(0)
+}
+
+/// Cache-read and prompt tokens of the last assistant entry that carries
+/// usage, for the footer's last-turn hit rate; `(0, 0)` when none does.
+pub(super) fn last_cache_tokens(entries: &[Entry]) -> (u64, u64) {
+    last_usage(entries)
+        .map(|u| (u64::from(u.cache_read_tokens), u64::from(u.prompt_tokens)))
+        .unwrap_or((0, 0))
+}
+
+/// The last assistant entry's usage, once there is one.
+fn last_usage(entries: &[Entry]) -> Option<crate::agent::session::Usage> {
+    entries.iter().rev().find_map(|entry| match entry {
+        Entry::Message {
+            message:
+                Message {
+                    role: Role::Assistant,
+                    usage: Some(u),
+                    ..
+                },
+            ..
+        } => Some(*u),
+        _ => None,
+    })
 }
 
 /// Session-wide usage totals (§13): summed from assistant entries, so a

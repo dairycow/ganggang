@@ -91,7 +91,19 @@ fn an_80_by_24_frame_is_the_theme_not_the_terminal() {
 
     let text = screen(&terminal);
     assert!(shows(&terminal, "gg"), "the footer's mark: {text}");
-    assert!(shows(&terminal, "you │ hello"), "{text}");
+    assert!(shows(&terminal, "> hello"), "{text}");
+    // Two speakers, two colours: the user's mark is the scarlet crest and
+    // the model's text is cream, so the two never read as one.
+    let buffer = terminal.backend().buffer();
+    let colour_of = |symbol: &str| {
+        (0..buffer.area.height)
+            .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
+            .map(|(x, y)| buffer[(x, y)].clone())
+            .find(|cell| cell.symbol() == symbol)
+            .map(|cell| cell.fg)
+    };
+    assert_eq!(colour_of(">"), Some(TRUECOLOR.accent));
+    assert_eq!(colour_of("h"), Some(TRUECOLOR.text));
     assert!(shows(&terminal, "hi there"), "{text}");
     assert!(shows(&terminal, " compose "), "the composer's box: {text}");
     assert!(shows(&terminal, "○ ready"), "the footer's status: {text}");
@@ -234,9 +246,17 @@ fn a_transcript_that_overflows_shows_a_scrollbar_and_one_that_fits_does_not() {
         .map(|y| terminal.backend().buffer()[(column, y)].symbol())
         .collect();
     assert!(
-        symbols.iter().any(|s| s.contains('║') || s.contains('▮')),
-        "a thumb or a track in the scrollbar column: {symbols:?}"
+        symbols.iter().all(|s| s.contains('▐')),
+        "the lane and its thumb are the same half-block, on the right: {symbols:?}"
     );
+    // The outline: every cell of the bar is black on its left half, the
+    // text's ground is not, and the thumb is scarlet where the track is
+    // the border colour.
+    let cell = |y: u16| terminal.backend().buffer()[(column, y)].clone();
+    assert_eq!(cell(4).bg, TRUECOLOR.outline);
+    assert_eq!(cell(4).fg, TRUECOLOR.accent);
+    assert_eq!(cell(1).fg, TRUECOLOR.border);
+    assert_eq!(buffer[(78, 4)].bg, TRUECOLOR.bg);
 
     // Where the thumb is, read off the buffer by its colour: the view's
     // share of the track (16 of 20 rows), ending on the track's last row
@@ -612,7 +632,7 @@ fn an_indexed_session_draws_only_indexed_colours() {
         shows(&terminal, "fn a() {}"),
         "the code band still reads: {text}"
     );
-    assert!(shows(&terminal, "⠋ working"), "the spinner shows: {text}");
+    assert!(shows(&terminal, "▘ working"), "the spinner shows: {text}");
 }
 
 /// Every row of the transcript is the theme's, and a wrapped row keeps the

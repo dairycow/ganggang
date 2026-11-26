@@ -14,10 +14,14 @@ use ratatui::text::{Line as UiLine, Span};
 
 use super::theme::Palette;
 
-/// Spinner frames, one per 100 ms tick. Braille, eight states of one
-/// rotating dot: quiet enough to sit in a status line without demanding
-/// the eye.
-pub const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+/// Spinner frames, one per 100 ms tick: a small block square orbiting the
+/// cell clockwise. Block glyphs rather than Braille, so every monospace
+/// font has them and none draws a box. The crest frame, first of the
+/// four, is the one drawn in scarlet by [`Footer::spinner_colour`].
+pub const SPINNER: [char; 4] = ['▘', '▝', '▗', '▖'];
+/// The frame where the square is at the top of its orbit: the gang-gang's
+/// crest, raised. Once a turn the spinner flashes scarlet.
+pub const CREST_FRAME: usize = 0;
 
 /// The context percentage at which the footer's number turns gold, and
 /// the one past which it turns red. Under the first the number is a fact;
@@ -31,14 +35,16 @@ pub const CTX_ERROR: u8 = 85;
 pub struct Footer {
     cwd_short: String,
     model: String,
-    /// The model's configured thinking level (`think high`) or, when only
-    /// a budget is set, its token cap (`think 4096t`).
+    /// The model's configured thinking level (`high`) or, when only a
+    /// budget is set, its token cap (`4096t`).
     thinking: Option<String>,
     tokens_in: u64,
     tokens_out: u64,
-    /// The session's cache-read tokens: the `cache NN%` hit rate divides
-    /// this by the prompt total.
+    /// The session's cache-read tokens, for `/session info`.
     cache_read_tokens: u64,
+    /// Last turn's cache hit rate: its cache-read tokens over its prompt
+    /// tokens, once a turn reports reads. The `cache NN%` field.
+    cache_pct: Option<u8>,
     /// Context usage of the last request vs the window, once known.
     context_pct: Option<u8>,
     /// Last turn's decode throughput (tokens/s), once the backend reports
@@ -65,6 +71,7 @@ impl Footer {
             tokens_in: 0,
             tokens_out: 0,
             cache_read_tokens: 0,
+            cache_pct: None,
             context_pct: None,
             decode_tps: None,
             thinking_pct: None,
@@ -91,6 +98,14 @@ impl Footer {
         self.cache_read_tokens
     }
 
+    /// Last turn's cache hit rate, `cache NN%`: cache-read tokens over
+    /// prompt tokens. No reads, no prompt, or a provider that leaves the
+    /// figure out: the field is simply not there.
+    pub fn set_cache(&mut self, cache_read_tokens: u64, prompt_tokens: u64) {
+        self.cache_pct = (cache_read_tokens > 0 && prompt_tokens > 0)
+            .then(|| (cache_read_tokens.saturating_mul(100) / prompt_tokens).min(100) as u8);
+    }
+
     /// §15's context %: the last request's prompt+completion tokens
     /// against the configured window (which the footer does not know —
     /// the caller has the config).
@@ -114,9 +129,10 @@ impl Footer {
     }
 
     /// A new session starts with no history to measure: the context
-    /// figure and both throughput figures go with it.
+    /// figure, the cache hit rate and both throughput figures go with it.
     pub fn clear_telemetry(&mut self) {
         self.context_pct = None;
+        self.cache_pct = None;
         self.decode_tps = None;
         self.thinking_pct = None;
     }
@@ -155,6 +171,16 @@ impl Footer {
         SPINNER[self.frame % SPINNER.len()]
     }
 
+    /// The spinner's colour while a run works: scarlet on the crest frame,
+    /// the cheek's orange-red the rest of the orbit.
+    pub fn spinner_colour(&self, palette: &Palette) -> ratatui::style::Color {
+        if self.frame % SPINNER.len() == CREST_FRAME {
+            palette.accent
+        } else {
+            palette.accent_soft
+        }
+    }
+
     /// Whether the footer is showing the stopping mark.
     pub fn stopping(&self) -> bool {
         self.stopping
@@ -170,15 +196,17 @@ impl Footer {
         self.cwd_short = shorten(cwd);
     }
 
-    /// The thinking level shown beside the model. Effort is the level when
-    /// configured (`medium`, `high`, `xhigh`); a budget alone is shown as
-    /// a token cap (`4096t`). Neither set: the model takes provider
-    /// defaults and the field is absent.
+    /// The thinking level shown beside the model, as the bare word: the
+    /// effort when configured (`medium`, `high`, `xhigh`), or a budget
+    /// alone as a token cap (`4096t`). Effort `none` switches thinking off
+    /// rather than setting a level, so it says so (`think off`). Neither
+    /// set: the model takes provider defaults and the field is absent.
     pub fn set_thinking(&mut self, effort: Option<&str>, budget_tokens: Option<u32>) {
         let effort = effort.map(str::trim).filter(|e| !e.is_empty());
         self.thinking = match (effort, budget_tokens.filter(|t| *t > 0)) {
-            (Some(effort), _) => Some(format!("think {effort}")),
-            (None, Some(tokens)) => Some(format!("think {tokens}t")),
+            (Some("none"), _) => Some("think off".to_string()),
+            (Some(effort), _) => Some(effort.to_string()),
+            (None, Some(tokens)) => Some(format!("{tokens}t")),
             (None, None) => None,
         };
     }
@@ -197,8 +225,8 @@ impl Footer {
             .join("")
     }
 
-    /// e.g. `gg …/projects/ganggang qwen3.8 think medium ↑305 ↓81 ctx 4% ⠋ working`,
-    /// and with the session's cache hit rate, `… ctx 4% cache 87% …`;
+    /// e.g. `gg …/projects/ganggang qwen3.8 medium ↑305 ↓81 ctx 4% ▘ working`,
+    /// and with the last turn's cache hit rate, `… ctx 4% cache 87% …`;
     /// with the throughput figures the backend reports,
     /// `… ↑305 ↓81 ctx 4% 62.4 t/s think 45% ⠋ working`.
     ///
@@ -235,10 +263,9 @@ impl Footer {
                 Style::new().fg(Self::ctx_colour(palette, pct)),
             ));
         }
-        // The session's KV-cache hit rate, once the provider reports cache
+        // The last turn's KV-cache hit rate, once a turn reports cache
         // reads. Absent, the field is simply not there.
-        if self.cache_read_tokens > 0 && self.tokens_in > 0 {
-            let pct = (self.cache_read_tokens.saturating_mul(100) / self.tokens_in).min(100);
+        if let Some(pct) = self.cache_pct {
             spans.push(field(muted));
             spans.push(Span::styled(format!("cache {pct}%"), muted));
         }
@@ -279,7 +306,7 @@ impl Footer {
         vec![
             Span::styled(
                 self.spinner().to_string(),
-                Style::new().fg(palette.accent_soft),
+                Style::new().fg(self.spinner_colour(palette)),
             ),
             Span::styled(" working", Style::new().fg(palette.accent_soft)),
         ]

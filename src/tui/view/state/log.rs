@@ -83,6 +83,10 @@ impl super::super::State {
         self.transcript.extend_from_entries(entries);
         let (tokens_in, tokens_out, cache_read) = crate::tui::agent_task::usage_totals(entries);
         self.footer.set_usage(tokens_in, tokens_out, cache_read);
+        // The cache hit rate is the last turn's too, off the last entry
+        // that carries usage.
+        let (cache_of_turn, prompt_of_turn) = crate::tui::agent_task::last_cache_tokens(entries);
+        self.footer.set_cache(cache_of_turn, prompt_of_turn);
         // The context figure is the last request's, not the session total's.
         self.set_context_tokens(crate::tui::agent_task::last_context_tokens(entries));
         self.record_totals(tokens_in, tokens_out, entries.len());
@@ -154,6 +158,8 @@ impl super::super::State {
                 self.set_context_tokens(
                     u64::from(u.prompt_tokens) + u64::from(u.completion_tokens),
                 );
+                self.footer
+                    .set_cache(u64::from(u.cache_read_tokens), u64::from(u.prompt_tokens));
             }
             self.footer
                 .set_decode_tps(timings.as_ref().and_then(|t| t.decode_tok_per_sec()));

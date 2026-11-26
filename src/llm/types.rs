@@ -198,6 +198,13 @@ pub struct CompletionTokensDetails {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct PromptTokensDetails {
+    /// The OpenAI-style cache-read figure: a part of `prompt_tokens`.
+    #[serde(default)]
+    pub cached_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct Usage {
     #[serde(default)]
     pub prompt_tokens: u32,
@@ -213,9 +220,31 @@ pub struct Usage {
     /// them; folded into `prompt_tokens`, never added on top.
     #[serde(default)]
     pub cache_read_tokens: u32,
+    /// OpenAI-style `prompt_tokens_details`; read into
+    /// `cache_read_tokens` by [`folded`](Self::folded).
+    #[serde(default)]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
 }
 
 impl Usage {
+    /// The usage with its cache reads in one place: a top-level
+    /// `cache_read_tokens` when the provider sends one, else the
+    /// `prompt_tokens_details.cached_tokens` an OpenAI-compatible provider
+    /// sends. Applied where a usage is taken off the wire, so every reader
+    /// (`cache NN%`, `/session info`, the print-mode summary) sees one field.
+    pub fn folded(mut self) -> Self {
+        let nested = self
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens);
+        if self.cache_read_tokens == 0
+            && let Some(nested) = nested
+        {
+            self.cache_read_tokens = nested;
+        }
+        self
+    }
+
     /// Reasoning tokens reported either top-level or nested under
     /// `completion_tokens_details.reasoning_tokens`.
     pub fn effective_reasoning_tokens(&self) -> Option<u32> {

@@ -17,10 +17,32 @@ use super::transcript::{LineKind, Mark, RenderedLine};
 /// the row count stays exact for scrolling. Marks are clipped to their
 /// row, so a span split across rows styles both pieces.
 pub fn wrap_line(line: &RenderedLine, width: usize) -> Vec<RenderedLine> {
-    wrap_chars(&line.text, width)
-        .into_iter()
-        .map(|(text, row_start)| finish_row(text, line, row_start))
-        .collect()
+    let plain = |rows: Vec<(String, usize)>| {
+        rows.into_iter()
+            .map(|(text, row_start)| finish_row(text, line, row_start))
+            .collect::<Vec<_>>()
+    };
+    // A hung line's rows after the first are `hang` shorter and open with
+    // the indent; one that fits, or is empty, is left as it is.
+    let hang = line.hang.min(width.saturating_sub(1));
+    if hang == 0 || width == 0 || line.text.chars().count() <= width {
+        return plain(wrap_chars(&line.text, width));
+    }
+    let rest = width - hang;
+    let cut = line
+        .text
+        .char_indices()
+        .map(|(at, _)| at)
+        .nth(width)
+        .unwrap_or(line.text.len());
+    let indent = " ".repeat(hang);
+    let mut rows = vec![finish_row(line.text[..cut].to_string(), line, 0)];
+    rows.extend(
+        wrap_chars(&line.text[cut..], rest)
+            .into_iter()
+            .map(|(text, _)| RenderedLine::new(format!("{indent}{text}"), line.kind)),
+    );
+    rows
 }
 
 /// Split a string into row-length pieces at a char boundary, returning
@@ -186,10 +208,10 @@ mod tests {
 
     #[test]
     fn a_user_line_splits_its_crest_from_its_prompt() {
-        let line = row("you │ hi", LineKind::User, vec![(0, 6, Mark::Crest)]);
+        let line = row("> hi", LineKind::User, vec![(0, 2, Mark::Crest)]);
         let line = styled_line(&TRUECOLOR, &line, None);
         assert_eq!(line.spans.len(), 2);
-        assert_eq!(line.spans[0].content, "you │ ");
+        assert_eq!(line.spans[0].content, "> ");
         assert_eq!(line.spans[0].style.fg, Some(TRUECOLOR.accent));
         assert_eq!(line.spans[1].content, "hi");
         assert_eq!(line.spans[1].style.fg, Some(TRUECOLOR.text));
@@ -252,6 +274,33 @@ mod tests {
                 .count(),
             10
         );
+    }
+
+    /// A marked line hangs: the rows after its first open under the
+    /// text, two columns in, each `hang` shorter than the row before.
+    #[test]
+    fn a_hung_line_indents_its_wrapped_rows() {
+        let line = RenderedLine::new("0123456789abcdef", LineKind::User).with_hang(2);
+        let rows = wrap_line(&line, 10);
+        assert_eq!(
+            rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(),
+            vec!["0123456789", "  abcdef"]
+        );
+        let long = RenderedLine::new("0123456789abcdefghij", LineKind::User).with_hang(2);
+        assert_eq!(
+            wrap_line(&long, 10)
+                .iter()
+                .map(|r| r.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["0123456789", "  abcdefgh", "  ij"],
+            "each row after the first is `hang` shorter"
+        );
+        // A line that fits on one row is not touched, empty ones too.
+        assert_eq!(wrap_line(&line, 16)[0].text, "0123456789abcdef");
+        let blank = RenderedLine::new("", LineKind::User).with_hang(2);
+        assert_eq!(wrap_line(&blank, 10)[0].text, "");
+        // A hang wider than the row leaves the text one column.
+        assert_eq!(wrap_line(&line, 3)[1].text, "  3");
     }
 
     #[test]

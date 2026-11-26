@@ -14,8 +14,9 @@ use crate::tool_args::format_tool_args;
 /// to read, capped so progress stays line-oriented.
 const ARGS_CHARS: usize = 180;
 
-/// Spinner frames for streamed text (§15: progress to stderr only).
-const SPIN_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+/// Spinner frames for streamed text (§15: progress to stderr only): the
+/// footer's square, so both surfaces spin alike.
+use crate::tui::footer::SPINNER as SPIN_FRAMES;
 
 /// Erases an open spinner line and terminates it. Like the updates it
 /// starts with '\r' (the caller's raw-write marker) but carries its own

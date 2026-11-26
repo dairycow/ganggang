@@ -71,7 +71,7 @@ fn the_fallback_palette_is_indexed_and_keeps_the_hierarchy() {
     assert_ne!(p.bg, p.surface);
 }
 
-/// Fifteen roles, fifteen colours: where two of them are nearest the
+/// Sixteen roles, sixteen colours: where two of them are nearest the
 /// same entry (`accent`/`error`, `surface_alt`/`selection`) the one that
 /// carries less meaning steps aside, so no two roles ever draw the same
 /// thing on a 256-colour terminal.
@@ -94,6 +94,7 @@ fn the_fallback_palette_keeps_every_role_a_colour_of_its_own() {
         p.error,
         p.code,
         p.selection,
+        p.outline,
     ];
     for (i, a) in colors.iter().enumerate() {
         for b in &colors[i + 1..] {
@@ -125,6 +126,7 @@ fn palette_roles_are_distinct_in_truecolor() {
         p.error,
         p.code,
         p.selection,
+        p.outline,
     ];
     for (i, a) in colors.iter().enumerate() {
         for b in &colors[i + 1..] {

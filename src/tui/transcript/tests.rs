@@ -41,8 +41,19 @@ fn plain_answer_renders_user_then_assistant() {
     });
     t.apply(&AgentEvent::RunEnded { turns: 1 });
 
-    assert_eq!(texts(&t), vec!["you │ what version?", "0.1.0"]);
+    assert_eq!(texts(&t), vec!["> what version?", "0.1.0"]);
     assert_eq!(kinds(&t), vec![LineKind::User, LineKind::Assistant]);
+
+    // A multi-line message is marked once; its other lines sit under the
+    // text, two columns in, and a blank line between stays blank.
+    let mut t = Transcript::default();
+    t.push_user("first\nsecond\n\nlast");
+    assert_eq!(texts(&t), vec!["> first", "  second", "", "  last"]);
+    assert_eq!(
+        t.render().iter().map(|line| line.hang).collect::<Vec<_>>(),
+        vec![0, 2, 2, 2],
+        "every row after the mark hangs, wrapped or typed"
+    );
 }
 
 /// The tool round-trip script with an error call: collapsed one-liners
@@ -91,7 +102,7 @@ fn tool_round_trip_collapses_calls_and_marks_errors() {
     assert_eq!(
         texts(&t),
         vec![
-            "you │ fix the test",
+            "> fix the test",
             "checking",
             "▸ read Cargo.toml ✓",
             "▸ bash cargo test ✗",
@@ -138,7 +149,7 @@ fn abort_renders_dim_warning_and_marker() {
     assert_eq!(
         texts(&t),
         vec![
-            "you │ two things",
+            "> two things",
             "▸ echo {\"text\":\"first\"} ✓",
             "⚠ run aborted",
             "■ run aborted",
@@ -369,18 +380,15 @@ fn thinking_is_hidden_until_toggled_then_renders_dim_and_capped() {
     });
 
     // Default: invisible, answer intact.
-    assert_eq!(texts(&t), vec!["you │ hi", "hello"]);
+    assert_eq!(texts(&t), vec!["> hi", "hello"]);
 
     t.toggle_thinking();
-    assert_eq!(
-        texts(&t),
-        vec!["you │ hi", "~ consider the question", "hello",]
-    );
+    assert_eq!(texts(&t), vec!["> hi", "~ consider the question", "hello",]);
     assert_eq!(kinds(&t)[1], LineKind::Thinking);
 
     // And back off again.
     t.toggle_thinking();
-    assert_eq!(texts(&t), vec!["you │ hi", "hello"]);
+    assert_eq!(texts(&t), vec!["> hi", "hello"]);
 
     // The cap: 40 lines of thinking render 30 plus a truncation marker.
     let mut t = Transcript::default();
@@ -437,7 +445,7 @@ fn resume_seeds_thinking_before_the_text() {
 
     let mut t = Transcript::default();
     t.extend_from_entries(&entries);
-    assert_eq!(texts(&t), vec!["you │ hi", "hello"], "hidden by default");
+    assert_eq!(texts(&t), vec!["> hi", "hello"], "hidden by default");
     t.toggle_thinking();
-    assert_eq!(texts(&t), vec!["you │ hi", "~ pondered", "hello"]);
+    assert_eq!(texts(&t), vec!["> hi", "~ pondered", "hello"]);
 }

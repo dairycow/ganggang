@@ -46,6 +46,9 @@ pub struct Palette {
     pub code: Color,
     /// Background of the selected popup row.
     pub selection: Color,
+    /// True black: the outline that lifts the scrollbar off the ground.
+    /// The one colour darker than `bg`.
+    pub outline: Color,
 }
 
 impl Default for Palette {
@@ -73,6 +76,7 @@ pub const TRUECOLOR: Palette = Palette {
     error: Color::Rgb(0xE0, 0x6A, 0x6A),
     code: Color::Rgb(0xC7, 0xD0, 0xC0),
     selection: Color::Rgb(0x3A, 0x2B, 0x2B),
+    outline: Color::Rgb(0x00, 0x00, 0x00),
 };
 
 /// Whether the terminal was asked for 24-bit colour: `COLORTERM` says
@@ -149,8 +153,9 @@ impl Palette {
         }
     }
 
-    /// The `you │ ` prefix of a user line, and the abort marker: the crest,
-    /// bold.
+    /// The `> ` mark of a user message, and the abort marker: the crest,
+    /// bold. Scarlet against the model's cream text, so the two never read
+    /// as one speaker.
     pub fn user_mark(&self) -> Style {
         Style::new().fg(self.accent).add_modifier(Modifier::BOLD)
     }
@@ -216,12 +221,15 @@ impl Palette {
             .add_modifier(Modifier::BOLD)
     }
 
-    /// Scrollbar: a scarlet thumb on the border colour, no arrows. It lives
-    /// in the transcript's own ground, so both parts carry `bg`.
+    /// Scrollbar: a scarlet thumb on the border colour, no arrows. Each
+    /// cell of the bar's one column is black on the left and the lane on
+    /// the right (the glyphs are set where the bar is drawn), so the text
+    /// never touches it. It lives in the transcript's own column, so both
+    /// parts carry `outline`.
     pub fn scrollbar(&self) -> (Style, Style) {
         (
-            Style::new().fg(self.accent).bg(self.bg),
-            Style::new().fg(self.border).bg(self.bg),
+            Style::new().fg(self.accent).bg(self.outline),
+            Style::new().fg(self.border).bg(self.outline),
         )
     }
 }

@@ -438,3 +438,35 @@ fn assembles_full_strata_timings_and_usage() {
     assert_eq!(timings.prompt_tok_per_sec(), Some(25.4));
     assert_eq!(resp.usage.unwrap().total_tokens, 64);
 }
+
+/// An OpenAI-compatible provider reports cache reads under
+/// `prompt_tokens_details.cached_tokens`; a server that sends a top-level
+/// `cache_read_tokens` keeps its own figure. Either way the assembled
+/// usage carries one `cache_read_tokens`.
+#[test]
+fn cache_reads_are_folded_from_either_wire_shape() {
+    let fold = |usage: &str| {
+        let mut asm = Assembler::default();
+        asm.feed(serde_json::from_str(&format!(r#"{{"choices":[],"usage":{usage}}}"#)).unwrap());
+        asm.finish().usage.unwrap().cache_read_tokens
+    };
+    assert_eq!(
+        fold(
+            r#"{"prompt_tokens":1000,"completion_tokens":5,"total_tokens":1005,"prompt_tokens_details":{"cached_tokens":870}}"#
+        ),
+        870
+    );
+    assert_eq!(
+        fold(
+            r#"{"prompt_tokens":1000,"completion_tokens":5,"total_tokens":1005,"cache_read_tokens":40,"prompt_tokens_details":{"cached_tokens":870}}"#
+        ),
+        40,
+        "a top-level figure wins"
+    );
+    assert_eq!(
+        fold(
+            r#"{"prompt_tokens":1000,"completion_tokens":5,"total_tokens":1005,"prompt_tokens_details":null}"#
+        ),
+        0
+    );
+}

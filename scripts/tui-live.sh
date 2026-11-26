@@ -253,7 +253,7 @@ if grep -q -- '-icanon' "$WORK/fake.log"; then bad A4 "raw mode was still on whe
 elif ! grep -qE '(^|[[:space:]])isig[[:space:]]' "$WORK/fake.log"; then bad A4 "signals were still off" "$(head -8 "$WORK/fake.log")"
 else ok A4 "the editor started on a cooked, signal-capable tty"; fi
 no_leak A5
-keys Enter; wait_for 'you │ hello + editedQR' 5 || bad A6 "the edited draft did not submit" "$(show)"
+keys Enter; wait_for '> hello + editedQR' 5 || bad A6 "the edited draft did not submit" "$(show)"
 wait_footer "○ ready" 90 && ok A6 "the edited draft submits like typed text" || bad A6 "run did not finish" "$(show)"
 finish A7
 
@@ -416,7 +416,7 @@ keys C-u; sleep 0.4
 pane | grep -q 'Xthree!' && bad N6 "Ctrl+U did not clear the line" "$(show)" || ok N6 "Ctrl+U killed back to the line start"
 keys S-Enter; keys -l 'four'; wait_for 'four' 5
 rows | grep -qx 'four' && ok N7 "Shift+Enter broke the line (extended keys on)" || bad N7 "Shift+Enter" "$(show)"
-pane | grep -q 'you │' && bad N8 "an unsubmitted draft was sent" "$(show)" || ok N8 "nothing was submitted"
+pane | grep -q '^> ' && bad N8 "an unsubmitted draft was sent" "$(show)" || ok N8 "nothing was submitted"
 EXT_KEYS=off
 finish N9
 

@@ -734,7 +734,7 @@ fn view_folds_the_event_stream_into_lines() {
         ]
     );
     let texts = state_line_texts(&state);
-    assert_eq!(texts[0], "you │ question");
+    assert_eq!(texts[0], "> question");
     assert_eq!(texts[1], "part one");
     assert_eq!(texts[2], "part two");
     assert_eq!(texts[3], "▸ read {}", "the collapsed call line");
@@ -791,7 +791,7 @@ fn split_deltas_fold_into_the_same_block_as_one_shot_text() {
         state_line_texts(&state)
     };
     assert_eq!(streamed, one_shot);
-    assert_eq!(streamed, vec!["you │ q", "Counting: one two three"]);
+    assert_eq!(streamed, vec!["> q", "Counting: one two three"]);
 }
 
 // `lines` is private to view; the test module sits inside the tui module
@@ -1559,7 +1559,7 @@ fn seed_from_entries_rebuilds_the_blocks_the_event_stream_would() {
     state.seed_from_entries(&entries);
 
     let texts = state_line_texts(&state);
-    assert_eq!(texts[0], "you │ list the files");
+    assert_eq!(texts[0], "> list the files");
     assert!(texts[1].starts_with("▸ bash "), "{texts:?}");
     assert!(texts[1].ends_with("✓"), "result known from disk: {texts:?}");
     assert_eq!(texts[2], "two files");
@@ -1685,6 +1685,7 @@ async fn task_events_fold_into_the_view() {
             tokens_in: 305,
             tokens_out: 81,
             cache_read_tokens: 250,
+            cache_tokens: (250, 305),
             context_tokens: 13_108,
             entries: 3,
         },

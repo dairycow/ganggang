@@ -100,21 +100,42 @@ fn the_spinner_turns_only_while_a_run_is_live() {
     assert_eq!(f.spinner(), SPINNER[0]);
     f.set_busy(true);
     assert!(f.spinning());
-    for _ in 0..4 {
-        f.tick();
-    }
-    assert_eq!(f.spinner(), SPINNER[4]);
+    f.tick();
+    f.tick();
+    assert_eq!(f.spinner(), SPINNER[2]);
     assert!(text(&f).contains("working"));
     // A full cycle returns to the top; a run that starts does too.
     for _ in 0..SPINNER.len() {
         f.tick();
     }
-    assert_eq!(f.spinner(), SPINNER[4], "wrapped, not reset by itself");
+    assert_eq!(f.spinner(), SPINNER[2], "wrapped, not reset by itself");
     f.set_busy(false);
     assert_eq!(f.spinner(), SPINNER[0], "a new run starts at the top");
     f.set_busy(true);
     assert_eq!(f.spinner(), SPINNER[0]);
-    assert_eq!(SPINNER.len(), 10, "the documented frame count");
+    assert_eq!(SPINNER.len(), 4, "the documented frame count");
+    assert!(
+        !SPINNER.contains(&'⠋'),
+        "no Braille: a font without it draws a box"
+    );
+}
+
+/// On brand: the orbit flashes scarlet once a turn, on the crest frame,
+/// and is the cheek's orange-red the rest of the way.
+#[test]
+fn the_spinner_flashes_the_crest_once_a_turn() {
+    use crate::tui::theme::TRUECOLOR as T;
+    let mut f = footer();
+    f.set_busy(true);
+    assert_eq!(f.spinner_colour(&T), T.accent);
+    assert_eq!(colour(&f, "▘"), Some(T.accent));
+    for _ in 0..3 {
+        f.tick();
+        assert_eq!(f.spinner_colour(&T), T.accent_soft);
+    }
+    assert_eq!(colour(&f, "▖"), Some(T.accent_soft));
+    f.tick();
+    assert_eq!(f.spinner_colour(&T), T.accent, "back at the crest");
 }
 
 #[test]
@@ -144,15 +165,21 @@ fn the_model_s_thinking_level_sits_beside_its_name() {
 
     f.set_thinking(Some("high"), None);
     let shown = text(&f);
-    assert!(shown.contains("qwen3.8 │ think high │ ↑305"), "{shown}");
+    assert!(shown.contains("qwen3.8 │ high │ ↑305"), "{shown}");
+
+    // `none` switches thinking off rather than setting a level.
+    f.set_thinking(Some("none"), None);
+    assert!(text(&f).contains("│ think off │"), "{}", text(&f));
+    f.set_thinking(Some("none"), Some(4096));
+    assert!(text(&f).contains("think off"), "{}", text(&f));
 
     // A budget alone is a cap, not a level.
     f.set_thinking(None, Some(4096));
-    assert!(text(&f).contains("think 4096t"), "{}", text(&f));
+    assert!(text(&f).contains("│ 4096t │"), "{}", text(&f));
 
     // An effort wins over the budget: the level is what the user chose.
     f.set_thinking(Some(" medium "), Some(4096));
-    assert!(text(&f).contains("think medium"), "{}", text(&f));
+    assert!(text(&f).contains("│ medium │"), "{}", text(&f));
 
     // Empty effort and zero budget mean the provider's defaults.
     f.set_thinking(Some(""), Some(0));
@@ -229,16 +256,21 @@ fn the_cache_hit_rate_sits_beside_the_context_pct() {
     let mut f = footer();
     assert!(!text(&f).contains("cache"), "unset: no field at all");
 
-    f.set_usage(1000, 50, 870);
+    f.set_usage(1000, 50, 0);
+    f.set_cache(870, 1000);
     let shown = text(&f);
     assert!(shown.contains("↑1000 ↓50 │ cache 87%"), "{shown}");
     assert_eq!(colour(&f, "cache"), Some(T.muted), "a fact, not an alarm");
 
     // The rate is clamped, never above 100.
-    f.set_usage(100, 0, 100);
+    f.set_cache(100, 100);
     assert!(text(&f).contains("cache 100%"), "{}", text(&f));
 
     // Zero cache reads: the field is simply not there.
-    f.set_usage(1000, 50, 0);
+    f.set_cache(0, 1000);
+    assert!(!text(&f).contains("cache"), "{}", text(&f));
+
+    // Reads with no prompt to divide by: no field either.
+    f.set_cache(5, 0);
     assert!(!text(&f).contains("cache"), "{}", text(&f));
 }

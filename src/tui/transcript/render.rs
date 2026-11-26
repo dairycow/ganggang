@@ -2,7 +2,7 @@
 //! calls collapse or expand, everything stays data — no terminal here.
 //!
 //! A line carries three things: its text, what the line IS (`kind`), and
-//! the spans inside it that read differently (`marks`) — the `you │ `
+//! the spans inside it that read differently (`marks`) — the `> ` mark
 //! prefix, a tool call's arguments, a status glyph. What a line is stays
 //! here; what a colour means lives in
 //! [`theme`](super::super::theme), so a palette change never reaches into
@@ -51,7 +51,7 @@ pub enum LineKind {
 pub enum Mark {
     /// Markdown emphasis: heavier than its line, same colour.
     Bold,
-    /// The crest: `you │ `, and the abort marker.
+    /// The crest: the `> ` mark of a user message, and the abort marker.
     Crest,
     /// A call's marker and name (`▸ read`, `$ ls`).
     Name,
@@ -88,6 +88,9 @@ pub struct TableRow {
 pub struct RenderedLine {
     pub text: String,
     pub kind: LineKind,
+    /// Columns to indent every wrapped row after the first: a user
+    /// message's rows after its `> ` mark. Zero for an ordinary line.
+    pub hang: usize,
     /// Sorted, disjoint `(start, end, mark)` char ranges into `text`.
     /// The builders below produce them left to right, and
     /// [`wrap_line`](super::super::line::wrap_line) clips them to rows,
@@ -103,9 +106,16 @@ impl RenderedLine {
         Self {
             text: text.into(),
             kind,
+            hang: 0,
             marks: Vec::new(),
             table: None,
         }
+    }
+
+    /// Indent every wrapped row after the first by `hang` columns.
+    pub fn with_hang(mut self, hang: usize) -> Self {
+        self.hang = hang;
+        self
     }
 
     /// Attach the spans that read differently (markdown emphasis, a
@@ -130,8 +140,23 @@ impl super::Transcript {
         for block in &self.blocks {
             match block {
                 Block::User { text } => {
-                    for line in text.split('\n') {
-                        lines.push(user_line(line));
+                    // One mark per message: the first line carries it, the
+                    // rest sit under the text, hung the mark's width.
+                    for (index, line) in text.split('\n').enumerate() {
+                        if index == 0 {
+                            lines.push(user_line(line));
+                        } else {
+                            // The blank line between two paragraphs stays
+                            // blank; any other sits under the text.
+                            let text = if line.is_empty() {
+                                line.to_string()
+                            } else {
+                                format!("{}{line}", " ".repeat(USER_MARK_WIDTH))
+                            };
+                            lines.push(
+                                RenderedLine::new(text, LineKind::User).with_hang(USER_MARK_WIDTH),
+                            );
+                        }
                     }
                 }
                 // Assistant text renders as minimal markdown (M7.6);
@@ -233,12 +258,19 @@ impl super::Transcript {
     }
 }
 
-/// A user line: the `you │ ` prefix is gg's own mark, the prompt is the
-/// user's text.
+/// The mark that opens a user message: a prompt chevron in the crest.
+/// It names nobody, so it is right whoever is typing.
+pub const USER_MARK: &str = "> ";
+/// Its width in columns, the indent of every row of the message after
+/// the first, wrapped or typed.
+const USER_MARK_WIDTH: usize = 2;
+
+/// A user message's first line: the `> ` mark is gg's own, in scarlet
+/// to tell the line from the model's cream text; what follows is what
+/// the user typed, literal.
 fn user_line(text: &str) -> RenderedLine {
-    let prefix = "you │ ";
-    let mark = (0, prefix.chars().count(), Mark::Crest);
-    RenderedLine::new(format!("{prefix}{text}"), LineKind::User).with_marks(vec![mark])
+    let mark = (0, USER_MARK.chars().count(), Mark::Crest);
+    RenderedLine::new(format!("{USER_MARK}{text}"), LineKind::User).with_marks(vec![mark])
 }
 
 /// A collapsed (or expanded, by its marker) tool call: marker, name,

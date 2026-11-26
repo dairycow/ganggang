@@ -165,8 +165,13 @@ fn draw_transcript(
         let mut scroll = ScrollbarState::new(figures.content)
             .position(figures.position)
             .viewport_content_length(figures.viewport);
+        // One column, each cell black on the left and the lane on the
+        // right: the thumb and the track are the same half-block, so the
+        // text never touches either and the thumb reads as outlined.
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .thumb_symbol("▐")
+                .track_symbol(Some("▐"))
                 .thumb_style(thumb_style)
                 .track_style(track)
                 .begin_symbol(None)

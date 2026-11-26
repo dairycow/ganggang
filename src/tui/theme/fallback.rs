@@ -2,14 +2,14 @@
 //! the terminal will not take a truecolor value.
 //!
 //! Nearest-neighbour over the 6×6×6 cube and the grey ramp gets most roles
-//! right, but fifteen roles cannot all have their own nearest colour: the
+//! right, but sixteen roles cannot all have their own nearest colour: the
 //! two reds (`accent`, `error`) and the two dark neutrals (`surface_alt`,
 //! `selection`) collapse onto a single index each. So the roles claim
 //! colours in the order their colour carries meaning — marks and status
 //! first, then text and its quieter greys, then the ground — and a role
 //! whose nearest entry is already taken steps to the next nearest free one.
-//! Deterministic, no hand-written table, and fifteen distinct colours by
-//! construction: what a 256-colour terminal can honestly give a fifteen-role
+//! Deterministic, no hand-written table, and sixteen distinct colours by
+//! construction: what a 256-colour terminal can honestly give a sixteen-role
 //! palette.
 
 use ratatui::style::Color;
@@ -53,6 +53,7 @@ pub fn indexed_palette() -> Palette {
         &mut out.surface,
         &mut out.surface_alt,
         &mut out.selection,
+        &mut out.outline,
         &mut out.bg,
     ] {
         claim(color);
@@ -144,6 +145,7 @@ mod tests {
             p.error,
             p.code,
             p.selection,
+            p.outline,
         ] {
             assert!(matches!(c, Color::Indexed(_)), "{c:?} is not indexed");
         }
@@ -152,9 +154,10 @@ mod tests {
         assert_ne!(p.accent, p.error);
         assert_ne!(p.accent_soft, p.accent);
         assert_ne!(p.bg, p.surface);
+        assert_eq!(p.outline, Color::Indexed(16), "true black, the cube's");
     }
 
-    /// Fifteen roles, fifteen colours. Where two of them sit nearest the same
+    /// Sixteen roles, sixteen colours. Where two of them sit nearest the same
     /// entry (`accent`/`error`, `surface_alt`/`selection`) the one that carries
     /// less meaning steps aside, so no two roles ever draw the same thing.
     #[test]
@@ -176,6 +179,7 @@ mod tests {
             p.error,
             p.code,
             p.selection,
+            p.outline,
         ];
         for (i, a) in colors.iter().enumerate() {
             for b in &colors[i + 1..] {

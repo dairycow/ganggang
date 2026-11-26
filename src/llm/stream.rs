@@ -75,8 +75,8 @@ impl Assembler {
     /// thinking alike, in arrival order. Only index-0 choices are
     /// assembled — gg never requests n>1.
     fn feed(&mut self, chunk: StreamChunk) -> Vec<Delta> {
-        if chunk.usage.is_some() {
-            self.usage = chunk.usage;
+        if let Some(usage) = chunk.usage {
+            self.usage = Some(usage.folded());
         }
         if chunk.timings.is_some() {
             self.timings = chunk.timings;
