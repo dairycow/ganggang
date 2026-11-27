@@ -434,7 +434,8 @@ async fn reasoning_effort_and_budget_are_sent_when_configured() {
 
 /// A request without reasoning carries `reasoning_effort: "none"` and no
 /// budget whatever the endpoint configured, and changes nothing the next
-/// ordinary request sends.
+/// ordinary request sends. [`LlmClient::without_reasoning_field`] names
+/// that field the way the wire spells it.
 #[tokio::test]
 async fn a_request_without_reasoning_sends_none_and_no_budget() {
     let (base_url, seen) = echo_request(OK);
@@ -451,8 +452,32 @@ async fn a_request_without_reasoning_sends_none_and_no_budget() {
     let v: serde_json::Value = serde_json::from_str(body).unwrap();
     assert_eq!(v["reasoning_effort"], "none");
     assert!(v.get("reasoning_budget_tokens").is_none(), "{v}");
+    assert_eq!(
+        client.without_reasoning_field(),
+        Some("reasoning_effort: \"none\""),
+        "the warning's words are the request's own"
+    );
     assert_eq!(client.reasoning_effort.as_deref(), Some("medium"));
     assert_eq!(client.reasoning_budget_tokens, Some(4096));
+}
+
+/// The Anthropic Messages request has no reasoning field: there a request
+/// without reasoning is the ordinary one again, and nothing on the wire
+/// says otherwise.
+#[test]
+fn an_anthropic_request_has_no_field_to_switch_reasoning_off_with() {
+    let base = "http://127.0.0.1:1";
+    assert_eq!(
+        LlmClient::new(base).unwrap().without_reasoning_field(),
+        Some("reasoning_effort: \"none\"")
+    );
+    assert_eq!(
+        LlmClient::new(base)
+            .unwrap()
+            .with_api(ApiKind::AnthropicMessages)
+            .without_reasoning_field(),
+        None
+    );
 }
 
 /// An endpoint already on `none` with no budget sends what a retry without

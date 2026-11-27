@@ -17,14 +17,28 @@ use super::super::{Echo, Registry, drive, drive_streaming, event_values, message
 use crate::agent::session::{Entry, Role};
 use crate::agent::{Agent, hooks::Hooks};
 use crate::events::AgentEvent;
+use crate::llm::ApiKind;
 use crate::llm::client::LlmClient;
 
-/// The warning the first thought-only turn in a row earns.
-const ASKED_AGAIN: &str = "response truncated by max_tokens=512 with nothing but reasoning; asking again with reasoning off for this turn";
+/// The warning the first thought-only turn in a row earns. It names the
+/// field the retry carries, which asks the endpoint not to reason; whether
+/// the endpoint complies is not gg's to know.
+const ASKED_AGAIN: &str = "response truncated by max_tokens=512 with nothing but reasoning; asking again with reasoning_effort: \"none\" for this turn";
+/// [`ASKED_AGAIN`] on the Anthropic Messages API, whose request has no
+/// reasoning field: the retry is the same request again.
+const ASKED_AGAIN_SAME_REQUEST: &str = "response truncated by max_tokens=512 with nothing but reasoning; asking again with the same request for this turn";
 /// The warning the second thought-only turn back to back earns.
 const LATCHED: &str = "response truncated by max_tokens=512 with nothing but reasoning again; asking again with reasoning off, which stays off for the rest of this run";
 /// The warning a thought-only turn earns when no retry is left to make.
 const STOPPED: &str = "response truncated by max_tokens=512 before producing visible output; stopping instead of continuing";
+/// The warning the retry earns when it is thought-only too: the endpoint
+/// thought although the request asked it not to.
+const RETRY_THOUGHT_ANYWAY: &str = "response truncated by max_tokens=512 with nothing but reasoning; the retry went out with reasoning off and the endpoint thought anyway (512 reasoning tokens); stopping instead of continuing";
+/// [`RETRY_THOUGHT_ANYWAY`] for a request that was no retry: the run had
+/// switched reasoning off, or the endpoint is configured that way.
+const OFF_THOUGHT_ANYWAY: &str = "response truncated by max_tokens=512 with nothing but reasoning; the request went out with reasoning off and the endpoint thought anyway (512 reasoning tokens); stopping instead of continuing";
+/// [`RETRY_THOUGHT_ANYWAY`] when the provider reports no reasoning tokens.
+const RETRY_THOUGHT_ANYWAY_UNCOUNTED: &str = "response truncated by max_tokens=512 with nothing but reasoning; the retry went out with reasoning off and the endpoint thought anyway; stopping instead of continuing";
 
 fn warned(values: &[Value]) -> Vec<&str> {
     values
@@ -87,6 +101,19 @@ fn raw(status: &str, body: &str) -> String {
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
+}
+
+/// A thought-only `length` turn in Anthropic Messages shape: a `thinking`
+/// block, then the `max_tokens` stop. The API reports no reasoning token
+/// count of its own.
+fn anthropic_thought_only_response(reasoning: &str) -> String {
+    json!({
+        "type": "message",
+        "content": [{"type": "thinking", "thinking": reasoning}],
+        "stop_reason": "max_tokens",
+        "usage": {"input_tokens": 10, "output_tokens": 512},
+    })
+    .to_string()
 }
 
 /// The turn is asked once more with `reasoning_effort: "none"`, over the
@@ -289,7 +316,9 @@ async fn a_complete_turn_between_thought_only_cuts_starts_the_count_again() {
 }
 
 /// A retry that is thought-only too has nothing left to switch off: the
-/// run stops the way a thought-only turn with reasoning already off does.
+/// run stops the way a thought-only turn with reasoning already off does,
+/// and the warning says the endpoint thought although the retry asked it
+/// not to.
 #[tokio::test]
 async fn a_retry_that_is_thought_only_again_ends_the_run() {
     let server = FakeServer::spawn(vec![
@@ -300,19 +329,109 @@ async fn a_retry_that_is_thought_only_again_ends_the_run() {
     let (result, _, events) = drive(&server.base_url, Registry::new(), "hi").await;
     assert!(result.is_ok(), "{result:?}");
 
+    let values = event_values(&events);
     assert_eq!(
-        warned(&event_values(&events)),
-        vec![ASKED_AGAIN, STOPPED],
-        "{events:?}"
+        warned(&values),
+        vec![ASKED_AGAIN, RETRY_THOUGHT_ANYWAY],
+        "{values:?}"
     );
+    let requests = server.requests.lock().unwrap().clone();
     assert_eq!(
-        server.requests.lock().unwrap().len(),
+        requests.len(),
         2,
         "the same request is not made a third time"
     );
     assert_eq!(
-        event_values(&events).last().unwrap(),
+        requests[1]["reasoning_effort"], "none",
+        "the warning's claim is the retry's own bytes: {}",
+        requests[1]
+    );
+    assert_eq!(
+        values.last().unwrap(),
         &json!({"type": "run_ended", "turns": 2})
+    );
+}
+
+/// A provider that reports no reasoning token count gets the same warning
+/// without one.
+#[tokio::test]
+async fn a_streamed_retry_that_is_thought_only_warns_without_a_token_count() {
+    let server = FakeServer::spawn_sse(vec![
+        sse_thought_only_length_response("thinking"),
+        sse_thought_only_length_response("thinking, even with reasoning off"),
+    ]);
+
+    let (result, _, events) = drive_streaming(&server.base_url, Registry::new(), "hi", true).await;
+    assert!(result.is_ok(), "{result:?}");
+
+    assert_eq!(
+        warned(&event_values(&events)),
+        vec![ASKED_AGAIN, RETRY_THOUGHT_ANYWAY_UNCOUNTED]
+    );
+    assert_eq!(server.requests.lock().unwrap().len(), 2);
+}
+
+/// The Anthropic Messages request has no reasoning field, so the retry is
+/// the same request again: the warning says that, and says nothing about
+/// reasoning going out off.
+#[tokio::test]
+async fn an_anthropic_retry_is_warned_about_as_the_same_request() {
+    let server = FakeServer::spawn(vec![
+        anthropic_thought_only_response("thinking"),
+        anthropic_thought_only_response("thinking, again"),
+    ]);
+    let client = LlmClient::new(&server.base_url)
+        .unwrap()
+        .with_api(ApiKind::AnthropicMessages);
+
+    let (result, _, events) = drive_with(Registry::new(), client, None).await;
+    assert!(result.is_ok(), "{result:?}");
+
+    let values = event_values(&events);
+    assert_eq!(
+        warned(&values),
+        vec![ASKED_AGAIN_SAME_REQUEST, STOPPED],
+        "{values:?}"
+    );
+    assert_eq!(
+        values.last().unwrap(),
+        &json!({"type": "run_ended", "turns": 2})
+    );
+}
+
+/// Once reasoning is off for the run, a thought-only turn is no retry: the
+/// warning names the request, not a retry, and the run ends there.
+#[tokio::test]
+async fn a_thought_only_turn_with_reasoning_off_for_the_run_names_the_request() {
+    let server = FakeServer::spawn(vec![
+        thought_only_length_response("thinking"),
+        tool_call_response(&[("call_1", "echo", r#"{"text":"x"}"#)]),
+        thought_only_length_response("still thinking"),
+        tool_call_response(&[("call_2", "echo", r#"{"text":"y"}"#)]),
+        thought_only_length_response("thinking, with reasoning off"),
+    ]);
+    let mut registry = Registry::new();
+    registry.register(Box::new(Echo));
+
+    let (result, _, events) = drive(&server.base_url, registry, "hi").await;
+    assert!(result.is_ok(), "{result:?}");
+
+    let values = event_values(&events);
+    assert_eq!(
+        warned(&values),
+        vec![ASKED_AGAIN, LATCHED, OFF_THOUGHT_ANYWAY],
+        "{values:?}"
+    );
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(
+        requests.len(),
+        5,
+        "the thought-only turn with reasoning off ends the run"
+    );
+    assert_eq!(requests[4]["reasoning_effort"], "none", "{}", requests[4]);
+    assert_eq!(
+        values.last().unwrap(),
+        &json!({"type": "run_ended", "turns": 5})
     );
 }
 
@@ -357,7 +476,8 @@ async fn the_next_run_asks_with_the_configured_reasoning_again() {
 }
 
 /// An endpoint already on `none` has nothing to switch off: a model that
-/// thinks anyway gets the usual stop, and its thought-only entry stays.
+/// thinks anyway gets the warning that says so, with no retry, and its
+/// thought-only entry stays.
 #[tokio::test]
 async fn a_truncation_with_reasoning_already_off_is_not_asked_again() {
     let server = FakeServer::spawn(vec![thought_only_length_response("thinking")]);
@@ -369,7 +489,7 @@ async fn a_truncation_with_reasoning_already_off_is_not_asked_again() {
     assert!(result.is_ok(), "{result:?}");
 
     let values = event_values(&events);
-    assert_eq!(warned(&values), vec![STOPPED], "{values:?}");
+    assert_eq!(warned(&values), vec![OFF_THOUGHT_ANYWAY], "{values:?}");
     assert_eq!(
         values.last().unwrap(),
         &json!({"type": "run_ended", "turns": 1})

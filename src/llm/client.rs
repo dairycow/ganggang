@@ -233,6 +233,19 @@ impl LlmClient {
             && self.reasoning_budget_tokens.is_none()
     }
 
+    /// What a request without reasoning carries over the ordinary one, in
+    /// the words a warning uses: `reasoning_effort: "none"` on the
+    /// OpenAI-compatible API. `None` on the Anthropic Messages API, whose
+    /// request has no reasoning field: there
+    /// [`send_without_reasoning`](Self::send_without_reasoning) repeats the
+    /// ordinary request.
+    pub fn without_reasoning_field(&self) -> Option<&'static str> {
+        match self.api {
+            ApiKind::OpenAiCompletions => Some(REASONING_OFF_FIELD),
+            ApiKind::AnthropicMessages => None,
+        }
+    }
+
     /// The non-streaming send both call paths share: build the request for
     /// the endpoint's API, send it, parse the response. [`LlmClient::send`]
     /// passes the client's own reasoning settings; [`LlmClient::send_summary`]
@@ -468,6 +481,10 @@ const HEAVY_REASONING_EFFORTS: [&str; 4] = ["medium", "high", "xhigh", "max"];
 /// [`LlmClient::send_without_reasoning`] and
 /// [`LlmClient::send_stream_without_reasoning`] send it.
 const REASONING_OFF: &str = "none";
+
+/// [`REASONING_OFF`] as the OpenAI-compatible request carries it, for a
+/// warning that names what went on the wire.
+const REASONING_OFF_FIELD: &str = "reasoning_effort: \"none\"";
 
 /// The server's answer to a request it refused to serve: a 4xx status with
 /// its body. `Display` is the error text; a caller with a fallback for a

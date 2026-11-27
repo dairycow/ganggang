@@ -378,6 +378,12 @@ impl Agent {
             // ask for the rest — bounded, visible, and never by running the
             // partial's tool calls.
             if let Some(cut) = short {
+                // What the request carried as far as reasoning goes. The API
+                // decides whether a request can say it at all (`None` on
+                // the Anthropic Messages API); then this request must have
+                // said it: it was the retry of a thought-only turn, the run
+                // has reasoning off, or the endpoint is configured `none`.
+                let off_field = self.client.without_reasoning_field();
                 let turn = cut::ShortTurn {
                     number: turns,
                     request: &messages,
@@ -386,8 +392,15 @@ impl Agent {
                         timings: timings.clone(),
                         thinking_pct,
                     },
-                    thought_only: retry_without_reasoning,
-                    thought_only_again,
+                    reasoning: cut::Reasoning {
+                        thought_only,
+                        retry: retry_without_reasoning,
+                        again: thought_only_again,
+                        off: off_field.is_some()
+                            && (reasoning_off || self.client.reasoning_is_off()),
+                        retrying,
+                        off_field,
+                    },
                     at_time_limit: time_final_turn,
                 };
                 let tool_call_ids = message

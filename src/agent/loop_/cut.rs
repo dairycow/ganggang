@@ -35,6 +35,10 @@
 //! out as configured again. A second, back to back with it, switches
 //! reasoning off for the rest of the run. A server that refuses the retry
 //! ends the run the way the truncation alone would have.
+//!
+//! Off is a statement about the request, not the endpoint. The warning
+//! names the field the retry carries, and a retry that is thought-only too
+//! ends the run with a warning that says the endpoint thought anyway.
 
 use std::sync::atomic::Ordering;
 
@@ -65,16 +69,35 @@ pub(super) struct ShortTurn<'a> {
     pub request: &'a [ChatMessage],
     /// What its `TurnEnded` carries.
     pub telemetry: Telemetry,
-    /// The `max_tokens` cut left nothing but reasoning, and the loop can
-    /// ask the turn again without it: reasoning was on for the request, and
-    /// the run's turn budget is not spent.
-    pub thought_only: bool,
-    /// [`Self::thought_only`], and the turn before it needed the same
-    /// retry: reasoning goes off for the rest of the run.
-    pub thought_only_again: bool,
+    /// The reasoning side of the turn: see [`Reasoning`].
+    pub reasoning: Reasoning,
     /// The time budget is spent: this was the final request whatever the
     /// turn budget says.
     pub at_time_limit: bool,
+}
+
+/// What the loop knows about the reasoning of a short turn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct Reasoning {
+    /// The `max_tokens` cut left nothing but reasoning.
+    pub thought_only: bool,
+    /// [`Self::thought_only`], and the loop asks for the turn again with
+    /// reasoning off: the request did not already go out that way, and the
+    /// run's turn budget is not spent.
+    pub retry: bool,
+    /// [`Self::retry`], and the turn before needed the same retry: reasoning
+    /// goes off for the rest of the run.
+    pub again: bool,
+    /// The request went out with reasoning off, on an API whose request
+    /// carries the switch: it was the retry of a thought-only turn, the run
+    /// had switched reasoning off, or the endpoint is configured that way.
+    pub off: bool,
+    /// [`Self::off`], and the request was the retry of a thought-only turn.
+    pub retrying: bool,
+    /// What a request with reasoning off carries over the ordinary one, as
+    /// the warning names it. `None` when the API's request has no reasoning
+    /// field, and the retry is the same request again.
+    pub off_field: Option<&'static str>,
 }
 
 /// The budget a short turn ran out of, when one is spent.
@@ -186,22 +209,30 @@ pub(super) struct Plan {
     pub(super) without_reasoning: bool,
 }
 
-/// `budget` is the run's continuation budget; `at_turn_limit` says the
-/// run's turn budget is spent, in which case nothing is continued whatever
-/// the continuation budget says. A short turn that produced no visible
-/// output is not continued either: there is nothing to carry forward, and
-/// asking again would repeat the same cut. The exception is `thought_only`
-/// (see [`ShortTurn`]): the same question asked without reasoning has not
-/// been tried yet. `again` says the turn before needed that retry too.
+/// `budget` is the run's continuation budget; `spent` says a run budget is
+/// spent, in which case nothing is continued whatever the continuation
+/// budget says. A short turn that produced no visible output is not
+/// continued either: there is nothing to carry forward, and asking again
+/// would repeat the same cut. The exception is a thought-only turn the
+/// loop can retry ([`Reasoning::retry`]): the same question asked without
+/// reasoning has not been tried yet. `turn` says what the turn was and
+/// what its request carried.
 fn plan(
     cut: Cut,
     budget: &Continuations,
     max_tokens: u32,
     spent: Option<Spent>,
     has_visible_output: bool,
-    thought_only: bool,
-    again: bool,
+    turn: &ShortTurn,
 ) -> Plan {
+    let Reasoning {
+        thought_only,
+        retry,
+        again,
+        off,
+        retrying,
+        off_field,
+    } = turn.reasoning;
     let head = match cut {
         Cut::StreamEnded => "stream ended early".to_string(),
         Cut::MaxTokens => format!("response truncated by max_tokens={max_tokens}"),
@@ -217,7 +248,7 @@ fn plan(
         }
     };
     if !has_visible_output {
-        if thought_only && spent.is_none() {
+        if retry && spent.is_none() {
             return Plan {
                 warning: if again {
                     format!(
@@ -225,13 +256,38 @@ fn plan(
                          reasoning off, which stays off for the rest of this run"
                     )
                 } else {
-                    format!(
-                        "{head} with nothing but reasoning; asking again with \
-                         reasoning off for this turn"
-                    )
+                    // What the retry will carry, in its own words: the field
+                    // asks the endpoint not to reason, and whether it does is
+                    // not known here.
+                    let with = match off_field {
+                        Some(field) => format!("with {field}"),
+                        None => "with the same request".to_string(),
+                    };
+                    format!("{head} with nothing but reasoning; asking again {with} for this turn")
                 },
                 continue_turn: true,
                 without_reasoning: true,
+            };
+        }
+        if thought_only && off {
+            // The request asked for no reasoning and the turn is thought-only
+            // all the same: nothing is left to switch off.
+            let who = if retrying { "the retry" } else { "the request" };
+            let count = turn
+                .telemetry
+                .usage
+                .and_then(|usage| usage.reasoning_tokens)
+                .filter(|&tokens| tokens > 0)
+                .map_or_else(String::new, |tokens| {
+                    format!(" ({tokens} reasoning tokens)")
+                });
+            return Plan {
+                warning: format!(
+                    "{head} with nothing but reasoning; {who} went out with reasoning off and \
+                     the endpoint thought anyway{count}; stopping instead of continuing"
+                ),
+                continue_turn: false,
+                without_reasoning: false,
             };
         }
         return Plan {
@@ -327,7 +383,7 @@ impl Agent {
     /// answers its calls with the loop's usual "aborted before execution";
     /// the caller's abort shape (marker entry, `run aborted`, `RunAborted`)
     /// finishes the run. A thought-only truncation the loop can retry
-    /// (`turn.thought_only`) is neither continued nor ended: the caller
+    /// (`turn.reasoning.retry`) is neither continued nor ended: the caller
     /// kept no entry for it, and asks for the same turn again with
     /// reasoning off. A cut `max_tokens` answer that carried tool calls is
     /// continued with [`CONTINUE_TOOL_INSTRUCTION`] instead.
@@ -368,8 +424,7 @@ impl Agent {
             self.max_tokens,
             spent,
             has_visible_output,
-            turn.thought_only,
-            turn.thought_only_again,
+            &turn,
         );
         // A continuation is another request, so it falls under the loop's
         // one guard: the user's stop request — checked before the warning,
