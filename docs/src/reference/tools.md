@@ -34,7 +34,7 @@ Run a shell command in bash; returns merged stdout+stderr and the exit code. Out
 | `background` | boolean | no | For a command that may still be running at the deadline: keep it running as a job and name it in the result instead of killing it. Collect the job later with wait_for |
 | `command` | string | no | Shell command to run (required unless wait_for, wait_job or stop is set) |
 | `stop` | integer | no | Kill background job &lt;id>, whole process group included. Takes no command |
-| `timeout_secs` | integer | no | Kill the command after this many seconds; the most this session allows is 30, and a larger value is refused. A command always keeps that ceiling, and wait_for waits it by default. A wait (wait_for or wait_job) may pass a budget past the ceiling: wait_job defaults to 600 s, both clamp to 3600 s |
+| `timeout_secs` | integer | no | Kill the command after this many seconds; the most this session allows is 300, and a larger value is refused. A command always keeps that ceiling, and wait_for waits it by default. A wait (wait_for or wait_job) may pass a budget past the ceiling: wait_job defaults to 600 s, both clamp to 3600 s |
 | `wait_for` | integer | no | Wait for background job &lt;id> and return its output and exit code. A job still running when the budget passes is reported with its output so far. Takes no command |
 | `wait_job` | string | no | Wait for the detached job a command registered under this name in the run's job log ($GG_JOB_LOG): a start record (name, pid, directory) when it started, a done record (name, exit, note) when it ended. Waits until the done record lands or the pid is gone; a job still running when the budget passes is reported with its progress so far. Takes no command |
 

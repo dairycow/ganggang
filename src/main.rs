@@ -554,7 +554,8 @@ async fn open_agent(
         cfg.max_turns = nest.effective_max_turns(cfg.max_turns);
         cfg.max_seconds = nest.effective_max_seconds(cfg.max_seconds);
         // A nested run's own commands take the longer ceiling: nobody
-        // watches them, and the person-sized one kills a compile.
+        // watches them, and the person-sized one still kills a long
+        // compile.
         cfg.bash_timeout_secs = cfg.nested_bash_timeout_secs;
     }
     let mut endpoint = cfg.active_endpoint();

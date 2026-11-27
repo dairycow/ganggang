@@ -56,7 +56,7 @@ Precedence: CLI flags > environment (`GG_PROVIDER`, `GG_BASE_URL`, `GG_MODEL`, `
 # provider = "glm-coding-plan"    # names it outright; unset, the first default you hold a key for wins
 max_tokens = 16384
 # context_window = 131072   # auto-probed from Strata /health when unset
-bash_timeout_secs = 30
+bash_timeout_secs = 300
 nested_bash_timeout_secs = 600
 max_retries = 5           # extra attempts on a transient transport failure
 request_timeout_secs = 600  # whole-response timeout (a stream included)

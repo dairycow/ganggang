@@ -139,8 +139,8 @@ pub struct Config {
     pub bash_timeout_secs: u64,
     /// The `bash` ceiling a nested run boots with
     /// (`nested_bash_timeout_secs` / `GG_NESTED_BASH_TIMEOUT`). Nobody
-    /// watches a nested run, so its commands get minutes where the
-    /// person-sized `bash_timeout_secs` would kill a compile.
+    /// watches a nested run, so its commands get ten minutes where the
+    /// person-sized `bash_timeout_secs` would still kill a long compile.
     pub nested_bash_timeout_secs: u64,
     /// Extra attempts a transient LLM transport failure earns (0 turns
     /// retrying off). The policy itself lives in `llm::retry`.
@@ -200,7 +200,7 @@ impl Default for Config {
             compact_threshold_explicit: ep.compact_threshold_explicit,
             max_turns: None,
             max_seconds: None,
-            bash_timeout_secs: 30,
+            bash_timeout_secs: 300,
             nested_bash_timeout_secs: 600,
             max_retries: 5,
             request_timeout_secs: 600,
