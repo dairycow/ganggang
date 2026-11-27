@@ -553,6 +553,8 @@ async fn open_agent(
     if let Some(nest) = &nested_boot {
         cfg.max_turns = nest.effective_max_turns(cfg.max_turns);
         cfg.max_seconds = nest.effective_max_seconds(cfg.max_seconds);
+        cfg.bash_timeout_secs =
+            nest.effective_bash_timeout_secs(cfg.bash_timeout_secs, cfg.nested_bash_timeout_secs);
     }
     let mut endpoint = cfg.active_endpoint();
     endpoint.require_auth()?;

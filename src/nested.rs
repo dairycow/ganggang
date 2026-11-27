@@ -9,6 +9,7 @@
 //! - tools: a subset of the parent's allowlist;
 //! - turns: at most the parent's `max_turns`;
 //! - time: at most the parent's `max_seconds`;
+//! - bash: its own `nested_bash_timeout_secs` ceiling, not the person's;
 //! - hooks: the parent's, on or off; `--no-hooks` is ignored;
 //! - model: the parent's current model unless `-m` or `-P` names one;
 //! - depth: one level, so a nested run cannot start a nested run;
@@ -210,6 +211,19 @@ impl NestedBoot {
             (None, Some(cap)) => Some(cap),
             (other, None) => other,
         }
+    }
+
+    /// The `bash` ceiling of a nested run: always its own
+    /// `nested_bash_timeout_secs`, never the person's `bash_timeout_secs`.
+    /// The parent's ceiling sizes the one `bash` call the nested run lives
+    /// inside; nobody watches the nested run, and its commands are the long
+    /// ones, so they take the longer ceiling from its own config.
+    pub fn effective_bash_timeout_secs(
+        &self,
+        _bash_timeout_secs: u64,
+        nested_bash_timeout_secs: u64,
+    ) -> u64 {
+        nested_bash_timeout_secs
     }
 }
 

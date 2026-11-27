@@ -137,6 +137,11 @@ pub struct Config {
     /// `GG_MAX_SECONDS`), `None` or `0` for no limit.
     pub max_seconds: Option<u64>,
     pub bash_timeout_secs: u64,
+    /// The `bash` ceiling a nested run boots with
+    /// (`nested_bash_timeout_secs` / `GG_NESTED_BASH_TIMEOUT`). Nobody
+    /// watches a nested run, so its commands get minutes where the
+    /// person-sized `bash_timeout_secs` would kill a compile.
+    pub nested_bash_timeout_secs: u64,
     /// Extra attempts a transient LLM transport failure earns (0 turns
     /// retrying off). The policy itself lives in `llm::retry`.
     pub max_retries: u32,
@@ -196,6 +201,7 @@ impl Default for Config {
             max_turns: None,
             max_seconds: None,
             bash_timeout_secs: 30,
+            nested_bash_timeout_secs: 600,
             max_retries: 5,
             request_timeout_secs: 600,
             tools: crate::agent::tools::NAMES
@@ -469,6 +475,7 @@ struct FileConfig {
     max_turns: Option<u32>,
     max_seconds: Option<u64>,
     bash_timeout_secs: Option<u64>,
+    nested_bash_timeout_secs: Option<u64>,
     max_retries: Option<u32>,
     request_timeout_secs: Option<u64>,
     tools: Option<Vec<String>>,
@@ -674,6 +681,15 @@ pub fn merge(
                 defaults.bash_timeout_secs,
             ),
         )?,
+        nested_bash_timeout_secs: parse_env(
+            env_value(env, "GG_NESTED_BASH_TIMEOUT"),
+            "GG_NESTED_BASH_TIMEOUT",
+            pick_num(
+                &user.nested_bash_timeout_secs,
+                &project.nested_bash_timeout_secs,
+                defaults.nested_bash_timeout_secs,
+            ),
+        )?,
         max_retries: parse_env(
             env_value(env, "GG_MAX_RETRIES"),
             "GG_MAX_RETRIES",
@@ -831,6 +847,9 @@ fn validate(cfg: &Config) -> anyhow::Result<()> {
     }
     if cfg.bash_timeout_secs == 0 {
         anyhow::bail!("bash_timeout_secs must be positive");
+    }
+    if cfg.nested_bash_timeout_secs == 0 {
+        anyhow::bail!("nested_bash_timeout_secs must be positive");
     }
     if cfg.request_timeout_secs == 0 {
         anyhow::bail!("request_timeout_secs must be positive");

@@ -251,6 +251,15 @@ fn the_turn_budget_can_only_go_down() {
 }
 
 #[test]
+fn a_nested_run_boots_with_its_own_bash_ceiling() {
+    let nest = boot(&[(DEPTH, "1")]).unwrap().expect("nested");
+    // The ceiling comes from the nested run's own config, whatever the
+    // person's spinner-sized `bash_timeout_secs` says.
+    assert_eq!(nest.effective_bash_timeout_secs(30, 600), 600);
+    assert_eq!(nest.effective_bash_timeout_secs(600, 45), 45);
+}
+
+#[test]
 fn the_shared_nest_follows_a_model_switch() {
     let nest = ParentEnv::default().shared();
     assert_eq!(current(&nest).model, None);
