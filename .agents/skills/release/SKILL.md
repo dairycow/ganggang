@@ -19,7 +19,7 @@ Pitfalls:
 
 - The crates.io API returns 403 to the default `curl` User-Agent; always pass `-A "ganggang-release"` (or any non-default UA).
 - `cargo publish` runs in a background process group, so a gg run abort does not kill it; always confirm the outcome from the log before claiming the release is done.
-- `gh release list` / `gh release view` are fine inside the 300 s cap; `cargo publish` and `cargo test` are not.
+- `gh release list` / `gh release view`, and `cargo test` once the tree is already built, are fine inside the 300 s cap; `cargo publish` is not.
 - `cargo publish`'s verification build writes `target/debug/gg` from the packed copy (`target/package/ganggang-<v>/src`) and points the cargo fingerprint at those packed files. Every later `cargo build` then reports "Finished" no matter how new the live `src/` is, so `gg --watch` and `cargo run` keep running the stale binary. The `cargo build` in step 4 restores the live-source fingerprint.
 
 Full checklist: `docs/src/maintaining-docs.md` §4.
