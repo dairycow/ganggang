@@ -203,8 +203,15 @@ pub(crate) fn load_from(
         None => Vec::new(),
     };
     let user_specs = specs.len();
+    // The user's own file can turn up as a project file: with no repo the
+    // walk passes through the home directory, where it lives. It loads
+    // once, as the user's.
+    let user_file = user.map(real);
     let mut ignored = Vec::new();
     for (dir, path) in project_hook_files(cwd) {
+        if Some(real(&path)) == user_file {
+            continue;
+        }
         if !is_trusted(&dir, trusted) {
             ignored.push(format!(
                 "project hooks ({}) are ignored until you trust {}: add it to `trusted_projects` \
@@ -244,8 +251,10 @@ fn read_file(path: &Path) -> anyhow::Result<Vec<Hook>> {
 /// The project hooks files that govern `cwd`: `.gg/hooks.toml` in the repo
 /// root and in each directory below it down to `cwd`, broadest first (the
 /// walk `AGENTS.md` discovery makes; with no repo it runs to the
-/// filesystem root). Each is its directory with its path, and only files
-/// that exist are listed.
+/// filesystem root, so outside a repo it passes through the home
+/// directory, where the user's own file lives). Each is its directory
+/// with its path, and only files that exist are listed;
+/// [`load_from`](load_from) leaves the user's own file out of them.
 fn project_hook_files(cwd: &Path) -> Vec<(PathBuf, PathBuf)> {
     let mut dirs: Vec<&Path> = cwd.ancestors().collect();
     if let Some(root) = super::context::find_repo_root(cwd) {

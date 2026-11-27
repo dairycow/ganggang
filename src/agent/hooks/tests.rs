@@ -86,6 +86,29 @@ fn an_untrusted_project_file_is_left_unloaded_with_a_warning() {
     assert_eq!(hooks.ignored(), warnings.as_slice(), "`/hooks` says it too");
 }
 
+/// The user's own file is never also a project file. With no repo the
+/// walk passes through the home directory, where that file lives: it
+/// loads once, as the user's, with no warning, whether or not the home
+/// directory is trusted.
+#[test]
+fn the_users_own_file_is_never_also_a_project_file() {
+    let above = tempfile::tempdir().unwrap();
+    let home = above.path().join("home");
+    let work = home.join("notes");
+    std::fs::create_dir_all(&work).unwrap();
+    let user = project_file(&home, ONE_HOOK);
+
+    let none: Vec<PathBuf> = Vec::new();
+    let home_trusted = [home.clone()];
+    for trusted in [none.as_slice(), home_trusted.as_slice()] {
+        let (hooks, warnings) = load_from(Some(&user), &work, trusted, false).unwrap();
+
+        assert!(warnings.is_empty(), "{}", warnings.len());
+        assert_eq!(hooks.specs().len(), 1, "the user's hooks load once");
+        assert!(!hooks.is_project(0));
+    }
+}
+
 #[test]
 fn no_hooks_skips_loading_and_the_project_warning() {
     let dir = tempfile::tempdir().unwrap();

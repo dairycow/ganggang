@@ -13,7 +13,7 @@ Hooks are one-shot shell commands that run at three points in the agent loop. Ho
 Hooks are configured in two files, with the same format in each:
 
 - `~/.gg/hooks.toml`: your hooks, in every directory.
-- `.gg/hooks.toml`: the project's, looked for in the repository root and in each directory below it down to the one you run `gg` in. It loads only for a project you trust; see [Project hooks](#project-hooks).
+- `.gg/hooks.toml`: the project's, looked for in the repository root and in each directory below it down to the one you run `gg` in (outside a repository, from that directory upward). Your own `~/.gg/hooks.toml` is never taken for a project file. It loads only for a project you trust; see [Project hooks](#project-hooks).
 
 ```toml
 # ~/.gg/hooks.toml
