@@ -103,49 +103,52 @@ fn the_context_number_darkens_as_the_window_fills() {
 }
 
 #[test]
-fn the_mark_is_gg_at_rest_and_flashes_while_a_run_works() {
+fn the_mark_is_gg_at_rest_and_while_a_run_works() {
     let mut f = footer();
-    assert_eq!(f.mark(), "gg", "at rest the mark is the name, not a blank");
+    assert_eq!(f.mark(), "gg", "at rest the mark is the name");
     f.set_busy(true);
 
     // The mark fills the same two cells the name did, so nothing behind
-    // the mark moves while the turn turns.
-    let mut pairs = Vec::new();
+    // the mark moves while the turn turns, and no frame is blank.
+    let mut frames = Vec::new();
     for _ in 0..MARK_FRAMES.len() {
         let mark = f.mark();
-        assert_eq!(mark.chars().count(), 2, "the name's two cells: {mark:?}");
-        pairs.push(mark);
+        assert_eq!(mark, "gg", "every frame spells the name: {mark:?}");
+        frames.push(mark);
         f.tick();
     }
     // A whole turn comes round to the start.
-    assert_eq!(f.mark(), pairs[0], "wrapped, not reset by itself");
-    assert_eq!(pairs.len(), MARK_FRAMES.len());
+    assert_eq!(f.mark(), frames[0], "wrapped, not reset by itself");
+    assert_eq!(frames.len(), MARK_FRAMES.len());
     assert_eq!(
-        pairs,
-        vec!["gg", "  ", "gg"],
-        "the name flashes in its own two cells, blank between: {pairs:?}"
+        frames,
+        vec!["gg", "gg", "gg"],
+        "every frame is the name, colour only: {frames:?}"
     );
-    // The mark goes back to the name when the run ends.
+    // The mark is the name when the run ends.
     f.set_busy(false);
     assert_eq!(f.mark(), "gg");
     f.set_busy(true);
     assert_eq!(f.mark(), "gg", "a new run starts on the crest");
 }
 
-/// The row leads with the flash, in the name's two cells at the left,
+/// The row leads with the mark, in the name's two cells at the left,
 /// and while a run works it has no status word: the row ends at its
-/// last field, frame after frame, so nothing moves but the mark. No
-/// dot and no ring is drawn anywhere in the row. A stop adds the one
-/// status field, `stopping…`, and the mark is scarlet on every frame
-/// of it.
+/// last field and reads the same in every frame, since the beat is
+/// colour only. No dot and no ring is drawn anywhere in the row. A
+/// stop adds the one status field, `stopping…`, and the mark is
+/// scarlet on every frame of it.
 #[test]
-fn the_row_leads_with_the_flash_and_has_no_status_word_in_every_frame() {
+fn the_row_leads_with_the_mark_and_has_no_status_word_in_every_frame() {
     use crate::tui::theme::TRUECOLOR as T;
     let mut f = footer();
     f.set_busy(true);
     for _ in 0..MARK_FRAMES.len() {
         let row = text(&f);
-        assert!(row.starts_with(&f.mark()), "the mark leads: {row:?}");
+        assert!(
+            row.starts_with("gg │ "),
+            "every frame spells the name: {row:?}"
+        );
         assert!(!row.contains('●'), "no dot anywhere in the row: {row:?}");
         assert!(!row.contains('○'), "the ring is gone: {row:?}");
         assert!(row.ends_with("↑305 ↓81"), "no status word: {row:?}");
@@ -156,7 +159,10 @@ fn the_row_leads_with_the_flash_and_has_no_status_word_in_every_frame() {
     f.set_stopping(true);
     for _ in 0..MARK_FRAMES.len() {
         let row = text(&f);
-        assert!(row.starts_with(&f.mark()), "the mark leads: {row:?}");
+        assert!(
+            row.starts_with("gg │ "),
+            "every frame spells the name: {row:?}"
+        );
         assert!(!row.contains('●'), "no dot anywhere in the row: {row:?}");
         assert!(!row.contains('○'), "the ring is gone: {row:?}");
         assert!(
@@ -173,9 +179,9 @@ fn the_row_leads_with_the_flash_and_has_no_status_word_in_every_frame() {
 }
 
 /// The three rows, spelled out. At rest the name leads and the row ends
-/// at its last field. At work the name flashes in its own two cells and
-/// nothing else changes: no status word, and the fields after the mark
-/// keep their cells on the blank frame too. Stopping adds one field.
+/// at its last field. At work the row reads the same in every frame:
+/// the beat is colour only, no status word, and the fields after the
+/// mark keep their cells. Stopping adds one field.
 #[test]
 fn the_row_at_rest_at_work_and_stopping() {
     let mut f = footer();
@@ -184,27 +190,17 @@ fn the_row_at_rest_at_work_and_stopping() {
     assert_eq!(text(&f), rest);
 
     f.set_busy(true);
-    let work = " │ …/Projects/ganggang │ qwen3.8 │ medium │ ↑305 ↓81";
-    assert_eq!(
-        text(&f),
-        format!("gg{work}"),
-        "the crest frame spells the name"
-    );
-    f.tick();
-    assert_eq!(
-        text(&f),
-        format!("  {work}"),
-        "the blank frame: the name is off"
-    );
-    f.tick();
-    assert_eq!(
-        text(&f),
-        format!("gg{work}"),
-        "the turn ends where it began"
-    );
+    for _ in 0..MARK_FRAMES.len() {
+        assert_eq!(
+            text(&f),
+            rest,
+            "the working row is the rest row, colour only"
+        );
+        f.tick();
+    }
 
     f.set_stopping(true);
-    assert_eq!(text(&f), format!("gg{work} │ stopping…"));
+    assert_eq!(text(&f), format!("{rest} │ stopping…"));
     // Stopping belongs to a live run: asked for at rest, nothing shows.
     f.set_busy(false);
     f.set_stopping(true);
@@ -212,53 +208,60 @@ fn the_row_at_rest_at_work_and_stopping() {
 }
 
 #[test]
-fn the_name_flashes_in_the_order_they_draw_in() {
-    // The name flashes in its own two cells: up on the first and third
-    // beats, all blank on the middle one, and the turn ends where it
+fn the_frames_spell_the_name_in_the_order_they_draw_in() {
+    // Every frame is the name's two cells, and the turn ends where it
     // began. Each element of a pair is one of the frame's two cells.
-    assert_eq!(MARK_FRAMES[0], ("g", "g"), "frame 0: the name is up");
-    assert_eq!(MARK_FRAMES[1], (" ", " "), "frame 1: the name is off");
+    assert_eq!(MARK_FRAMES[0], ("g", "g"), "frame 0: the name");
+    assert_eq!(MARK_FRAMES[1], ("g", "g"), "frame 1: the name, no blank");
     assert_eq!(
         MARK_FRAMES[2], MARK_FRAMES[0],
         "the turn ends where it began"
     );
-    // One cell per element, and the frames spelled out: gg, two blanks,
-    // gg.
+    // One cell per element, and the frames spelled out: gg, gg, gg.
     let mut spelled = Vec::new();
     for (left, right) in MARK_FRAMES {
         assert_eq!(left.chars().count(), 1, "one cell: {left:?}");
         assert_eq!(right.chars().count(), 1, "one cell: {right:?}");
         spelled.push(format!("{left}{right}"));
     }
-    assert_eq!(spelled, vec!["gg", "  ", "gg"], "the turn, spelled out");
+    assert_eq!(spelled, vec!["gg", "gg", "gg"], "the turn, spelled out");
 }
 
-/// On brand: the name flashes scarlet on the crest frame and is the
-/// cheek's orange-red the rest of the turn, so the crest is the one frame
-/// that reads as `gg`'s own mark rather than as a working state.
+/// On brand: the working mark is colour only, and the colours are the
+/// crest's three reds in turn, scarlet, orange-red cheek, deep crest
+/// red, wrapping round; a stop holds the scarlet on every frame.
 #[test]
-fn the_name_flashes_the_crest_once_a_turn() {
+fn the_mark_beats_through_the_crest_s_three_reds() {
     use crate::tui::theme::TRUECOLOR as T;
     let mut f = footer();
     f.set_busy(true);
-    for i in 0..MARK_FRAMES.len() {
+    let cycle = [T.accent, T.accent_soft, T.accent_deep];
+    for _ in 0..MARK_FRAMES.len() * 2 {
         let line = f.spans(&T);
         assert_eq!(
             line.spans[0].content,
             f.mark(),
             "the mark is the frame the footer is on"
         );
-        let want = if i == 0 { T.accent } else { T.accent_soft };
         assert_eq!(
             line.spans[0].style.fg,
-            Some(want),
-            "frame {i} of {MARK_FRAMES:?} should be {}",
-            if i == 0 { "the crest" } else { "the cheek" }
+            Some(cycle[f.frame % MARK_FRAMES.len()]),
+            "frame {} of the cycle {cycle:?}",
+            f.frame % MARK_FRAMES.len()
         );
         f.tick();
     }
-    // One flash per turn, not one per frame.
-    assert_eq!(f.frame % MARK_FRAMES.len(), 0);
+    // Two turns, so the wrap is proved: the sixth frame is the first's.
+    f.set_stopping(true);
+    for _ in 0..MARK_FRAMES.len() {
+        let line = f.spans(&T);
+        assert_eq!(
+            line.spans[0].style.fg,
+            Some(T.accent),
+            "scarlet on every frame of a stop"
+        );
+        f.tick();
+    }
     f.set_busy(false);
 }
 
@@ -325,11 +328,12 @@ fn the_plain_render_matches_the_spans_for_the_assertion_shape() {
     f.set_busy(true);
     let rendered = f.render();
     assert!(rendered.contains("↑305 ↓81"), "{rendered}");
-    // The crest frame spells the name, so the row reads as it does at
-    // rest; the blank frame is blank across the mark's two cells.
+    // Every frame spells the name, so the row reads as it does at rest.
     assert!(rendered.starts_with("gg │ "), "{rendered}");
     f.tick();
-    assert!(f.render().starts_with("   │ "), "{}", f.render());
+    assert!(f.render().starts_with("gg │ "), "{}", f.render());
+    f.tick();
+    assert!(f.render().starts_with("gg │ "), "{}", f.render());
     f.set_busy(false);
     assert!(f.render().starts_with("gg │ "), "{}", f.render());
 }

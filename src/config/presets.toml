@@ -36,7 +36,7 @@ max_tokens = 16384
 context_window = 1000000
 replay_reasoning = "all"
 models = [
-  { id = "glm-5.3-flash", forced_thinking = true },
+  "glm-5.3-flash",
   "glm-5.4",
 ]
 
@@ -52,8 +52,8 @@ replay_reasoning = "all"
 models = [
   "deepseek-v4.1-flash",
   "deepseek-v4-pro",
-  { id = "glm-5.3-flash", forced_thinking = true },
-  { id = "glm-5.3", forced_thinking = true },
+  "glm-5.3-flash",
+  "glm-5.3",
   { id = "kimi-k3.1-pro", context_window = 1048576 },
   { id = "kimi-k3", context_window = 1048576 },
   { id = "kimi-k2.7-code", context_window = 262144 },

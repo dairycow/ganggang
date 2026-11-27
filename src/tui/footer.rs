@@ -17,15 +17,17 @@ use super::theme::Palette;
 /// The mark's frames, one per [`crate::tui::tick::PERIOD`] tick: each
 /// pair is the frame's two cells, one per element, and the cells
 /// concatenate to the name's width, so nothing behind the mark moves
-/// while the turn turns. The name flashes on, off, on (`gg`, `  `,
-/// `gg`).
+/// while the turn turns. Every frame spells the name; the beat is
+/// colour only, [`mark_colour`](Footer::mark_colour)'s three reds.
 ///
-/// Not a different glyph: the name is the mark, at rest and at work,
-/// and the beat is all that says a run is live.
-pub const MARK_FRAMES: [(&str, &str); 3] = [("g", "g"), (" ", " "), ("g", "g")];
-/// The frame where the name comes up first: the gang-gang's crest,
-/// raised. The mark is scarlet on this one frame of a turn and warm on
-/// the other two, whether the name is up or off.
+/// Not a different glyph: the name is the mark, at rest and at work.
+/// Print mode takes these frames too, and its stderr has no colour, so
+/// there the beat is gone and the character count after `streaming…`
+/// is what ticks.
+pub const MARK_FRAMES: [(&str, &str); 3] = [("g", "g"), ("g", "g"), ("g", "g")];
+/// The frame where the mark first wears the crest's scarlet on the way
+/// round: the gang-gang's crest, raised, and the frame a new run
+/// starts on.
 pub const CREST_FRAME: usize = 0;
 
 /// The context percentage at which the footer's number turns gold, and
@@ -149,9 +151,9 @@ impl Footer {
         // mark moves, in either direction, and a run asked to stop is
         // marked again with [`set_stopping`](Self::set_stopping).
         self.stopping = false;
-        // A run that starts begins its spinner at the top; one that ends
-        // leaves no half-turn behind.
-        self.frame = 0;
+        // A run that starts begins its spinner on the crest; one that
+        // ends leaves no half-turn behind.
+        self.frame = CREST_FRAME;
     }
 
     /// The stopping mark goes with a busy run and nowhere else: a run that
@@ -173,14 +175,15 @@ impl Footer {
     }
 
     /// The colour the mark takes while a run is live: scarlet throughout
-    /// a stop and, while the run works, the crest on the first frame, the
-    /// cheek's orange-red the rest of the turn.
+    /// a stop and, while the run works, the crest's three reds one per
+    /// frame, scarlet, orange-red cheek, deep crest red, then round
+    /// again.
     pub fn mark_colour(&self, palette: &Palette) -> ratatui::style::Color {
-        if self.stopping || self.frame % MARK_FRAMES.len() == CREST_FRAME {
-            palette.accent
-        } else {
-            palette.accent_soft
+        if self.stopping {
+            return palette.accent;
         }
+        let cycle = [palette.accent, palette.accent_soft, palette.accent_deep];
+        cycle[self.frame % MARK_FRAMES.len()]
     }
 
     /// Whether the footer is showing the stopping mark.
@@ -227,15 +230,14 @@ impl Footer {
             .join("")
     }
 
-    /// The two cells at the start of the footer: the name when idle, the
-    /// run's frame while a run works, so the row reads
-    /// `gg …/projects/ganggang qwen3.8 medium ↑305 ↓81` at rest and on
-    /// the name's frames, and all blank in those two cells on the off
-    /// beat.
+    /// The two cells at the start of the footer: the name, at rest and
+    /// on every frame of a run, so the row reads
+    /// `gg …/projects/ganggang qwen3.8 medium ↑305 ↓81` the same at rest
+    /// and at work. The beat is colour only, in
+    /// [`mark_colour`](Self::mark_colour)'s reds.
     ///
     /// The same width every frame, so nothing behind the mark moves
-    /// while the turn turns: the name flashes in its own cells and the
-    /// fields after them stay put.
+    /// while the turn turns: the fields after the name keep their cells.
     pub fn mark(&self) -> String {
         if self.spinning() {
             Self::mark_cells(self.frame)
@@ -254,7 +256,8 @@ impl Footer {
     pub const MARK_NAME: &str = "gg";
 
     /// One row of spans, each already carrying the style its role means:
-    /// the mark in the crest, the location in pale grey, the model in body
+    /// the mark in the crest's reds, the location in pale grey, the model
+    /// in body
     /// text, the thinking level in muted, the totals in muted, the context
     /// number in muted (going gold then red as the window fills), the
     /// throughput figures in muted, the watch state in gold, and, only
