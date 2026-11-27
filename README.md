@@ -2,7 +2,7 @@
 
 A small, sharp agentic harness in Rust. One agent loop, eight tools, and a terminal UI, modelled on [pi](https://github.com/earendil-works/pi).
 
-**[Read the user guide](https://dairycow.github.io/ganggang/)**
+**[Read the user guide](https://ganggang.io)**
 
 `gg` defaults to the `glm-coding-plan` preset and its `glm-5.3-flash` model while you hold a key for it (`ZHIPU_API_KEY`, `GG_API_KEY` or one in your config), and to a local [Strata](https://github.com/Niko1221/Strata) server otherwise. It also speaks OpenAI Chat Completions and Anthropic Messages endpoints, with built-in provider presets and custom `[providers.<name>]` configs.
 
@@ -90,6 +90,6 @@ scripts/session-digest.py   # digest sessions for friction: aborts, tool errors,
 scripts/improve-loop.sh     # gated improvement iterations against the eval baseline
 ```
 
-`scripts/improve-loop.sh` and `scripts/session-digest.py` run on demand. `gg` never invokes either after a session. See [Improving the harness](https://dairycow.github.io/ganggang/improving-the-harness.html) for the loop and the two self-improvement skills.
+`scripts/improve-loop.sh` and `scripts/session-digest.py` run on demand. `gg` never invokes either after a session. See [Improving the harness](https://ganggang.io/improving-the-harness.html) for the loop and the two self-improvement skills.
 
 The user guide lives in `docs/` (mdBook). `AGENTS.md` explains how docs stay in sync.

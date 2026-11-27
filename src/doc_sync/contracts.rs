@@ -330,5 +330,5 @@ fn events_hooks_and_keys_are_exhaustively_documented() {
 fn crate_metadata_and_readme_link_published_guide() {
     assert!(read("Cargo.toml").contains(&format!("documentation = \"{DOCS_URL}\"")));
     assert!(read("README.md").contains(DOCS_URL));
-    assert!(read("docs/book.toml").contains("site-url = \"/ganggang/\""));
+    assert!(read("docs/book.toml").contains("site-url = \"/\""));
 }

@@ -11,7 +11,7 @@ mod generate;
 use std::path::{Path, PathBuf};
 
 /// Where the published guide lives.
-pub(crate) const DOCS_URL: &str = "https://dairycow.github.io/ganggang/";
+pub(crate) const DOCS_URL: &str = "https://ganggang.io";
 
 pub(crate) fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
