@@ -201,14 +201,15 @@ impl Printer {
                 }
                 // The footer's mark, so print mode and the TUI say the
                 // same thing while a run works: the name flashes, on,
-                // off, on. The mark's blank second cell is the space
-                // before the word, so `streaming…` keeps its column on
-                // the blank frame.
-                let (mark, _) = MARK_FRAMES[self.spinner % MARK_FRAMES.len()];
+                // off, on. The frame's two cells go in whole, so the
+                // `gg ` of an up frame and the `   ` of the off frame
+                // are the same width, and `streaming…` keeps its
+                // column.
+                let (mark, blank) = MARK_FRAMES[self.spinner % MARK_FRAMES.len()];
                 self.spinner = self.spinner.wrapping_add(1);
                 self.spinner_open = true;
                 vec![format!(
-                    "\r{mark} streaming… {} chars",
+                    "\r{mark}{blank} streaming… {} chars",
                     self.current.chars().count()
                 )]
             }

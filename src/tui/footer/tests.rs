@@ -215,28 +215,22 @@ fn the_row_at_rest_at_work_and_stopping() {
 fn the_name_flashes_in_the_order_they_draw_in() {
     // The name flashes in its own two cells: up on the first and third
     // beats, all blank on the middle one, and the turn ends where it
-    // began.
-    assert_eq!(MARK_FRAMES[0], ("gg", ""), "frame 0: the name is up");
+    // began. Each element of a pair is one of the frame's two cells.
+    assert_eq!(MARK_FRAMES[0], ("g", "g"), "frame 0: the name is up");
     assert_eq!(MARK_FRAMES[1], (" ", " "), "frame 1: the name is off");
     assert_eq!(
         MARK_FRAMES[2], MARK_FRAMES[0],
         "the turn ends where it began"
     );
-    // Every frame is the name's two cells: the name, or blank across
-    // both.
+    // One cell per element, and the frames spelled out: gg, two blanks,
+    // gg.
+    let mut spelled = Vec::new();
     for (left, right) in MARK_FRAMES {
-        assert!(left == "gg" || left == " ", "the name or blank: {left:?}");
-        assert_eq!(
-            left.chars().count() + right.chars().count(),
-            2,
-            "two cells: {left:?}{right:?}"
-        );
-        if left == "gg" {
-            assert_eq!(right, "", "the name fills both cells: {right:?}");
-        } else {
-            assert_eq!(right, " ", "blank across both cells: {right:?}");
-        }
+        assert_eq!(left.chars().count(), 1, "one cell: {left:?}");
+        assert_eq!(right.chars().count(), 1, "one cell: {right:?}");
+        spelled.push(format!("{left}{right}"));
     }
+    assert_eq!(spelled, vec!["gg", "  ", "gg"], "the turn, spelled out");
 }
 
 /// On brand: the name flashes scarlet on the crest frame and is the

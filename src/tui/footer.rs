@@ -14,16 +14,15 @@ use ratatui::text::{Line as UiLine, Span};
 
 use super::theme::Palette;
 
-/// The mark's frames, one per [`crate::tui::tick::PERIOD`] tick: the
-/// name itself in the two cells it takes up at rest, flashing on, off,
-/// on (`gg`, `  `, `gg`; the second element of a pair is whatever the
-/// second cell still needs, nothing when the name is up). Two cells in
-/// every frame keep the name's width, so nothing behind the mark moves
-/// while the turn turns.
+/// The mark's frames, one per [`crate::tui::tick::PERIOD`] tick: each
+/// pair is the frame's two cells, one per element, and the cells
+/// concatenate to the name's width, so nothing behind the mark moves
+/// while the turn turns. The name flashes on, off, on (`gg`, `  `,
+/// `gg`).
 ///
 /// Not a different glyph: the name is the mark, at rest and at work,
 /// and the beat is all that says a run is live.
-pub const MARK_FRAMES: [(&str, &str); 3] = [("gg", ""), (" ", " "), ("gg", "")];
+pub const MARK_FRAMES: [(&str, &str); 3] = [("g", "g"), (" ", " "), ("g", "g")];
 /// The frame where the name comes up first: the gang-gang's crest,
 /// raised. The mark is scarlet on this one frame of a turn and warm on
 /// the other two, whether the name is up or off.

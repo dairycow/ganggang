@@ -72,7 +72,7 @@ fn streamed_deltas_overwrite_in_place_and_close_once() {
     assert_eq!(lines[0], "── turn 1 ──");
     assert_eq!(lines[1], "\rgg streaming… 4 chars");
     assert_eq!(
-        lines[2], "\r  streaming… 7 chars",
+        lines[2], "\r   streaming… 7 chars",
         "the second frame is the blank one, and the word keeps its column"
     );
     assert_eq!(lines[3], "\r\u{1b}[2K\n");
@@ -274,7 +274,7 @@ fn the_spinner_flashes_the_footer_s_mark() {
         lines,
         vec![
             "\rgg streaming… 1 chars",
-            "\r  streaming… 2 chars",
+            "\r   streaming… 2 chars",
             "\rgg streaming… 3 chars",
             "\rgg streaming… 4 chars",
         ]
