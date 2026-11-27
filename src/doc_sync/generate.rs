@@ -159,7 +159,7 @@ fn schema_type(prop: &serde_json::Value) -> String {
 pub(super) fn tools_reference() -> String {
     let registry = crate::agent::tools::default_registry(
         std::path::PathBuf::from("."),
-        300,
+        crate::config::Config::default().bash_timeout_secs,
         crate::nested::ParentEnv::default().shared(),
     );
     let mut out = format!(

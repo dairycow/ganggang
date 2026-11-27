@@ -102,8 +102,8 @@ async fn nonzero_exit_is_an_error_result_with_output() {
     );
 }
 
-/// The deadline is the one the call asked for: `timeout_secs` is not
-/// pulled down to the ceiling, so a command dies where the caller said.
+/// A `timeout_secs` within the ceiling is the deadline as given: the
+/// command dies there.
 #[tokio::test]
 async fn timeout_kills_the_command_at_the_requested_deadline() {
     let tool = BashTool::new(std::env::temp_dir(), 1, no_nest());
