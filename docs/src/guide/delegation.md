@@ -26,7 +26,7 @@ The `bash` tool describes the run in a few environment variables (see [Configura
 | Turns | At most the parent's `max_turns`, when it has one |
 | Time | At most the parent's `max_seconds`, when it has one |
 | Bash ceiling | The nested run's own `bash` calls are bounded by `nested_bash_timeout_secs` (default 600) from its own [configuration](configuration.md#config-file), not the parent's `bash_timeout_secs` |
-| Hooks | The parent's, on or off. `--no-hooks` is ignored, with a warning |
+| Hooks | On or off as the parent's are: `--no-hooks` is ignored, with a warning. The files are those of the directory the nested run starts in, under the same [trusted projects](hooks.md#project-hooks) |
 | Model | The parent's current model, unless `-m` or `-P` is given |
 | Depth | One level: a nested run cannot start a nested run |
 | Session | A new session's header records the parent's session id as `parent_id`. A parent on `--no-session` keeps no session, so its nested runs record none |

@@ -98,9 +98,7 @@ struct Cli {
     )]
     list_models: bool,
 
-    /// Skip user hooks for this run, including the hooks file and the
-    /// project-file warning. Ignored in a nested run, which keeps its
-    /// parent's hooks.
+    /// Skip every hook for this run, user and project, including any warning about a project hooks file. Ignored in a nested run, which keeps its parent's hooks.
     #[arg(long)]
     no_hooks: bool,
 
@@ -302,9 +300,10 @@ async fn main() -> anyhow::Result<()> {
                 p.compact_threshold_tokens = endpoint.compact_threshold_tokens;
             }
         }
-        // Hooks are user-level policy (§22), loaded once and shared by the
-        // TUI factory. A project hooks file only produces a warning.
-        let (hooks, hook_warnings) = agent::hooks::load(&cwd, cli.no_hooks)?;
+        // Hooks (§22): the user's, then the launch directory's trusted
+        // project files. Loaded once here for the first boot; the factory
+        // reads them again for the directory each later session runs in.
+        let (hooks, hook_warnings) = agent::hooks::load(&cwd, &cfg.trusted_projects, cli.no_hooks)?;
         for warning in &hook_warnings {
             eprintln!("warning: {warning}");
         }
@@ -322,7 +321,7 @@ async fn main() -> anyhow::Result<()> {
         } else {
             None
         };
-        let (boot, factory) = boot_and_factory(&cli, &cfg, &cwd, abort.clone(), hooks.clone())?;
+        let (boot, factory) = boot_and_factory(&cli, &cfg, &cwd, abort.clone(), hooks)?;
         if let Some(path) = &boot.session_path {
             eprintln!("session: {}", path.display());
         }
@@ -336,7 +335,6 @@ async fn main() -> anyhow::Result<()> {
         let (skills, _) = agent::skills::discover(&cwd);
         let discovered = tui::Discovered {
             skills: std::sync::Arc::new(skills),
-            hooks: std::sync::Arc::new(hooks),
         };
         let exit = tui::run(boot, factory, discovered, cwd, cfg, abort, watch_cfg, draft).await?;
         return match exit {
@@ -563,7 +561,8 @@ async fn open_agent(
     crate::llm::health::maybe_probe_local_health(&mut endpoint).await;
     report_fallback(&cfg, &endpoint);
     let cwd = std::env::current_dir()?;
-    // A nested run keeps its parent's hooks, on or off.
+    // A nested run keeps its parent's hooks, on or off; which files it
+    // reads is its own directory's.
     let no_hooks = match nested_boot.as_ref() {
         Some(nest) => {
             if cli.no_hooks {
@@ -573,7 +572,7 @@ async fn open_agent(
         }
         None => cli.no_hooks,
     };
-    let (hooks, hook_warnings) = agent::hooks::load(&cwd, no_hooks)?;
+    let (hooks, hook_warnings) = agent::hooks::load(&cwd, &cfg.trusted_projects, no_hooks)?;
     for warning in &hook_warnings {
         eprintln!("warning: {warning}");
     }
@@ -619,13 +618,13 @@ fn boot_and_factory(
     // The factory rebuilds an agent for `/new` and `/resume` with a
     // one-shot cli: print mode, no prompt, no model or turn overrides —
     // the run's own pick of session, tools and hooks. A TUI boot never
-    // nests, so it carries no nest.
+    // nests, so it carries no nest. Hooks are read again per boot: a
+    // session's are its directory's, project files included.
     let cfg = cfg.clone();
     let cli_tools = cli.tools.clone();
     let no_session = cli.no_session;
     let watch = cli.watch;
     let no_hooks = cli.no_hooks;
-    let hooks = hooks.clone();
     let factory: tui::Factory = Arc::new(move |pick, cwd, endpoint, abort| {
         let cli = Cli {
             prompt: None,
@@ -647,6 +646,7 @@ fn boot_and_factory(
             max_seconds: None,
             session_file: None,
         };
+        let (hooks, _warnings) = agent::hooks::load(cwd, &cfg.trusted_projects, no_hooks)?;
         assemble_boot(BootOpts {
             cfg: &cfg,
             endpoint,

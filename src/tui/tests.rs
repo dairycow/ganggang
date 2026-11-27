@@ -478,10 +478,11 @@ fn model_choice(
     }
 }
 
-/// `/model <filter>` is the list's own text: Tab completes the
-/// highlighted `provider/model` into the composer, no trailing space.
+/// Tab is Enter in the `/model` list, not a completion: on a `/model
+/// <filter>` line it leaves the composer alone, and the highlighted row's
+/// command is still what Enter and Tab run.
 #[test]
-fn tab_on_a_model_filter_completes_the_argument() {
+fn tab_on_a_model_filter_does_not_complete_the_argument() {
     let mut state = State::new(
         std::path::Path::new("/tmp/x"),
         "m",
@@ -504,8 +505,15 @@ fn tab_on_a_model_filter_completes_the_argument() {
     state.picker_tab();
     assert_eq!(
         state.editor.text(),
-        "/model openai/gpt-5",
-        "the completion has no trailing space"
+        "/model gpt",
+        "Tab is the switch here: the typed filter stays"
+    );
+    assert_eq!(
+        state.picker_action(),
+        Some(crate::tui::picker::Pick::Command(
+            "/model openai/gpt-5".into()
+        )),
+        "the switch Tab and Enter both run"
     );
 }
 

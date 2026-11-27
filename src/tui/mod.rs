@@ -88,12 +88,11 @@ pub type Factory = Arc<
 
 /// The discovery sets the TUI renders lists from, shared read-only with
 /// the command handler. The Agent discovers its own copy of the skills
-/// (same cwd, same result); `/skill`, `/hooks` and `/model`
-/// all answer without a round-trip to the agent task.
+/// (same cwd, same result); `/skill` and `/model` answer without a
+/// round-trip to the agent task, and `/hooks` lists the set the state
+/// keeps from the boot.
 pub struct Discovered {
     pub skills: Arc<Vec<Skill>>,
-    /// User-level hooks (§22) — `/hooks` lists them.
-    pub hooks: Arc<crate::agent::hooks::Hooks>,
 }
 
 /// Why the TUI loop ended. `Restart` carries the exec plan for a `--watch`
@@ -110,7 +109,6 @@ pub enum Exit {
 struct Shared<'a> {
     factory: &'a Factory,
     ui_tx: &'a tokio::sync::mpsc::Sender<agent_task::UiEvent>,
-    hooks: &'a crate::agent::hooks::Hooks,
     abort: &'a Arc<AtomicBool>,
     config: &'a crate::config::Config,
 }
@@ -132,7 +130,6 @@ impl Shared<'_> {
             input_tx,
             ui_tx: self.ui_tx,
             skills,
-            hooks: self.hooks,
             cwd,
             abort: self.abort,
             config: self.config,
@@ -169,7 +166,7 @@ pub async fn run(
     // changes, and a restart puts the next process here, where that
     // process resolves `--resume <id>`.
     let launch_dir = cwd.clone();
-    let Discovered { skills, hooks } = discovered;
+    let Discovered { skills } = discovered;
     let _guard = term::Guard::new()?;
     let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
     let mut terminal =
@@ -207,6 +204,14 @@ pub async fn run(
     );
     if let Some(warning) = state.history.warning() {
         state.push_warning(&warning);
+    }
+    // The hooks the first boot loaded for this directory: `/hooks` lists
+    // them, and a project hooks file left unloaded is said here, where
+    // the startup warning on stderr is already behind the screen.
+    state.set_hooks(boot.agent.hooks().clone());
+    let unloaded = state.hooks().ignored().to_vec();
+    for notice in unloaded {
+        state.push_warning(&notice);
     }
     state.session_path = boot.session_path.clone();
     state.sessions_disabled = boot.sessions_disabled;
@@ -251,7 +256,6 @@ pub async fn run(
     let shared = Shared {
         factory: &factory,
         ui_tx: &ui_tx,
-        hooks: &hooks,
         abort: &abort,
         config: &config,
     };
@@ -418,78 +422,36 @@ pub async fn run(
                                 }
                             }
                         }
-                        // Enter in the list: the highlighted row acts on
-                        // it: a session opens, an action row runs its one
-                        // line, a model or skill row runs its command. The
-                        // list stays until the action is done — `new_session`
-                        // closes it when a session opens, and the loop closes
-                        // it when an action runs — so a failure leaves the
-                        // error in the list's panel, filter and all. A run in
-                        // flight does not hold up the one-line actions, which
-                        // only read the view and the clipboard; opening a
-                        // session or running a command waits for the run.
+                        // Enter in the list, and Tab in the `/model` list (where
+                        // Tab is Enter): the highlighted row acts on it, through
+                        // `act_on_highlight`.
                         KeyAction::Send if state.picker_open() => {
-                            use crate::tui::picker::Pick;
-                            let pick = state.picker_action();
-                            match pick {
-                                Some(pick) if pick.needs_idle() && state.busy => {
-                                    state.push_info(busy_note(&state));
-                                }
-                                Some(Pick::Open(session)) => {
-                                    let ctx = shared.ctx(
-                                        &mut state,
-                                        &mut input_tx,
-                                        &mut cwd,
-                                        &mut active_endpoint,
-                                    );
-                                    if let Err(e) = commands::open_session(session, ctx) {
-                                        state.pick_failed(&format!("{e:#}"));
-                                    }
-                                }
-                                Some(Pick::CopyPath) => {
-                                    match commands::copy_session_path(
-                                        &mut state,
-                                        clipboard::copy,
-                                    ) {
-                                        Ok(()) => {
-                                            state.history.record("/session copy");
-                                            state.close_picker();
-                                        }
-                                        Err(msg) => state.pick_failed(&msg),
-                                    }
-                                }
-                                Some(Pick::Info) => {
-                                    commands::session_info(&mut state, &active_endpoint.label());
-                                    state.history.record("/session info");
-                                    state.close_picker();
-                                }
-                                Some(Pick::Command(text)) => {
-                                    let ctx = shared.ctx(
-                                        &mut state,
-                                        &mut input_tx,
-                                        &mut cwd,
-                                        &mut active_endpoint,
-                                    );
-                                    match pick_command(&text, ctx).await {
-                                        Ok(()) => {
-                                            state.history.record(&text);
-                                            state.close_picker();
-                                        }
-                                        Err(e) => state.pick_failed(&format!("{e:#}")),
-                                    }
-                                }
-                                None => {}
-                            }
+                            act_on_highlight(
+                                &shared,
+                                &mut state,
+                                &mut input_tx,
+                                &mut cwd,
+                                &mut active_endpoint,
+                            )
+                            .await;
                         }
-                        // Tab in the list: every directory's sessions, or
-                        // this directory's; the highlighted row's
-                        // completion in the `/model` and `/skill` lists.
+                        // Tab in the list: the `/model` list switches to the
+                        // highlighted model, as `Enter` does; `/skill` completes
+                        // the highlighted row's command; `/session` shows every
+                        // directory's sessions, or this directory's.
                         KeyAction::SuggestComplete if state.picker_open() => {
                             match state.picker.as_ref().map(|pick| pick.list) {
-                                Some(
-                                    crate::tui::picker::List::Models
-                                    | crate::tui::picker::List::Skills,
-                                ) => state.picker_tab(),
+                                Some(crate::tui::picker::List::Models) => {
+                                    act_on_highlight(
+                                        &shared,
+                                        &mut state,
+                                        &mut input_tx,
+                                        &mut cwd,
+                                        &mut active_endpoint,
+                                    )
+                                    .await;
+                                }
+                                Some(crate::tui::picker::List::Skills) => state.picker_tab(),
                                 _ => state.toggle_session_scope(),
                             }
                         }
@@ -773,6 +735,59 @@ pub async fn run(
     match restart {
         Some(plan) => Ok(Exit::Restart(plan)),
         None => Ok(Exit::Done(note)),
+    }
+}
+
+/// Enter on an open list, and Tab in the `/model` list: the highlighted
+/// row acts on it. A session opens, an action row runs its one line, a
+/// model or skill row runs its command. The list stays until the action
+/// is done: `new_session` closes it when a session opens, and this closes
+/// it when an action runs, so a failure leaves the error in the list's
+/// panel, filter and all. A run in flight does not hold up the one-line
+/// actions, which only read the view and the clipboard; opening a session
+/// or running a command waits for the run.
+async fn act_on_highlight(
+    shared: &Shared<'_>,
+    state: &mut State,
+    input_tx: &mut tokio::sync::mpsc::Sender<AgentInput>,
+    cwd: &mut std::path::PathBuf,
+    active_endpoint: &mut crate::config::Endpoint,
+) {
+    use crate::tui::picker::Pick;
+    let pick = state.picker_action();
+    match pick {
+        Some(pick) if pick.needs_idle() && state.busy => {
+            state.push_info(busy_note(state));
+        }
+        Some(Pick::Open(session)) => {
+            let ctx = shared.ctx(state, input_tx, cwd, active_endpoint);
+            if let Err(e) = commands::open_session(session, ctx) {
+                state.pick_failed(&format!("{e:#}"));
+            }
+        }
+        Some(Pick::CopyPath) => match commands::copy_session_path(state, clipboard::copy) {
+            Ok(()) => {
+                state.history.record("/session copy");
+                state.close_picker();
+            }
+            Err(msg) => state.pick_failed(&msg),
+        },
+        Some(Pick::Info) => {
+            commands::session_info(state, &active_endpoint.label());
+            state.history.record("/session info");
+            state.close_picker();
+        }
+        Some(Pick::Command(text)) => {
+            let ctx = shared.ctx(state, input_tx, cwd, active_endpoint);
+            match pick_command(&text, ctx).await {
+                Ok(()) => {
+                    state.history.record(&text);
+                    state.close_picker();
+                }
+                Err(e) => state.pick_failed(&format!("{e:#}")),
+            }
+        }
+        None => {}
     }
 }
 

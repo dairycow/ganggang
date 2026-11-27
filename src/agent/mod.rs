@@ -72,8 +72,10 @@ pub struct Agent {
     pub(super) replay_reasoning: session::ReplayReasoning,
     /// Stable per-agent session id for provider routing headers (e.g. OpenCode Go).
     pub(super) session_id: String,
-    /// User-level hooks (§22). Loaded once per process; a run consults them
-    /// at the tool and run boundaries.
+    /// The hooks (§22) this agent's runs consult at the tool and run
+    /// boundaries: the user's, then the session directory's trusted
+    /// project files. Loaded when the agent is built; the TUI reads the
+    /// set back for `/hooks`.
     pub(super) hooks: hooks::Hooks,
     /// The nest the run's `bash` tool hands its commands, when the boot
     /// built one; `None` when tools were assembled without one.
@@ -239,6 +241,11 @@ impl Agent {
     /// rows render after a `/reload`.
     pub fn skills(&self) -> &[skills::Skill] {
         &self.skills
+    }
+
+    /// The hooks this agent runs with, for `/hooks`.
+    pub fn hooks(&self) -> &hooks::Hooks {
+        &self.hooks
     }
 
     /// Re-run discovery of context files and skills from disk and swap the

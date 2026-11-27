@@ -88,7 +88,6 @@ async fn jobs_classifies_is_known_and_forwards_to_the_agent_task() {
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: Arc::new(Vec::new()),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut cwd,
             abort: &abort,
             config: &config,
@@ -134,7 +133,6 @@ async fn reload_forwards_to_the_agent_task() {
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: Arc::new(Vec::new()),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut cwd,
             abort: &abort,
             config: &config,
@@ -147,6 +145,77 @@ async fn reload_forwards_to_the_agent_task() {
         input_rx.try_recv().unwrap(),
         super::super::AgentInput::Reload
     ));
+}
+
+/// `/hooks` lists the user's hooks and the project's, marks the project's,
+/// and says which project files were left unloaded.
+#[tokio::test]
+async fn hooks_lists_the_project_hooks_and_the_files_left_unloaded() {
+    use crate::agent::hooks::{Hook, HookEvent, Hooks};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    let mut state = super::super::view::State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        Arc::new(vec![]),
+        History::default(),
+    );
+    let hook = |command: &str| Hook {
+        event: HookEvent::RunEnd,
+        tools: None,
+        command: command.to_string(),
+        timeout_secs: 10,
+    };
+    let unloaded = "project hooks (/p/.gg/hooks.toml) are ignored until you trust /p".to_string();
+    state.set_hooks(Hooks::with_project(
+        vec![hook("user.sh")],
+        vec![hook("project.sh")],
+        vec![unloaded.clone()],
+    ));
+    let (mut input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
+    let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
+    let factory: super::super::Factory =
+        Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
+    let config = crate::config::Config::default();
+    let mut active_endpoint = config.active_endpoint();
+    let abort = Arc::new(AtomicBool::new(false));
+    let mut cwd = std::path::PathBuf::from("/tmp/x");
+
+    handle_command(
+        Command::Hooks,
+        CmdCtx {
+            state: &mut state,
+            factory: &factory,
+            input_tx: &mut input_tx,
+            ui_tx: &ui_tx,
+            skills: Arc::new(Vec::new()),
+            cwd: &mut cwd,
+            abort: &abort,
+            config: &config,
+            active_endpoint: &mut active_endpoint,
+        },
+    )
+    .await
+    .unwrap();
+
+    let lines = state.line_texts_for_test();
+    assert!(lines.contains(&"hooks (2):".to_string()), "{lines:?}");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.ends_with("user.sh") && !l.contains("project")),
+        "the user's hook, unmarked: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.ends_with("project.sh  (project)")),
+        "the project's hook, marked: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains(&unloaded)),
+        "the notice is in the transcript: {lines:?}"
+    );
 }
 
 /// `/skills` is gone: submitting it warns that `/skill` lists skills.
@@ -179,7 +248,6 @@ async fn skills_command_is_removed_with_a_hint() {
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: Arc::new(Vec::new()),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut cwd,
             abort: &abort,
             config: &config,
@@ -229,7 +297,6 @@ async fn the_session_command_prints_the_same_block_as_the_info_row() {
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: Arc::new(Vec::new()),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut cwd,
             abort: &abort,
             config: &config,
@@ -281,7 +348,6 @@ async fn the_bare_model_command_points_at_the_list() {
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: Arc::new(Vec::new()),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut cwd,
             abort: &abort,
             config: &config,
@@ -456,7 +522,6 @@ async fn run_skill_command(
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: skills.clone(),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut dir,
             abort: &abort,
             config: &config,
@@ -544,7 +609,6 @@ async fn model_command_switches_endpoints() {
                     input_tx: &mut input_tx,
                     ui_tx: &ui_tx,
                     skills: skills.clone(),
-                    hooks: &crate::agent::hooks::Hooks::default(),
                     cwd: &mut cwd,
                     abort: &abort,
                     config: &config,
@@ -683,7 +747,6 @@ async fn model_command_switches_to_a_discovered_model_and_probes_health() {
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: Arc::new(Vec::new()),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut cwd,
             abort: &abort,
             config: &config,
@@ -702,7 +765,6 @@ async fn model_command_switches_to_a_discovered_model_and_probes_health() {
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: Arc::new(Vec::new()),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut cwd,
             abort: &abort,
             config: &config,
@@ -845,7 +907,6 @@ async fn think_command_shows_and_updates_the_setting() {
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: skills.clone(),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut cwd,
             abort: &abort,
             config: &config,
@@ -876,7 +937,6 @@ async fn think_command_shows_and_updates_the_setting() {
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: skills.clone(),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut cwd,
             abort: &abort,
             config: &config,
@@ -910,7 +970,6 @@ async fn think_command_shows_and_updates_the_setting() {
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: skills.clone(),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut cwd,
             abort: &abort,
             config: &config,
@@ -941,7 +1000,6 @@ async fn think_command_shows_and_updates_the_setting() {
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: skills.clone(),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut cwd,
             abort: &abort,
             config: &config,
@@ -972,7 +1030,6 @@ async fn think_command_shows_and_updates_the_setting() {
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: skills.clone(),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut cwd,
             abort: &abort,
             config: &config,
@@ -995,7 +1052,6 @@ async fn think_command_shows_and_updates_the_setting() {
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: skills.clone(),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut cwd,
             abort: &abort,
             config: &config,
@@ -1018,7 +1074,6 @@ async fn think_command_shows_and_updates_the_setting() {
             input_tx: &mut input_tx,
             ui_tx: &ui_tx,
             skills: skills.clone(),
-            hooks: &crate::agent::hooks::Hooks::default(),
             cwd: &mut cwd,
             abort: &abort,
             config: &config,

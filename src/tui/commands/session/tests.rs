@@ -21,7 +21,6 @@ struct SessionRig {
     asked: Arc<Mutex<Vec<String>>>,
     config: crate::config::Config,
     active_endpoint: crate::config::Endpoint,
-    hooks: crate::agent::hooks::Hooks,
     cwd: std::path::PathBuf,
     abort: Arc<AtomicBool>,
 }
@@ -60,7 +59,6 @@ impl SessionRig {
             asked,
             config,
             active_endpoint,
-            hooks: crate::agent::hooks::Hooks::default(),
             cwd: std::path::PathBuf::from("/tmp/x"),
             abort: Arc::new(AtomicBool::new(false)),
         }
@@ -74,7 +72,6 @@ impl SessionRig {
             factory,
             config,
             active_endpoint,
-            hooks,
             cwd,
             abort,
             ..
@@ -85,7 +82,6 @@ impl SessionRig {
             input_tx,
             ui_tx,
             skills: Arc::new(Vec::new()),
-            hooks,
             cwd,
             abort,
             config,

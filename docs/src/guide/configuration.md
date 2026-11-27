@@ -49,6 +49,7 @@ Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `a
 - `max_retries` sets the number of extra attempts for transient LLM failures (HTTP 408, 429, 5xx, timeouts, and dropped connections). Backoff starts at 1000 ms with jitter and doubles with each retry, up to 30 s; a `Retry-After` header overrides the backoff (also capped at 30 s). A stream that fails before its first output, such as a connection that drops or a body that ends empty, is retried on the same budget. Once any text has streamed, a cut answer is [continued](modes.md#truncated-responses) rather than retried, so nothing is shown twice. Set to `0` to disable retries. Other 4xx responses fail immediately. When every attempt fails, the run ends and the error is [recorded in the session](sessions-compaction.md#failed-runs).
 - `request_timeout_secs` sets the total timeout in seconds for a complete LLM request and response stream (minimum `1`). Responses exceeding this limit are cut off and partial text is kept (see [Output modes and export](modes.md#print-mode)).
 - `tools` is the allowlist of tools offered to the model (also `--tools read,grep`). Unknown names are an error. See [Tools](tools.md).
+- `trusted_projects` lists the directories whose project hooks files (`.gg/hooks.toml`) may load; read from `~/.gg/config.toml` only, each entry an absolute path or starting with `~/`. See [Project hooks](hooks.md#project-hooks).
 - `context_window` should match the server's real window: compaction and the footer's context percentage use it. When unset on `strata` or a local URL, `gg` probes `/health` at startup for `max_context` (and `kv_resident` when `compact_threshold_tokens` is unset), falling back to `/v1/models` when needed. On `strata`, `gg` also adopts whichever model the server currently has loaded unless overridden via `-m` or `GG_MODEL`. See [Sessions and compaction](sessions-compaction.md).
 
 ## Providers
@@ -160,7 +161,7 @@ The `bash` tool sets `GG_NEST_DEPTH` and the five variables after it in every co
 | Path | Purpose |
 |---|---|
 | `~/.gg/config.toml`, `.gg/config.toml` | Configuration |
-| `~/.gg/hooks.toml` | [Hooks](hooks.md) (user level only) |
+| `~/.gg/hooks.toml`, `.gg/hooks.toml` | [Hooks](hooks.md); a project file loads only in a trusted project |
 | `~/.gg/AGENTS.md`, `AGENTS.md` | [Context files](context-and-skills.md#agentsmd) |
 | `~/.agents/skills/`, `.agents/skills/` | [Skills](context-and-skills.md#skills) |
 | `~/.gg/sessions/` | [Sessions](sessions-compaction.md), mode `0600` |

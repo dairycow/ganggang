@@ -14,7 +14,7 @@ pub(super) async fn handle_model(choice: Option<String>, ctx: CmdCtx<'_>) -> any
 
     match choice {
         None => {
-            state.push_info("pick a model from the list above the composer: ↑↓ then Enter");
+            state.push_info("pick a model from the list above the composer: ↑↓ then Enter or Tab");
         }
         Some(choice) => {
             // The list's own rows are what a discovered model is known by.

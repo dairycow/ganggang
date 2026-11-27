@@ -14,7 +14,7 @@
 These reduce accidents:
 
 - **`write` stays in the working directory** unless the call passes `force: true`. `bash` can still write anywhere, and symlinks can escape the check.
-- **Hooks are user-level only.** A project `.gg/hooks.toml` is ignored with a warning, so a cloned repository cannot add executable behaviour.
+- **Project hooks need your trust.** A `.gg/hooks.toml` loads only when its directory is in `trusted_projects` (`~/.gg/config.toml`) or under one that is, so a cloned repository cannot add executable behaviour. Any other project file is left unloaded with a warning.
 - **`HOME` must be absolute.** A relative or empty `HOME` is ignored for `~/.gg` and `~/.agents`, so user-level config, hooks and skills cannot silently become paths inside the current directory.
 - **Prompt history is plain text.** `~/.gg/history.jsonl` keeps what you submit in the TUI (the newest 500 lines, mode `0600`), secrets pasted into a prompt included. `--no-session` does not turn it off; running without `HOME` keeps the history in memory only.
 - **Resource limits.** Tool output, attachments, hook output and timeouts all have visible caps; runaway commands are killed with their whole process group.

@@ -155,6 +155,11 @@ pub struct Config {
     /// `disabled = true`. Kept so a later `-P`/`-m` naming one says why it
     /// is gone instead of blaming a typo.
     pub disabled_providers: BTreeSet<String>,
+    /// Directories whose project hooks files (`.gg/hooks.toml`, in the
+    /// directory or under it) may load. `trusted_projects` in
+    /// `~/.gg/config.toml` alone: trust is the user's to give, so a project
+    /// file's listing is ignored.
+    pub trusted_projects: Vec<std::path::PathBuf>,
     /// The ranked defaults passed over to reach the active one, each with
     /// its reason, as `name (no VARIABLE)` or `name (base_url is set and no
     /// provider is named)`. Empty when the first choice stands. Read it
@@ -210,6 +215,7 @@ impl Default for Config {
                 .collect(),
             providers,
             disabled_providers: BTreeSet::new(),
+            trusted_projects: Vec::new(),
             fallback_skipped: Vec::new(),
             base_url_without_provider: false,
             flat: None,
@@ -481,6 +487,8 @@ struct FileConfig {
     tools: Option<Vec<String>>,
     #[serde(default)]
     providers: BTreeMap<String, providers::FileProviderConfig>,
+    /// Read from the user file only; see [`Config::trusted_projects`].
+    trusted_projects: Option<Vec<String>>,
 }
 
 /// Read every layer and merge. The pure merging logic lives in [`merge`];
@@ -521,6 +529,7 @@ pub fn merge(
 ) -> anyhow::Result<Config> {
     let user = parse_layer(user_toml, "user config (~/.gg/config.toml)")?;
     let project = parse_layer(project_toml, "project config (.gg/config.toml)")?;
+    let trusted_projects = trusted_projects(&user.trusted_projects, env)?;
 
     let mut providers = defaults.providers.clone();
     let mut removed: BTreeSet<String> = BTreeSet::new();
@@ -711,6 +720,7 @@ pub fn merge(
         tools: pick_list(&user.tools, &project.tools).unwrap_or(defaults.tools),
         providers,
         disabled_providers: removed,
+        trusted_projects,
         fallback_skipped,
         base_url_without_provider,
         env_overrides,
@@ -824,6 +834,31 @@ fn parse_layer(raw: Option<&str>, what: &str) -> anyhow::Result<FileConfig> {
 
 fn env_value(env: &[(String, String)], name: &str) -> Option<String> {
     env.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone())
+}
+
+/// The user's `trusted_projects`, as paths. A leading `~/` expands against
+/// an absolute `HOME`; anything else has to be absolute, since a relative
+/// entry would trust whatever directory `gg` runs in.
+fn trusted_projects(
+    raw: &Option<Vec<String>>,
+    env: &[(String, String)],
+) -> anyhow::Result<Vec<std::path::PathBuf>> {
+    use std::path::PathBuf;
+    let home = env_value(env, "HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute());
+    raw.iter().flatten().try_fold(Vec::new(), |mut out, entry| {
+        let path = home
+            .as_deref()
+            .and_then(|home| entry.strip_prefix("~/").map(|rest| home.join(rest)))
+            .unwrap_or_else(|| PathBuf::from(entry));
+        anyhow::ensure!(
+            path.is_absolute(),
+            "trusted_projects entries must be absolute paths or start with ~/: {entry:?}"
+        );
+        out.push(path);
+        Ok(out)
+    })
 }
 
 fn pick_num<T: Clone>(user: &Option<T>, project: &Option<T>, default: T) -> T {

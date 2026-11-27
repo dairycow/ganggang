@@ -214,11 +214,21 @@ pub(in crate::tui) fn error_row(palette: &Palette, error: &str, width: usize) ->
 
 /// What the hint row says of the list's own keys, after "type filters":
 /// the session list's `Tab` (which scope it switches to) and its `Enter`,
-/// or the `Enter` then the `Tab` of a list whose `Tab` completes the row.
+/// the `Enter` then the `Tab` of a list whose `Tab` completes the row, or
+/// the one thing `Enter` and `Tab` both do in a list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::tui) enum HintKeys {
-    Sessions { every_directory: bool },
-    Complete { enter: &'static str },
+    Sessions {
+        every_directory: bool,
+    },
+    Complete {
+        enter: &'static str,
+    },
+    /// A list whose `Tab` is its `Enter`: the `/model` list, where both
+    /// switch to the highlighted row. `does` is what that is ("switch").
+    Same {
+        does: &'static str,
+    },
 }
 
 /// The panel's last row: how to drive the list, and where the highlight
@@ -242,6 +252,7 @@ pub(in crate::tui) fn hint_row(
             format!("Tab: {scope} · Enter picks")
         }
         HintKeys::Complete { enter } => format!("{enter} · Tab completes"),
+        HintKeys::Same { does } => format!("Enter/Tab {does}"),
     };
     let mut hint = String::from(" ↑↓ move");
     if let Some((selected, total)) = at {

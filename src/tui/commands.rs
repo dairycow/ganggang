@@ -51,7 +51,8 @@ pub enum Command {
     /// Show what the tools hold: the bash tool's kept background jobs and
     /// the jobs commands have registered in the run's job log.
     Jobs,
-    /// List loaded user-level hooks (§22), or say why there are none.
+    /// List the loaded hooks (§22), or say why there are none, and say
+    /// which project hooks files were left unloaded.
     Hooks,
     /// `/skill <name> [args]` runs a skill: `name` is the first word
     /// after the command, `args` the rest. A skill name with whitespace
@@ -166,7 +167,6 @@ pub(super) struct CmdCtx<'a> {
     pub input_tx: &'a mut tokio::sync::mpsc::Sender<super::AgentInput>,
     pub ui_tx: &'a tokio::sync::mpsc::Sender<super::agent_task::UiEvent>,
     pub skills: std::sync::Arc<Vec<crate::agent::skills::Skill>>,
-    pub hooks: &'a crate::agent::hooks::Hooks,
     pub cwd: &'a mut std::path::PathBuf,
     pub abort: &'a std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub config: &'a crate::config::Config,
@@ -181,7 +181,6 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
         input_tx,
         ui_tx,
         skills,
-        hooks,
         cwd,
         abort,
         config,
@@ -198,25 +197,38 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
         }
         Command::Quit => return Ok(true),
         Command::Hooks => {
+            let hooks = state.hooks().clone();
             if hooks.disabled() {
                 state.push_info("hooks disabled by --no-hooks");
             } else if hooks.is_empty() {
-                state.push_info("no hooks configured (~/.gg/hooks.toml)");
+                state.push_info(
+                    "no hooks configured (~/.gg/hooks.toml, or .gg/hooks.toml in a trusted project)",
+                );
             } else {
                 state.push_info(&format!("hooks ({}):", hooks.specs().len()));
-                for hook in hooks.specs() {
+                for (index, hook) in hooks.specs().iter().enumerate() {
                     let tools = hook
                         .tools
                         .as_ref()
                         .map_or_else(|| "*".to_string(), |tools| tools.join(","));
+                    // A project hook says so: it is the one a clone could
+                    // have brought, and the one `/hooks` is asked about.
+                    let from = if hooks.is_project(index) {
+                        "  (project)"
+                    } else {
+                        ""
+                    };
                     state.push_info(&format!(
-                        "  {:<9} [{}] {}s  {}",
+                        "  {:<9} [{}] {}s  {}{from}",
                         hook.event.as_str(),
                         tools,
                         hook.timeout_secs,
                         hook.command
                     ));
                 }
+            }
+            for notice in hooks.ignored() {
+                state.push_warning(notice);
             }
         }
         Command::Session => {
@@ -287,7 +299,6 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
                     input_tx,
                     ui_tx,
                     skills,
-                    hooks,
                     cwd,
                     abort,
                     config,
@@ -305,7 +316,6 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
                     input_tx,
                     ui_tx,
                     skills,
-                    hooks,
                     cwd,
                     abort,
                     config,
@@ -330,8 +340,11 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
 
 /// Point the session at a new agent: fresh input channel, fresh agent
 /// task (the old one exits when its channel closes — commands only run
-/// while idle, so no run is in flight to orphan), seeded transcript, and
-/// the footer showing `directory`, the one the agent runs in.
+/// while idle, so no run is in flight to orphan), seeded transcript, the
+/// skills and hooks the agent runs with, and the footer showing
+/// `directory`, the one the agent runs in. The hooks are the directory's
+/// own, so a project hooks file left unloaded there is said in the
+/// transcript, as the first boot's is at start.
 fn swap_agent(
     boot: super::Boot,
     state: &mut super::view::State,
@@ -345,5 +358,11 @@ fn swap_agent(
     state.set_directory(directory);
     state.seed_from_entries(boot.agent.entries());
     state.set_skills(std::sync::Arc::new(boot.agent.skills().to_vec()));
+    let hooks = boot.agent.hooks().clone();
+    let unloaded = hooks.ignored().to_vec();
+    state.set_hooks(hooks);
+    for notice in unloaded {
+        state.push_warning(&notice);
+    }
     tokio::spawn(super::agent_task::agent_task(boot.agent, rx, ui_tx.clone()));
 }

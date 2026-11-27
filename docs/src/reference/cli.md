@@ -38,7 +38,7 @@ Options:
       --list-models
           List configured providers and models (probing local servers), then exit
       --no-hooks
-          Skip user hooks for this run, including the hooks file and the project-file warning. Ignored in a nested run, which keeps its parent's hooks
+          Skip every hook for this run, user and project, including any warning about a project hooks file. Ignored in a nested run, which keeps its parent's hooks
       --reasoning-effort <EFFORT>
           Reasoning effort sent to supporting endpoints (e.g. "low", "medium", "high", "xhigh", "none"). Pass "" to clear a provider preset's default
       --thinking-budget <TOKENS>
@@ -71,7 +71,7 @@ Options:
 | `-P, --provider <PROVIDER>` | Provider preset or configured provider name (e.g. "strata", "glm-coding-plan", "opencode-go", "deepseek", "openrouter") |  |  |
 | `-m, --model <MODEL>` | Model id or `provider/model` (overrides config and provider default) |  |  |
 | `--list-models` | List configured providers and models (probing local servers), then exit |  |  |
-| `--no-hooks` | Skip user hooks for this run, including the hooks file and the project-file warning. Ignored in a nested run, which keeps its parent's hooks |  |  |
+| `--no-hooks` | Skip every hook for this run, user and project, including any warning about a project hooks file. Ignored in a nested run, which keeps its parent's hooks |  |  |
 | `--reasoning-effort <EFFORT>` | Reasoning effort sent to supporting endpoints (e.g. "low", "medium", "high", "xhigh", "none"). Pass "" to clear a provider preset's default |  |  |
 | `--thinking-budget <TOKENS>` | Cap thinking/reasoning tokens per turn (Strata/local backends). 0 disables any preset cap |  |  |
 | `--max-turns <N>` | Maximum turns per run (0 disables). Soft wrap-up nudge at 80% of budget. A nested run cannot exceed its parent's |  |  |

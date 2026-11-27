@@ -95,6 +95,10 @@ pub struct State {
     /// Shared read-only with the command handler, like `skills`.
     models: Arc<Vec<crate::tui::models::ModelChoice>>,
     active_model: String,
+    /// The hooks the session's agent runs with (§22): the user's, then the
+    /// directory's trusted project files. What `/hooks` lists; a swapped
+    /// agent brings its own.
+    hooks: crate::agent::hooks::Hooks,
     /// Highlighted row of the suggestion popup. Resets to the top
     /// whenever the composer text changes (render syncs it); ↑/↓ move
     /// it, Tab completes from it.
@@ -164,6 +168,7 @@ impl State {
             skills,
             models: Arc::new(Vec::new()),
             active_model: model.to_string(),
+            hooks: crate::agent::hooks::Hooks::default(),
             suggest_selected: 0,
             suggest_filter: String::new(),
             suggest_view_rows: 0,
@@ -197,6 +202,17 @@ impl State {
     /// what the command handler snapshots for its lists.
     pub fn skills_arc(&self) -> Arc<Vec<crate::agent::skills::Skill>> {
         self.skills.clone()
+    }
+
+    /// The hooks the session runs with: what `/hooks` lists.
+    pub fn hooks(&self) -> &crate::agent::hooks::Hooks {
+        &self.hooks
+    }
+
+    /// The hooks a boot loaded for the directory the session runs in: the
+    /// first boot's at start, and each swapped agent's own.
+    pub fn set_hooks(&mut self, hooks: crate::agent::hooks::Hooks) {
+        self.hooks = hooks;
     }
 
     /// Replace the skill set (a `/reload` or a swapped agent). While the
