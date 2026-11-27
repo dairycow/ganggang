@@ -5,7 +5,7 @@ description: "Cut a ganggang release: version bump, docs sync, cargo publish, ta
 
 # Release
 
-Run from the repository root. The `bash` tool caps every call at `bash_timeout_secs` (default 30 s, see `AGENTS.md`), so anything that takes longer runs with `background: true` on the call (then `wait_for`), in the shell background as in step 4, or with the cap raised first.
+Run from the repository root. The `bash` tool refuses a `timeout_secs` over the cap `bash_timeout_secs` (default 300 s, see `AGENTS.md`) and kills a longer command at that cap, so anything that takes longer runs with `background: true` on the call (then `wait_for`), in the shell background as in step 4, or with the cap raised first.
 
 1. Bump `version` in `Cargo.toml`; commit as `Bump version to X` (matches the existing tag history).
 2. `./scripts/sync-docs.sh`, then `cargo test` (the doc contracts fail on stale reference pages).
@@ -19,7 +19,7 @@ Pitfalls:
 
 - The crates.io API returns 403 to the default `curl` User-Agent; always pass `-A "ganggang-release"` (or any non-default UA).
 - `cargo publish` runs in a background process group, so a gg run abort does not kill it; always confirm the outcome from the log before claiming the release is done.
-- `gh release list` / `gh release view` are fine inside the 30 s cap; `cargo publish` and `cargo test` are not.
+- `gh release list` / `gh release view` are fine inside the 300 s cap; `cargo publish` and `cargo test` are not.
 - `cargo publish`'s verification build writes `target/debug/gg` from the packed copy (`target/package/ganggang-<v>/src`) and points the cargo fingerprint at those packed files. Every later `cargo build` then reports "Finished" no matter how new the live `src/` is, so `gg --watch` and `cargo run` keep running the stale binary. The `cargo build` in step 4 restores the live-source fingerprint.
 
 Full checklist: `docs/src/maintaining-docs.md` §4.

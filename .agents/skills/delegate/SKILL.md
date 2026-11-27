@@ -20,12 +20,12 @@ Do a quick read, or work where each step depends on the last, in this run.
 ## How
 
 1. Write each prompt to a file. The subagent starts empty, so name the goal, the files, the constraints and the shape of the answer you want.
-2. Run one job per line in a single `bash` call, backgrounded, then `wait`. Set `timeout_secs` on the call above every job's `--timeout`:
+2. Run one job per line in a single `bash` call, backgrounded, then `wait`. A job whose `--timeout` fits inside the bash ceiling runs in one foreground call, as here; a job that may outlast the ceiling takes `background: true` on the call, collected with `wait_for`; a later call with `wait_job: <name>` waits for one delegate job by name and can outlast the ceiling:
 
    ```sh
    D=.agents/skills/delegate
-   $D/delegate.sh --job review-a --prompt review-a.md --timeout 600 &
-   $D/delegate.sh --job review-b --prompt review-b.md --timeout 600 &
+   $D/delegate.sh --job review-a --prompt review-a.md --timeout 240 &
+   $D/delegate.sh --job review-b --prompt review-b.md --timeout 240 &
    wait
    ```
 
