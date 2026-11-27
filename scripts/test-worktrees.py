@@ -260,24 +260,50 @@ class WorktreesTest(unittest.TestCase):
         self.assertIn("already has main", proc.stdout)
         self.assertEqual(self.head("d"), tip)
 
-    def test_run_and_gate_build_into_one_shared_directory(self):
-        shared = self.main / ".worktrees" / "target"
-        override = self.root / "elsewhere-target"
+    def test_run_and_gate_leave_cargo_target_dir_unset(self):
+        # Each worktree builds into its own target/; nothing exports one.
         self.new("t")
         proc = self.sh("run", "t", "--prompt", str(self.prompt), "--dir", str(self.jobs))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertEqual((self.stub_dir / "target_dir").read_text(), str(shared))
-        proc = self.sh(
-            "run", "t", "--prompt", str(self.prompt), "--dir", str(self.jobs),
-            env=self.env(GG_DELEGATE_TARGET_DIR=str(override)),
-        )
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertEqual((self.stub_dir / "target_dir").read_text(), str(override))
+        self.assertEqual((self.stub_dir / "target_dir").read_text(), "")
         self.work("t")
         self.assertEqual(self.gate("t").returncode, 0)
-        self.assertEqual((self.stub_dir / "gate_target").read_text(), str(shared))
-        self.assertEqual(self.gate("t", GG_DELEGATE_TARGET_DIR=str(override)).returncode, 0)
-        self.assertEqual((self.stub_dir / "gate_target").read_text(), str(override))
+        self.assertEqual((self.stub_dir / "gate_target").read_text(), "")
+
+    def reflink_probe(self):
+        """Can this filesystem clone files? One small cp decides."""
+        src = self.root / "reflink-probe-src"
+        dst = self.root / "reflink-probe-dst"
+        src.write_text("x\n", encoding="utf-8")
+        return subprocess.run(
+            ["cp", "-a", "--reflink=always", str(src), str(dst)], capture_output=True
+        ).returncode == 0
+
+    def test_new_seeds_the_build_from_the_main_checkout(self):
+        deps = self.main / "target" / "debug" / "deps"
+        deps.mkdir(parents=True)
+        warm = deps / "libwarm.rlib"
+        warm.write_text("warm\n", encoding="utf-8")
+        proc = self.sh("new", "s")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        copied = self.wt("s") / "target" / "debug" / "deps" / "libwarm.rlib"
+        if not self.reflink_probe():
+            # No reflinks on this filesystem (tmpfs, say): the seed says
+            # so and leaves the worktree to build from nothing.
+            self.assertIn("worktrees: target not seeded; s builds from nothing", proc.stdout)
+            self.assertFalse(copied.exists())
+            return
+        self.assertIn("worktrees: seeded s's target from the main checkout", proc.stdout)
+        self.assertEqual(copied.read_text(), "warm\n")
+        # The seed reads the main checkout and writes the worktree only:
+        # the file there is unchanged, and the copy has an inode of its own.
+        self.assertEqual(warm.read_text(), "warm\n")
+        self.assertNotEqual(warm.stat().st_ino, copied.stat().st_ino)
+
+    def test_new_without_a_target_in_the_main_checkout_says_so(self):
+        proc = self.new("n")
+        self.assertIn("worktrees: target not seeded; n builds from nothing", proc.stdout)
+        self.assertFalse((self.wt("n") / "target").exists())
 
     def test_land_lands_several_jobs_in_order(self):
         # Disjoint files: jobs that edit the same file land one after the

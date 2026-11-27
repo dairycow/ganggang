@@ -31,11 +31,14 @@
 # and only by fast-forward. merge is the one command that writes in the
 # main checkout. Nothing is pushed, rebased, forced or stashed.
 #
-# run and gate build into one directory shared by the worktrees:
-# CARGO_TARGET_DIR is $MAIN/.worktrees/target, or GG_DELEGATE_TARGET_DIR,
-# so the crate graph builds once for all jobs and the main checkout's own
-# target/ is never used. Cargo serialises concurrent builds on its lock:
-# the first build pays, the rest wait, then everything is warm.
+# One CARGO_TARGET_DIR shared by the worktrees would be wrong: cargo names
+# a path package's artifacts by a hash relative to the workspace root, so
+# two checkouts of one repository share one artifact file, and freshness
+# is by mtime, so a gate could pass on another worktree's binary. Instead
+# `new` seeds the worktree's target/debug from the main checkout's with
+# reflinks, copy-on-write clones with inodes of their own: warm
+# dependencies, nothing shared, and a filesystem without reflinks builds
+# from nothing.
 #
 # Exit status: 0 done, 2 refused or misused (nothing was changed), and 1
 # when a step ran and failed: the gate, an update with conflicts, a merge
@@ -60,8 +63,8 @@ usage: worktrees.sh new NAME [-b BRANCH] [--from REF]
 Runs the git side of the delegate skill: one worktree per job that edits,
 under the main checkout's .worktrees/. land updates, re-gates and merges
 each NAME in turn. NAME may use letters, digits, dot, dash and underscore.
-GG_DELEGATE_TARGET_DIR sets the build directory the worktrees share
-(default: .worktrees/target).
+new seeds the worktree's target/debug from the main checkout's with
+reflinks; without them the worktree builds from nothing.
 EOF
 }
 
@@ -175,6 +178,29 @@ cmd_new() {
   mkdir -p "$common/info"
   exclude="$common/info/exclude"
   grep -qxF '.worktrees/' "$exclude" 2>/dev/null || echo '.worktrees/' >>"$exclude"
+  # Seed the build before anything in the worktree is edited, so the
+  # crate's own sources are newer than the seeded fingerprints and it
+  # rebuilds while its dependencies stay fresh. -a keeps the mtimes, and
+  # --reflink=always fails rather than shares an inode, so on a filesystem
+  # without reflinks nothing is kept and the worktree builds from nothing.
+  seeded=no
+  if [[ -d "$MAIN/target/debug/deps" ]]; then
+    mkdir -p "$wt/target/debug"
+    seeded=yes
+    for part in deps build .fingerprint; do
+      if [[ -e "$MAIN/target/debug/$part" ]] &&
+        ! cp -a --reflink=always "$MAIN/target/debug/$part" "$wt/target/debug/$part" 2>/dev/null; then
+        rm -rf "$wt/target/debug"
+        seeded=no
+        break
+      fi
+    done
+  fi
+  if [[ "$seeded" == yes ]]; then
+    echo "worktrees: seeded $name's target from the main checkout"
+  else
+    echo "worktrees: target not seeded; $name builds from nothing"
+  fi
   echo "worktrees: worktree $name at $wt, on $branch at $(short "$tip") ($from)"
 }
 
@@ -184,9 +210,6 @@ cmd_run() {
   [[ -x "$S/delegate.sh" ]] || die "delegate.sh not found beside worktrees.sh"
   echo "worktrees: job $name in $wt" >&2
   cd "$wt"
-  # The job builds where the gate builds: one shared directory, so the
-  # crates are compiled once for every worktree.
-  export CARGO_TARGET_DIR="$TARGET_DIR"
   # --job goes last, so NAME wins over one of the caller's.
   exec "$S/delegate.sh" "$@" --job "$name"
 }
@@ -200,7 +223,7 @@ cmd_gate() {
     die "no executable scripts/pre-commit-check.sh in $wt"
   before=$(git -C "$wt" rev-parse HEAD)
   echo "worktrees: gating $name at $(short "$before")" >&2
-  (cd "$wt" && CARGO_TARGET_DIR="$TARGET_DIR" scripts/pre-commit-check.sh) || fail "gate FAILED for $name; nothing recorded"
+  (cd "$wt" && scripts/pre-commit-check.sh) || fail "gate FAILED for $name; nothing recorded"
   after=$(git -C "$wt" rev-parse HEAD)
   [[ "$after" == "$before" ]] || fail "$name moved during the gate; gate it again"
   clean
@@ -366,10 +389,6 @@ cmd_list() {
 }
 
 main_checkout
-# One build directory for every worktree: a fresh worktree would build the
-# crate graph from nothing, a job's bash calls die at 30 s so no nested run
-# can run the tests cold, and every gate would compile again.
-TARGET_DIR=${GG_DELEGATE_TARGET_DIR:-$MAIN/.worktrees/target}
 cmd=${1:-}
 [[ $# -gt 0 ]] && shift
 case $cmd in

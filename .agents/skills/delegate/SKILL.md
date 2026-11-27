@@ -60,7 +60,7 @@ Each job ends with one line: the exit status, the answer's size and the session 
 - To end one job early, kill its process group by the pid `delegate.sh` wrote: `kill -TERM -- -$(cat <dir>/<job>.pid)`.
 - A subagent cannot delegate: subagents are one level deep.
 - Jobs share the working tree. Give jobs that edit disjoint files, or give each one a worktree (**Jobs that edit**).
-- The worktrees build into one shared directory, so no worktree builds the crate graph from nothing. Cargo serialises concurrent builds on its lock: the first job pays, the rest wait, then everything is warm. The job's `--timeout` has to cover the build it may wait for, and `gate` takes several `wait_for` calls.
+- The worktrees build into their own `target/`, and `new` seeds a new one with a copy-on-write copy of the main checkout's build, so the first gate compiles only the crate; a filesystem without reflinks builds from nothing. The job's `--timeout` has to cover its gate run, and `gate` takes several `wait_for` calls.
 - `delegate.sh` runs `gg` from `PATH`. Set `GG=/path/to/gg` to use another build.
 
 ## Jobs that edit
@@ -97,7 +97,7 @@ Make a small change in this run, on a branch. This run writes the prompts, reads
 
 - Stay in the worktree. No other checkout, no branch switch, no stash, no merge, no push, no delegation.
 - Commit on the branch. The hook runs the commit gate, which outlives a plain `bash` call: commit with `background: true` and collect with `wait_for`. Never `--no-verify`.
-- Leave `CARGO_TARGET_DIR` alone. `worktrees.sh` sets it for `run` and `gate` to `$MAIN/.worktrees/target`, or `GG_DELEGATE_TARGET_DIR`, so the worktrees share one build; the main checkout's own `target/` holds the installed `gg` and is never used.
+- Leave `CARGO_TARGET_DIR` alone. A worktree builds into its own `target/`, seeded by `new`; the main checkout's holds the installed `gg`.
 
 ### Rules for the run
 
