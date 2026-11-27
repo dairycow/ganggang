@@ -24,6 +24,7 @@ SCRIPT = Path(__file__).resolve().parent.parent / ".agents" / "skills" / "delega
 
 STUB = """#!/usr/bin/env bash
 printf '%s\\0' "$@" > "$STUB_DIR/argv"
+printf '%s' "${CARGO_TARGET_DIR-}" > "$STUB_DIR/target_dir"
 cat > "$STUB_DIR/stdin"
 case "${STUB_MODE:-ok}" in
   ok) echo "the answer" ;;
@@ -33,6 +34,7 @@ esac
 
 GATE = """#!/usr/bin/env bash
 # A stand-in for the commit gate: no cargo runs in the tests.
+printf '%s' "${CARGO_TARGET_DIR-}" > "$STUB_DIR/gate_target"
 echo "stub gate in $PWD"
 case "${GATE_MODE:-ok}" in
   ok) ;;
@@ -257,6 +259,25 @@ class WorktreesTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("already has main", proc.stdout)
         self.assertEqual(self.head("d"), tip)
+
+    def test_run_and_gate_build_into_one_shared_directory(self):
+        shared = self.main / ".worktrees" / "target"
+        override = self.root / "elsewhere-target"
+        self.new("t")
+        proc = self.sh("run", "t", "--prompt", str(self.prompt), "--dir", str(self.jobs))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual((self.stub_dir / "target_dir").read_text(), str(shared))
+        proc = self.sh(
+            "run", "t", "--prompt", str(self.prompt), "--dir", str(self.jobs),
+            env=self.env(GG_DELEGATE_TARGET_DIR=str(override)),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual((self.stub_dir / "target_dir").read_text(), str(override))
+        self.work("t")
+        self.assertEqual(self.gate("t").returncode, 0)
+        self.assertEqual((self.stub_dir / "gate_target").read_text(), str(shared))
+        self.assertEqual(self.gate("t", GG_DELEGATE_TARGET_DIR=str(override)).returncode, 0)
+        self.assertEqual((self.stub_dir / "gate_target").read_text(), str(override))
 
     def test_new_refusals(self):
         for args in (

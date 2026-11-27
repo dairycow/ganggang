@@ -27,6 +27,12 @@
 # and only by fast-forward. merge is the one command that writes in the
 # main checkout. Nothing is pushed, rebased, forced or stashed.
 #
+# run and gate build into one directory shared by the worktrees:
+# CARGO_TARGET_DIR is $MAIN/.worktrees/target, or GG_DELEGATE_TARGET_DIR,
+# so the crate graph builds once for all jobs and the main checkout's own
+# target/ is never used. Cargo serialises concurrent builds on its lock:
+# the first build pays, the rest wait, then everything is warm.
+#
 # Exit status: 0 done, 2 refused or misused (nothing was changed), and 1
 # when a step ran and failed: the gate, an update with conflicts, a merge
 # git refused. See scripts/test-worktrees.py.
@@ -48,6 +54,8 @@ usage: worktrees.sh new NAME [-b BRANCH] [--from REF]
 Runs the git side of the delegate skill: one worktree per job that edits,
 under the main checkout's .worktrees/. NAME may use letters, digits, dot,
 dash and underscore.
+GG_DELEGATE_TARGET_DIR sets the build directory the worktrees share
+(default: .worktrees/target).
 EOF
 }
 
@@ -170,6 +178,9 @@ cmd_run() {
   [[ -x "$S/delegate.sh" ]] || die "delegate.sh not found beside worktrees.sh"
   echo "worktrees: job $name in $wt" >&2
   cd "$wt"
+  # The job builds where the gate builds: one shared directory, so the
+  # crates are compiled once for every worktree.
+  export CARGO_TARGET_DIR="$TARGET_DIR"
   # --job goes last, so NAME wins over one of the caller's.
   exec "$S/delegate.sh" "$@" --job "$name"
 }
@@ -183,7 +194,7 @@ cmd_gate() {
     die "no executable scripts/pre-commit-check.sh in $wt"
   before=$(git -C "$wt" rev-parse HEAD)
   echo "worktrees: gating $name at $(short "$before")" >&2
-  (cd "$wt" && scripts/pre-commit-check.sh) || fail "gate FAILED for $name; nothing recorded"
+  (cd "$wt" && CARGO_TARGET_DIR="$TARGET_DIR" scripts/pre-commit-check.sh) || fail "gate FAILED for $name; nothing recorded"
   after=$(git -C "$wt" rev-parse HEAD)
   [[ "$after" == "$before" ]] || fail "$name moved during the gate; gate it again"
   clean
@@ -309,6 +320,10 @@ cmd_list() {
 }
 
 main_checkout
+# One build directory for every worktree: a fresh worktree would build the
+# crate graph from nothing, a job's bash calls die at 30 s so no nested run
+# can run the tests cold, and every gate would compile again.
+TARGET_DIR=${GG_DELEGATE_TARGET_DIR:-$MAIN/.worktrees/target}
 cmd=${1:-}
 [[ $# -gt 0 ]] && shift
 case $cmd in
