@@ -152,16 +152,17 @@ fn an_80_by_24_frame_is_the_theme_not_the_terminal() {
     }
 }
 
-/// `gg` sits at the left edge of the footer, and while a run is live the
-/// name itself flashes in those two cells: the start of the row says a
-/// run is working without a status word, and the rest of the row keeps
-/// its cells. When the run ends, the name sits still again. No dot and
-/// no ring is drawn anywhere in the row, frame after frame.
+/// `gg` sits at the left edge of the footer, at rest and on every frame
+/// of a run: the glyphs never change, so the row's text is the rest row
+/// in every frame, and the colour the mark wears, not the glyphs, says
+/// a run is live. It cycles the crest's three reds, one per frame. No
+/// dot and no ring is drawn anywhere in the row.
 #[test]
-fn the_mark_is_gg_at_rest_and_flashes_while_a_run_works() {
+fn the_mark_is_gg_at_rest_and_while_a_run_works() {
     use crate::tui::footer::MARK_FRAMES as FRAMES;
 
-    // Idle: the mark is the name, at the left edge of the footer's row.
+    // Idle: the mark is the name, at the left edge of the footer's row,
+    // in the crest's scarlet.
     let (mut terminal, mut state) = fresh(80, 24);
     draw(&mut terminal, &mut state);
     let rest = row(&terminal, 23);
@@ -170,25 +171,17 @@ fn the_mark_is_gg_at_rest_and_flashes_while_a_run_works() {
         "the mark sits at the left of the footer: {rest:?}"
     );
 
-    // A run is live: the name's two cells become the mark, and the
-    // flash is all the row says about the run.
+    // A run is live: the row reads as the rest row, frame after frame,
+    // and the mark's colour is all that moves.
     state.begin_run();
+    let mut seen = Vec::new();
     for frame in 0..FRAMES.len() as u16 {
         state.tick_spinner();
         draw(&mut terminal, &mut state);
         let footer = row(&terminal, 23);
-        // The row opens with the frame the footer is actually on — read
-        // back from the footer, so the test checks the drawing rather than
-        // a count it could get wrong.
-        let expected = state.footer.mark();
         assert_eq!(
-            expected.chars().count(),
-            2,
-            "the mark takes the name's two cells: {expected:?}"
-        );
-        assert!(
-            footer.starts_with(expected.as_str()),
-            "frame {frame} leads the footer: {footer:?}, expected {expected:?}"
+            footer, rest,
+            "frame {frame} reads as the rest row: {footer:?}"
         );
         assert!(
             !footer.contains('●') && !footer.contains('○'),
@@ -198,22 +191,24 @@ fn the_mark_is_gg_at_rest_and_flashes_while_a_run_works() {
             !footer.contains("working") && !footer.contains("ready"),
             "frame {frame} carries no status word: {footer:?}"
         );
-        // What follows the mark is what followed the name, to the cell.
-        assert_eq!(
-            footer.strip_prefix(expected.as_str()),
-            rest.strip_prefix("gg"),
-            "frame {frame} moves nothing behind the mark: {footer:?}"
-        );
+        seen.push(terminal.backend().buffer()[(0, 23)].style().fg);
     }
+    // The run began on the crest, so the drawn frames come round soft,
+    // deep, scarlet: the beat is the crest's three reds, one per frame.
+    let p = state.palette();
+    assert_eq!(
+        seen,
+        vec![Some(p.accent_soft), Some(p.accent_deep), Some(p.accent)],
+        "the crest's three reds, one per drawn frame: {seen:?}"
+    );
 
-    // The run ends and the mark is the name again.
+    // The run ends and the mark sits still in its crest red.
     state.run_finished();
     draw(&mut terminal, &mut state);
     let footer = row(&terminal, 23);
-    assert!(
-        footer.starts_with("gg │ "),
-        "the mark comes back: {footer:?}"
-    );
+    assert_eq!(footer, rest, "the row is the rest row again: {footer:?}");
+    let fg = terminal.backend().buffer()[(0, 23)].style().fg;
+    assert_eq!(fg, Some(p.accent), "the mark rests in the crest's scarlet");
 }
 
 /// A 24×8 terminal is a real thing (a narrow split, a phone terminal): the
@@ -748,8 +743,8 @@ fn an_indexed_session_draws_only_indexed_colours() {
         shows(&terminal, "fn a() {}"),
         "the code band still reads: {text}"
     );
-    // The footer is the last row: the mark leads it in the name's two
-    // cells, the row has no status word, and no dot is drawn.
+    // The footer is the last row: the mark leads it, and the row is the
+    // rest row while a run works, the beat being colour only.
     let footer = row(&terminal, 15);
     assert_eq!(
         footer, "gg │ …/tmp/x │ m │ ↑0 ↓0",

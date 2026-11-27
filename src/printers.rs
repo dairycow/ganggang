@@ -199,12 +199,11 @@ impl Printer {
                 if !self.spin {
                     return Vec::new();
                 }
-                // The footer's mark, so print mode and the TUI say the
-                // same thing while a run works: the name flashes, on,
-                // off, on. The frame's two cells go in whole, so the
-                // `gg ` of an up frame and the `   ` of the off frame
-                // are the same width, and `streaming…` keeps its
-                // column.
+                // The footer's frames, so print mode and the TUI take
+                // the same turn. Print mode's stderr has no colour, so
+                // its beat is gone: every frame spells the name, and
+                // the character count is what ticks. The frame's two
+                // cells go in whole, so `streaming…` keeps its column.
                 let (mark, blank) = MARK_FRAMES[self.spinner % MARK_FRAMES.len()];
                 self.spinner = self.spinner.wrapping_add(1);
                 self.spinner_open = true;
