@@ -10,7 +10,10 @@ Hooks are one-shot shell commands that run at three points in the agent loop. Ho
 
 ## Configuring
 
-Hooks are configured only in `~/.gg/hooks.toml`:
+Hooks are configured in two files, with the same format in each:
+
+- `~/.gg/hooks.toml`: your hooks, in every directory.
+- `.gg/hooks.toml`: the project's, looked for in the repository root and in each directory below it down to the one you run `gg` in. It loads only for a project you trust; see [Project hooks](#project-hooks).
 
 ```toml
 # ~/.gg/hooks.toml
@@ -32,9 +35,36 @@ command = "notify-send gg 'run finished'"
 
 - `command` runs as `bash -c` in the session's working directory.
 - `tools` names tools exactly (see [Tools](tools.md)); omit it, or use `["*"]`, to match all. It is rejected for `run_end`, and an empty list is an error.
-- Hooks for one event run in file order. The first `pre_tool` denial wins.
-- A project `.gg/hooks.toml` is **ignored** with a startup warning: a cloned repository cannot add executable behaviour.
-- `/hooks` in the TUI lists what loaded. `gg --no-hooks` skips loading entirely, even a broken hooks file.
+- Hooks for one event run in file order: yours first, then the project's, from the repository root down to the working directory. The first `pre_tool` denial wins.
+- Hooks load when a session starts: when `gg` starts, on `/new`, and when `/session` opens a session in another directory. An edit to a file takes effect at the next of those, or on a restart.
+- `/hooks` in the TUI lists what loaded, marks the project's hooks, and names any project file left unloaded. `gg --no-hooks` skips loading entirely, even a broken hooks file.
+
+### Project hooks
+
+A project hooks file is executable behaviour a cloned repository can carry, so it loads only for a project you have said you trust. List the project in your user config:
+
+```toml
+# ~/.gg/config.toml
+trusted_projects = ["/home/me/work/proj", "/opt/mono"]
+```
+
+A `.gg/hooks.toml` loads when its directory is listed, or lies under one that is, so the sub-projects of a monorepo and the worktrees under a checkout are covered by one entry. Any other project file is left unloaded, with a warning that names the directory to add: on stderr at startup, in the transcript, and from `/hooks`. The listing is read from `~/.gg/config.toml` alone, so a project `.gg/config.toml` cannot trust itself, and each entry must be an absolute path or start with `~/`.
+
+```toml
+# .gg/hooks.toml
+[[hooks]]
+event = "post_tool"
+tools = ["edit", "write"]
+command = "cargo fmt"
+
+[[hooks]]
+event = "pre_tool"
+tools = ["bash"]
+command = "./scripts/gg-commit-gate.sh"
+timeout_secs = 300
+```
+
+A trusted project file is config like your own: one that cannot be parsed or validated is a startup error that names the file.
 
 ## What a hook receives
 
@@ -89,7 +119,7 @@ The repository ships a commit gate: `.githooks/pre-commit` runs `scripts/pre-com
 git config core.hooksPath .githooks
 ```
 
-`scripts/gg-commit-gate.sh` is the same gate as a generic `pre_tool` hook: before any `git commit` it runs the pre-commit hook and denies the call if the gate fails or if the command tries to bypass hooks with `--no-verify` or `-n`. Copy it to `~/.gg/hooks/commit-gate.sh` and register it:
+`scripts/gg-commit-gate.sh` is the same gate as a generic `pre_tool` hook: before any `git commit` it runs the pre-commit hook and denies the call if the gate fails or if the command tries to bypass hooks with `--no-verify` or `-n`. Copy it to `~/.gg/hooks/commit-gate.sh` and register it, or register `./scripts/gg-commit-gate.sh` from the project's `.gg/hooks.toml` once the project is trusted:
 
 ```toml
 # ~/.gg/hooks.toml

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Live gate for §22 hooks: runs the built gg against Strata with a temp
 # HOME and workspace, and checks the deny path, the observe paths, the
-# --no-hooks escape hatch, and that project hooks are ignored.
+# --no-hooks escape hatch, that an untrusted project's hooks are ignored,
+# and that a trusted project's load.
 # `-P strata` names that server: with a provider key in the environment,
 # the first ranked default would otherwise take these prompts.
 # Usage: scripts/hooks-live.sh  (from the repo root; cargo build first)
@@ -118,7 +119,7 @@ if [[ -e "$scratch/run-end" ]]; then
 fi
 echo "ok"
 
-echo "== 4. project hooks are ignored with a warning =="
+echo "== 4. an untrusted project's hooks are ignored with a warning =="
 mkdir -p "$work/.gg"
 cat > "$work/.gg/hooks.toml" <<EOF
 [[hooks]]
@@ -132,12 +133,49 @@ rm -f "$scratch/project-marker"
     >/dev/null 2>"$scratch/project-stderr"
 )
 if [[ -e "$scratch/project-marker" ]]; then
-  echo "FAIL: a project hook file ran" >&2
+  echo "FAIL: an untrusted project hook file ran" >&2
   exit 1
 fi
-if ! grep -q "project hooks (.gg/hooks.toml) are ignored" "$scratch/project-stderr"; then
+if ! grep -q "\.gg/hooks\.toml) are ignored until you trust $work" "$scratch/project-stderr"; then
   echo "FAIL: no project-hook warning on stderr" >&2
   cat "$scratch/project-stderr" >&2
+  exit 1
+fi
+echo "ok"
+
+echo "== 5. a trusted project's hooks load after the user's =="
+printf 'trusted_projects = ["%s"]\n' "$work" >"$home/.gg/config.toml"
+cat > "$work/.gg/hooks.toml" <<EOF
+[[hooks]]
+event = "post_tool"
+tools = ["read"]
+command = "touch $scratch/project-marker"
+
+[[hooks]]
+event = "run_end"
+command = "touch $scratch/project-end"
+EOF
+rm -f "$scratch/project-marker" "$scratch/project-end"
+(
+  cd "$work"
+  HOME="$home" "$GG" -P strata --no-session --tools read -p \
+    "Read Cargo.toml from this directory and reply with just the version number." \
+    >/dev/null 2>"$scratch/trusted-stderr"
+)
+if ! grep -q "post_tool hook.*exit 1" "$scratch/trusted-stderr"; then
+  echo "FAIL: the user's post_tool hook did not fire beside the project's" >&2
+  cat "$scratch/trusted-stderr" >&2
+  exit 1
+fi
+for marker in project-marker project-end; do
+  if [[ ! -e "$scratch/$marker" ]]; then
+    echo "FAIL: the trusted project's $marker hook did not fire" >&2
+    exit 1
+  fi
+done
+if grep -q "are ignored" "$scratch/trusted-stderr"; then
+  echo "FAIL: a trusted project file was still reported ignored" >&2
+  cat "$scratch/trusted-stderr" >&2
   exit 1
 fi
 echo "ok"

@@ -39,44 +39,163 @@ fn abort() -> AtomicBool {
     AtomicBool::new(false)
 }
 
+/// A project hooks file in `dir`, saying so in its command.
+fn project_file(dir: &Path, body: &str) -> PathBuf {
+    std::fs::create_dir_all(dir.join(".gg")).unwrap();
+    let path = dir.join(".gg").join("hooks.toml");
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+const ONE_HOOK: &str = "[[hooks]]\nevent = \"run_end\"\ncommand = \"notify.sh\"\n";
+
 #[test]
 fn a_missing_file_means_no_hooks() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks.toml");
 
-    let (hooks, warnings) = load_from(Some(&path), dir.path(), false).unwrap();
+    let (hooks, warnings) = load_from(Some(&path), dir.path(), &[], false).unwrap();
 
     assert!(hooks.is_empty());
     assert!(!hooks.disabled());
     assert!(warnings.is_empty());
 }
 
+/// A project file is executable behaviour a clone can carry: it stays
+/// unloaded unless the user trusts its directory, and the warning says
+/// how to.
 #[test]
-fn a_project_file_is_ignored_with_a_warning() {
+fn an_untrusted_project_file_is_left_unloaded_with_a_warning() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir(dir.path().join(".gg")).unwrap();
-    std::fs::write(dir.path().join(".gg/hooks.toml"), "not even toml").unwrap();
+    let file = project_file(dir.path(), ONE_HOOK);
 
-    let (hooks, warnings) =
-        load_from(Some(&dir.path().join("absent.toml")), dir.path(), false).unwrap();
+    let (hooks, warnings) = load_from(
+        Some(&dir.path().join("absent.toml")),
+        dir.path(),
+        &[],
+        false,
+    )
+    .unwrap();
 
     assert!(hooks.is_empty());
     assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("project hooks"));
+    let warning = &warnings[0];
+    assert!(warning.contains("project hooks"), "{warning}");
+    assert!(warning.contains(&file.display().to_string()), "{warning}");
+    assert!(warning.contains("trusted_projects"), "{warning}");
+    assert_eq!(hooks.ignored(), warnings.as_slice(), "`/hooks` says it too");
 }
 
 #[test]
 fn no_hooks_skips_loading_and_the_project_warning() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir(dir.path().join(".gg")).unwrap();
-    std::fs::write(dir.path().join(".gg/hooks.toml"), "bogus").unwrap();
+    project_file(dir.path(), "bogus");
     let bad = write_file(dir.path(), "this is not toml");
 
-    let (hooks, warnings) = load_from(Some(&bad), dir.path(), true).unwrap();
+    let (hooks, warnings) =
+        load_from(Some(&bad), dir.path(), &[dir.path().to_path_buf()], true).unwrap();
 
     assert!(hooks.disabled());
     assert!(hooks.is_empty());
     assert!(warnings.is_empty());
+    assert!(hooks.ignored().is_empty());
+}
+
+/// The user's hooks come first, the trusted project's after them, so a
+/// user's `pre_tool` guard is ahead of the project's in the line where the
+/// first denial wins.
+#[test]
+fn a_trusted_project_file_loads_after_the_user_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let user = write_file(dir.path(), ONE_HOOK);
+    project_file(
+        dir.path(),
+        "[[hooks]]\nevent = \"pre_tool\"\ncommand = \"./scripts/gate.sh\"\n",
+    );
+
+    let (hooks, warnings) =
+        load_from(Some(&user), dir.path(), &[dir.path().to_path_buf()], false).unwrap();
+
+    assert!(warnings.is_empty());
+    let commands: Vec<&str> = hooks.specs().iter().map(|h| h.command.as_str()).collect();
+    assert_eq!(commands, ["notify.sh", "./scripts/gate.sh"]);
+    assert!(!hooks.is_project(0), "the user's");
+    assert!(hooks.is_project(1), "the project's");
+}
+
+/// The walk is `AGENTS.md`'s: the repo root down to the working directory,
+/// broadest first, and no further up than the repo root. Trust in the root
+/// covers the directories under it.
+#[test]
+fn project_files_walk_from_the_repo_root_to_cwd_under_one_trust() {
+    let above = tempfile::tempdir().unwrap();
+    let root = above.path().join("repo");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    project_file(above.path(), ONE_HOOK);
+    project_file(
+        &root,
+        "[[hooks]]\nevent = \"run_end\"\ncommand = \"root\"\n",
+    );
+    project_file(
+        &root.join("sub"),
+        "[[hooks]]\nevent = \"run_end\"\ncommand = \"sub\"\n",
+    );
+
+    let trusted = [root.clone()];
+    let (hooks, warnings) = load_from(None, &root.join("sub"), &trusted, false).unwrap();
+
+    assert!(
+        warnings.is_empty(),
+        "the file above the repo is not even found"
+    );
+    let commands: Vec<&str> = hooks.specs().iter().map(|h| h.command.as_str()).collect();
+    assert_eq!(commands, ["root", "sub"], "broadest first");
+
+    // Run from the root itself: its file alone.
+    let (hooks, _) = load_from(None, &root, &trusted, false).unwrap();
+    let commands: Vec<&str> = hooks.specs().iter().map(|h| h.command.as_str()).collect();
+    assert_eq!(commands, ["root"]);
+}
+
+/// A trust listing is compared on real paths: a project reached through
+/// a symlink loads under either spelling of its directory.
+#[cfg(unix)]
+#[test]
+fn trust_is_compared_on_canonical_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    project_file(dir.path(), ONE_HOOK);
+    std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let link = elsewhere.path().join("link");
+    std::os::unix::fs::symlink(dir.path(), &link).unwrap();
+
+    let (hooks, warnings) =
+        load_from(None, &link.join("sub"), &[dir.path().to_path_buf()], false).unwrap();
+    assert!(
+        warnings.is_empty(),
+        "trusted under the real path: {warnings:?}"
+    );
+    assert_eq!(hooks.specs().len(), 1);
+
+    let (hooks, warnings) = load_from(None, &link, std::slice::from_ref(&link), false).unwrap();
+    assert!(warnings.is_empty(), "trusted under the link: {warnings:?}");
+    assert_eq!(hooks.specs().len(), 1);
+}
+
+/// A trusted file is config like the user's: a broken one is a startup
+/// error that names it.
+#[test]
+fn a_broken_trusted_project_file_is_a_named_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = project_file(dir.path(), "[[hooks]]\nevent = \"nope\"\ncommand = \"x\"\n");
+
+    let err = load_from(None, dir.path(), &[dir.path().to_path_buf()], false).unwrap_err();
+
+    assert!(
+        format!("{err:#}").contains(&file.display().to_string()),
+        "{err:#}"
+    );
 }
 
 #[test]
@@ -97,7 +216,7 @@ command = "notify.sh"
 "#,
     );
 
-    let (hooks, warnings) = load_from(Some(&path), dir.path(), false).unwrap();
+    let (hooks, warnings) = load_from(Some(&path), dir.path(), &[], false).unwrap();
 
     assert!(warnings.is_empty());
     assert_eq!(
@@ -150,7 +269,7 @@ fn invalid_configs_are_named_errors() {
     let dir = tempfile::tempdir().unwrap();
     for (what, body) in cases {
         let path = write_file(dir.path(), body);
-        let err = load_from(Some(&path), dir.path(), false).unwrap_err();
+        let err = load_from(Some(&path), dir.path(), &[], false).unwrap_err();
         assert!(
             err.to_string().contains("hooks.toml"),
             "{what}: unexpected error {err:#}"
@@ -162,7 +281,7 @@ fn invalid_configs_are_named_errors() {
 fn malformed_toml_is_a_parse_error() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_file(dir.path(), "[[hooks]\n");
-    let err = load_from(Some(&path), dir.path(), false).unwrap_err();
+    let err = load_from(Some(&path), dir.path(), &[], false).unwrap_err();
     assert!(err.to_string().contains("parsing"), "{err:#}");
 }
 

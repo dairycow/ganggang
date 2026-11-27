@@ -88,12 +88,11 @@ pub type Factory = Arc<
 
 /// The discovery sets the TUI renders lists from, shared read-only with
 /// the command handler. The Agent discovers its own copy of the skills
-/// (same cwd, same result); `/skill`, `/hooks` and `/model`
-/// all answer without a round-trip to the agent task.
+/// (same cwd, same result); `/skill` and `/model` answer without a
+/// round-trip to the agent task, and `/hooks` lists the set the state
+/// keeps from the boot.
 pub struct Discovered {
     pub skills: Arc<Vec<Skill>>,
-    /// User-level hooks (§22) — `/hooks` lists them.
-    pub hooks: Arc<crate::agent::hooks::Hooks>,
 }
 
 /// Why the TUI loop ended. `Restart` carries the exec plan for a `--watch`
@@ -110,7 +109,6 @@ pub enum Exit {
 struct Shared<'a> {
     factory: &'a Factory,
     ui_tx: &'a tokio::sync::mpsc::Sender<agent_task::UiEvent>,
-    hooks: &'a crate::agent::hooks::Hooks,
     abort: &'a Arc<AtomicBool>,
     config: &'a crate::config::Config,
 }
@@ -132,7 +130,6 @@ impl Shared<'_> {
             input_tx,
             ui_tx: self.ui_tx,
             skills,
-            hooks: self.hooks,
             cwd,
             abort: self.abort,
             config: self.config,
@@ -169,7 +166,7 @@ pub async fn run(
     // changes, and a restart puts the next process here, where that
     // process resolves `--resume <id>`.
     let launch_dir = cwd.clone();
-    let Discovered { skills, hooks } = discovered;
+    let Discovered { skills } = discovered;
     let _guard = term::Guard::new()?;
     let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
     let mut terminal =
@@ -207,6 +204,14 @@ pub async fn run(
     );
     if let Some(warning) = state.history.warning() {
         state.push_warning(&warning);
+    }
+    // The hooks the first boot loaded for this directory: `/hooks` lists
+    // them, and a project hooks file left unloaded is said here, where
+    // the startup warning on stderr is already behind the screen.
+    state.set_hooks(boot.agent.hooks().clone());
+    let unloaded = state.hooks().ignored().to_vec();
+    for notice in unloaded {
+        state.push_warning(&notice);
     }
     state.session_path = boot.session_path.clone();
     state.sessions_disabled = boot.sessions_disabled;
@@ -251,7 +256,6 @@ pub async fn run(
     let shared = Shared {
         factory: &factory,
         ui_tx: &ui_tx,
-        hooks: &hooks,
         abort: &abort,
         config: &config,
     };

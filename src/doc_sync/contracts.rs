@@ -110,7 +110,8 @@ fn documented_toml_examples_parse_and_validate() {
                 let dir = tempfile::tempdir().expect("tempdir");
                 let path = dir.path().join("hooks.toml");
                 std::fs::write(&path, &block).expect("write hooks file");
-                if let Err(e) = crate::agent::hooks::load_from(Some(&path), dir.path(), false) {
+                if let Err(e) = crate::agent::hooks::load_from(Some(&path), dir.path(), &[], false)
+                {
                     panic!(
                         "hooks example in {} is invalid: {e:#}\n{block}",
                         file.display()

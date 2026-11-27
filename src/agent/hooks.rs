@@ -1,11 +1,17 @@
-//! User-level hooks (spec §22): one-shot shell commands at the loop's
-//! interception points.
+//! Hooks (spec §22): one-shot shell commands at the loop's interception
+//! points.
 //!
 //! A hook is not a plugin: it is a process, given one JSON object on stdin,
 //! that may print a deny decision for `pre_tool`. Failures are warnings and
-//! deliberately fail open — a broken guard must not wedge the agent. Hooks
-//! are read from `~/.gg/hooks.toml` only; a project file is ignored so a
-//! cloned repository cannot add executable behavior.
+//! deliberately fail open — a broken guard must not wedge the agent.
+//!
+//! Hooks come from the user's `~/.gg/hooks.toml` first, then from project
+//! files: `.gg/hooks.toml` in the repo root and in each directory below it
+//! down to the working directory. A project file is executable behaviour a
+//! cloned repository can carry, so it loads only when its directory is one
+//! the user listed in `trusted_projects` (`~/.gg/config.toml`), or lies
+//! under one. Any other is left unloaded, and the loader's warning says
+//! so.
 
 mod invoke;
 mod payload;
@@ -72,26 +78,58 @@ fn default_timeout_secs() -> u64 {
     DEFAULT_TIMEOUT_SECS
 }
 
-/// The loaded hook set. Cloned per Agent; the TUI factory reuses one
-/// instance across sessions.
+/// The loaded hook set: the user's hooks, then the project's, each file in
+/// file order. Cloned per Agent, which is built with the set loaded for
+/// its directory.
 #[derive(Debug, Clone, Default)]
 pub struct Hooks {
     specs: Vec<Hook>,
     disabled: bool,
+    /// How many of `specs` are the user file's; the rest that follow are
+    /// the project files'.
+    user_specs: usize,
+    /// Each project hooks file found and left unloaded, with why: the
+    /// loader's warnings, kept so `/hooks` can say them in the TUI, where
+    /// stderr is behind the alternate screen.
+    ignored: Vec<String>,
 }
 
 impl Hooks {
     #[cfg(test)]
     pub(crate) fn new(specs: Vec<Hook>) -> Self {
         Self {
+            user_specs: specs.len(),
             specs,
             disabled: false,
+            ignored: Vec::new(),
+        }
+    }
+
+    /// A set with project hooks and unloaded project files, for `/hooks`.
+    #[cfg(test)]
+    pub(crate) fn with_project(user: Vec<Hook>, project: Vec<Hook>, ignored: Vec<String>) -> Self {
+        Self {
+            user_specs: user.len(),
+            specs: user.into_iter().chain(project).collect(),
+            disabled: false,
+            ignored,
         }
     }
 
     /// The declared hooks, in file order (`/hooks` lists these).
     pub fn specs(&self) -> &[Hook] {
         &self.specs
+    }
+
+    /// Whether the hook at `index` of [`specs`](Self::specs) came from a
+    /// project file rather than the user's.
+    pub fn is_project(&self, index: usize) -> bool {
+        index >= self.user_specs
+    }
+
+    /// The project hooks files left unloaded, each with why.
+    pub fn ignored(&self) -> &[String] {
+        &self.ignored
     }
 
     /// True when `--no-hooks` skipped loading.
@@ -126,19 +164,26 @@ pub enum PreOutcome {
     Interrupted,
 }
 
-/// Load `~/.gg/hooks.toml` and report project-file warnings. `disabled`
-/// is `--no-hooks`: no file is read and the project warning is skipped,
-/// so a broken hook file cannot block the escape hatch.
-pub fn load(cwd: &Path, disabled: bool) -> anyhow::Result<(Hooks, Vec<String>)> {
+/// Load the hooks that govern `cwd`: `~/.gg/hooks.toml`, then every
+/// trusted project file from the repo root down to `cwd`. The warnings are
+/// the project files left unloaded. `disabled` is `--no-hooks`: no file is
+/// read and no warning is raised, so a broken hook file cannot block the
+/// escape hatch.
+pub fn load(
+    cwd: &Path,
+    trusted: &[PathBuf],
+    disabled: bool,
+) -> anyhow::Result<(Hooks, Vec<String>)> {
     let path = hooks_path();
-    load_from(path.as_deref(), cwd, disabled)
+    load_from(path.as_deref(), cwd, trusted, disabled)
 }
 
-/// Testable loader: `path` is the user file, `cwd` only locates the
-/// project file that must be ignored.
+/// Testable loader: `user` is the user file, `cwd` locates the project
+/// files, and `trusted` is the user's list of trusted project directories.
 pub(crate) fn load_from(
-    path: Option<&Path>,
+    user: Option<&Path>,
     cwd: &Path,
+    trusted: &[PathBuf],
     disabled: bool,
 ) -> anyhow::Result<(Hooks, Vec<String>)> {
     if disabled {
@@ -146,40 +191,86 @@ pub(crate) fn load_from(
             Hooks {
                 specs: Vec::new(),
                 disabled: true,
+                user_specs: 0,
+                ignored: Vec::new(),
             },
             Vec::new(),
         ));
     }
 
-    let mut warnings = Vec::new();
-    if cwd.join(".gg").join("hooks.toml").exists() {
-        warnings.push(
-            "project hooks (.gg/hooks.toml) are ignored; hooks are user-level policy \
-             (~/.gg/hooks.toml)"
-                .to_string(),
-        );
-    }
-
-    let Some(path) = path else {
-        return Ok((Hooks::default(), warnings));
+    let mut specs = match user {
+        Some(path) => read_file(path)?,
+        None => Vec::new(),
     };
+    let user_specs = specs.len();
+    let mut ignored = Vec::new();
+    for (dir, path) in project_hook_files(cwd) {
+        if !is_trusted(&dir, trusted) {
+            ignored.push(format!(
+                "project hooks ({}) are ignored until you trust {}: add it to `trusted_projects` \
+                 in ~/.gg/config.toml",
+                path.display(),
+                dir.display()
+            ));
+            continue;
+        }
+        specs.extend(read_file(&path)?);
+    }
+    Ok((
+        Hooks {
+            specs,
+            disabled: false,
+            user_specs,
+            ignored: ignored.clone(),
+        },
+        ignored,
+    ))
+}
+
+/// One hooks file's entries. A missing file declares none; one that cannot
+/// be read, parsed or validated is an error naming it.
+fn read_file(path: &Path) -> anyhow::Result<Vec<Hook>> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok((Hooks::default(), warnings));
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
     };
     let file: FileHooks =
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     validate(&file.hooks).with_context(|| format!("validating {}", path.display()))?;
-    Ok((
-        Hooks {
-            specs: file.hooks,
-            disabled: false,
-        },
-        warnings,
-    ))
+    Ok(file.hooks)
+}
+
+/// The project hooks files that govern `cwd`: `.gg/hooks.toml` in the repo
+/// root and in each directory below it down to `cwd`, broadest first (the
+/// walk `AGENTS.md` discovery makes; with no repo it runs to the
+/// filesystem root). Each is its directory with its path, and only files
+/// that exist are listed.
+fn project_hook_files(cwd: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let mut dirs: Vec<&Path> = cwd.ancestors().collect();
+    if let Some(root) = super::context::find_repo_root(cwd) {
+        dirs.retain(|dir| dir.ancestors().any(|above| above == root));
+    }
+    dirs.reverse();
+    dirs.into_iter()
+        .map(|dir| (dir.to_path_buf(), dir.join(".gg").join("hooks.toml")))
+        .filter(|(_, path)| path.exists())
+        .collect()
+}
+
+/// Whether `dir` is one of `trusted` or lies under one. Both sides are
+/// canonicalised where they exist, so a symlinked listing matches its
+/// target.
+fn is_trusted(dir: &Path, trusted: &[PathBuf]) -> bool {
+    let dir = real(dir);
+    trusted
+        .iter()
+        .map(|root| real(root))
+        .any(|root| dir.starts_with(&root))
+}
+
+fn real(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn hooks_path() -> Option<PathBuf> {

@@ -1525,3 +1525,39 @@ fn model_explicit_and_discovered_catalog_and_switch() {
         .unwrap_err();
     assert!(format!("{err:#}").contains("multiple providers"));
 }
+
+/// `trusted_projects` is the user's alone: the user file's entries load as
+/// paths, `~/` expands against an absolute `HOME`, a project file's
+/// entries are ignored, and a relative entry is an error.
+#[test]
+fn trusted_projects_reads_the_user_file_only() {
+    use std::path::PathBuf;
+
+    let none = merge(Config::default(), None, None, &[]).unwrap();
+    assert!(none.trusted_projects.is_empty());
+
+    let home = env(&[("HOME", "/home/u")]);
+    let user = "trusted_projects = [\"/opt/proj\", \"~/src/other\"]\n";
+    let cfg = merge(Config::default(), Some(user), None, &home).unwrap();
+    assert_eq!(
+        cfg.trusted_projects,
+        [
+            PathBuf::from("/opt/proj"),
+            PathBuf::from("/home/u/src/other")
+        ]
+    );
+
+    // No absolute HOME: `~/` cannot expand, so it is relative, and refused.
+    let err = merge(Config::default(), Some(user), None, &[]).unwrap_err();
+    assert!(format!("{err:#}").contains("trusted_projects"), "{err:#}");
+
+    // The project file cannot trust itself.
+    let project = "trusted_projects = [\"/opt/proj\"]\n";
+    let cfg = merge(Config::default(), None, Some(project), &home).unwrap();
+    assert!(cfg.trusted_projects.is_empty());
+
+    // Nor can a relative path, wherever it is listed.
+    let relative = "trusted_projects = [\"proj\"]\n";
+    let err = merge(Config::default(), Some(relative), None, &home).unwrap_err();
+    assert!(format!("{err:#}").contains("absolute"), "{err:#}");
+}
