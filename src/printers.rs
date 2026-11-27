@@ -200,14 +200,15 @@ impl Printer {
                     return Vec::new();
                 }
                 // The footer's mark, so print mode and the TUI say the
-                // same thing while a run works: the dot beats, on, off,
-                // on. The mark's blank second cell is the space before the
-                // word, so `streaming…` keeps its column on the blank frame.
-                let (dot, _) = MARK_FRAMES[self.spinner % MARK_FRAMES.len()];
+                // same thing while a run works: the name flashes, on,
+                // off, on. The mark's blank second cell is the space
+                // before the word, so `streaming…` keeps its column on
+                // the blank frame.
+                let (mark, _) = MARK_FRAMES[self.spinner % MARK_FRAMES.len()];
                 self.spinner = self.spinner.wrapping_add(1);
                 self.spinner_open = true;
                 vec![format!(
-                    "\r{dot} streaming… {} chars",
+                    "\r{mark} streaming… {} chars",
                     self.current.chars().count()
                 )]
             }

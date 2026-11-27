@@ -14,22 +14,19 @@ use ratatui::text::{Line as UiLine, Span};
 
 use super::theme::Palette;
 
-/// The mark's frames, one per [`crate::tui::tick::PERIOD`] tick: a dot
-/// `●` in the first of the two cells the name takes up at rest, the
-/// second cell blank. The dot beats: on, off, on (`● `, `  `, `● `). Two
-/// cells in every frame keep the name's width, so nothing behind the
-/// mark moves while the turn turns.
+/// The mark's frames, one per [`crate::tui::tick::PERIOD`] tick: the
+/// name itself in the two cells it takes up at rest, flashing on, off,
+/// on (`gg`, `  `, `gg`; the second element of a pair is whatever the
+/// second cell still needs, nothing when the name is up). Two cells in
+/// every frame keep the name's width, so nothing behind the mark moves
+/// while the turn turns.
 ///
-/// The glyph is a geometric shape, not a block half: `▁▂▃` draw as
-/// shading in a proportional cell, where `●` is a shape, and a dot that
-/// reads as a shape is the whole point of this mark.
-///
-/// Not the name: `gg` sits in the same two cells when nothing is running,
-/// and the mark is the only thing that moves while the turn does.
-pub const MARK_FRAMES: [(&str, &str); 3] = [("●", " "), (" ", " "), ("●", " ")];
-/// The frame where the dot comes up first: the gang-gang's crest, raised.
-/// The mark is scarlet on this one frame of a turn and warm on the other
-/// two, whether the dot is up or off.
+/// Not a different glyph: the name is the mark, at rest and at work,
+/// and the beat is all that says a run is live.
+pub const MARK_FRAMES: [(&str, &str); 3] = [("gg", ""), (" ", " "), ("gg", "")];
+/// The frame where the name comes up first: the gang-gang's crest,
+/// raised. The mark is scarlet on this one frame of a turn and warm on
+/// the other two, whether the name is up or off.
 pub const CREST_FRAME: usize = 0;
 
 /// The context percentage at which the footer's number turns gold, and
@@ -233,13 +230,13 @@ impl Footer {
 
     /// The two cells at the start of the footer: the name when idle, the
     /// run's frame while a run works, so the row reads
-    /// `gg …/projects/ganggang qwen3.8 medium ↑305 ↓81` at rest and
-    /// `●  …/projects/ganggang qwen3.8 medium ↑305 ↓81` at work, the dot
-    /// up or off with the frame.
+    /// `gg …/projects/ganggang qwen3.8 medium ↑305 ↓81` at rest and on
+    /// the name's frames, and all blank in those two cells on the off
+    /// beat.
     ///
-    /// The same width both ways, so nothing behind the mark moves while
-    /// the turn turns: the name gives way to the dot and the fields
-    /// after them stay put.
+    /// The same width every frame, so nothing behind the mark moves
+    /// while the turn turns: the name flashes in its own cells and the
+    /// fields after them stay put.
     pub fn mark(&self) -> String {
         if self.spinning() {
             Self::mark_cells(self.frame)
@@ -248,7 +245,7 @@ impl Footer {
         }
     }
 
-    /// The two cells of the frame the run is on, dot first.
+    /// The two cells of the frame the run is on.
     fn mark_cells(frame: usize) -> String {
         let (left, right) = MARK_FRAMES[frame % MARK_FRAMES.len()];
         format!("{left}{right}")

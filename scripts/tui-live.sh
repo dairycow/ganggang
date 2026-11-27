@@ -79,7 +79,8 @@ wait_nvim() { # nvim's empty-buffer tildes: the editor has the screen
 }
 wait_footer() { # until the footer — the pane's last row — shows $1 (up to $2 s)
   # The footer has no status word. At rest its row opens with `gg │`; while a run works the
-  # name's two cells hold a dot that beats (up two frames in three, so a poll catches it).
+  # name itself flashes in those two cells (blank one frame in three), so the row reads
+  # `gg  │` with the mark's blank cell kept, and `   │` on the blank frame: `gg │` matches ready only.
   local deadline=$((SECONDS + $2))
   while ((SECONDS < deadline)); do
     if pane | tail -1 | grep -qF -- "$1"; then return 0; fi
@@ -314,7 +315,7 @@ no_leak F3; finish F4
 
 echo "== G: Ctrl+G while a run is in flight — the run continues behind the editor"
 start "$FAKE" slow 10
-keys -l 'Count from 1 up to 25, one number per line, no other text.'; keys Enter; wait_footer '●' 10
+keys -l 'Count from 1 up to 25, one number per line, no other text.'; keys Enter; wait_for '> Count from 1' 10   # the submitted row: the run is in flight
 keys -l 'draft text'; wait_for 'draft text' 3; keys C-g
 wait_log 'draft='
 grep -qF 'draft=[draft text]' "$WORK/fake.log" && ok G1 "the editor got the composer's text while busy" || bad G1 "editor log" "$(grep -E '^(draft=|start)' "$WORK/fake.log")"

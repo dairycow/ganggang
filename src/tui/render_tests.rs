@@ -153,13 +153,12 @@ fn an_80_by_24_frame_is_the_theme_not_the_terminal() {
 }
 
 /// `gg` sits at the left edge of the footer, and while a run is live the
-/// two cells the name takes give way to the run's dot, beating: so the
-/// start of the row says a run is working without a status word, and the
-/// rest of the row keeps its cells. When it ends, the name is back. The
-/// dot is also the row's only one, frame after frame, and there is no
-/// ring.
+/// name itself flashes in those two cells: the start of the row says a
+/// run is working without a status word, and the rest of the row keeps
+/// its cells. When the run ends, the name sits still again. No dot and
+/// no ring is drawn anywhere in the row, frame after frame.
 #[test]
-fn the_mark_is_gg_at_rest_and_a_dot_while_a_run_works() {
+fn the_mark_is_gg_at_rest_and_flashes_while_a_run_works() {
     use crate::tui::footer::MARK_FRAMES as FRAMES;
 
     // Idle: the mark is the name, at the left edge of the footer's row.
@@ -171,8 +170,8 @@ fn the_mark_is_gg_at_rest_and_a_dot_while_a_run_works() {
         "the mark sits at the left of the footer: {rest:?}"
     );
 
-    // A run is live: the name's two cells become the mark, and the word
-    // `gg` is gone from the row — the only thing the name gave up.
+    // A run is live: the name's two cells become the mark, and the
+    // flash is all the row says about the run.
     state.begin_run();
     for frame in 0..FRAMES.len() as u16 {
         state.tick_spinner();
@@ -191,14 +190,9 @@ fn the_mark_is_gg_at_rest_and_a_dot_while_a_run_works() {
             footer.starts_with(expected.as_str()),
             "frame {frame} leads the footer: {footer:?}, expected {expected:?}"
         );
-        assert_eq!(
-            footer.matches('●').count(),
-            usize::from(expected.contains('●')),
-            "frame {frame} draws the dot once, on the frames it is up: {footer:?}"
-        );
         assert!(
-            !footer.contains('○'),
-            "frame {frame} shows no ring: {footer:?}"
+            !footer.contains('●') && !footer.contains('○'),
+            "frame {frame} draws no dot and no ring: {footer:?}"
         );
         assert!(
             !footer.contains("working") && !footer.contains("ready"),
@@ -209,10 +203,6 @@ fn the_mark_is_gg_at_rest_and_a_dot_while_a_run_works() {
             footer.strip_prefix(expected.as_str()),
             rest.strip_prefix("gg"),
             "frame {frame} moves nothing behind the mark: {footer:?}"
-        );
-        assert!(
-            !footer.contains("gg"),
-            "frame {frame} shows no name: {footer:?}"
         );
     }
 
@@ -713,18 +703,14 @@ fn an_indexed_session_draws_only_indexed_colours() {
         shows(&terminal, "fn a() {}"),
         "the code band still reads: {text}"
     );
-    // The footer is the last row: the dot leads it, the row has no status
-    // word, and the dot is drawn once.
+    // The footer is the last row: the mark leads it in the name's two
+    // cells, the row has no status word, and no dot is drawn.
     let footer = row(&terminal, 15);
     assert_eq!(
-        footer, "●  │ …/tmp/x │ m │ ↑0 ↓0",
-        "the dot leads the footer in the name's two cells: {footer:?}"
+        footer, "gg │ …/tmp/x │ m │ ↑0 ↓0",
+        "the mark leads the footer in the name's two cells: {footer:?}"
     );
-    assert_eq!(
-        footer.matches('●').count(),
-        1,
-        "one dot in the footer: {footer:?}"
-    );
+    assert!(!footer.contains('●'), "no dot in the footer: {footer:?}");
 }
 
 /// Every row of the transcript is the theme's, and a wrapped row keeps the

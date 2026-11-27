@@ -34,8 +34,8 @@ fn plain_answer_progress_to_stderr_answer_at_end() {
     assert_eq!(lines.len(), 4);
     assert_eq!(lines[0], "── turn 1 ──");
     assert_eq!(
-        lines[1], "\r● streaming… 5 chars",
-        "the dot is up on the first frame"
+        lines[1], "\rgg streaming… 5 chars",
+        "the name is up on the first frame"
     );
     assert_eq!(lines[2], "\r\u{1b}[2K\n");
     assert_eq!(lines[3], "── done: 1 turn(s) · 0 tool(s) ──");
@@ -70,7 +70,7 @@ fn streamed_deltas_overwrite_in_place_and_close_once() {
 
     assert_eq!(lines.len(), 5);
     assert_eq!(lines[0], "── turn 1 ──");
-    assert_eq!(lines[1], "\r● streaming… 4 chars");
+    assert_eq!(lines[1], "\rgg streaming… 4 chars");
     assert_eq!(
         lines[2], "\r  streaming… 7 chars",
         "the second frame is the blank one, and the word keeps its column"
@@ -139,7 +139,7 @@ fn tool_run_shows_call_lines_and_the_final_answer() {
     assert!(err.contains(&"── turn 1 ──".to_string()));
     assert!(err.contains(&"── turn 2 ──".to_string()));
     assert_eq!(
-        err[1], "\r● streaming… 8 chars",
+        err[1], "\rgg streaming… 8 chars",
         "the narration streams a spinner line"
     );
     assert_eq!(
@@ -256,27 +256,27 @@ fn thinking_renders_nothing_and_keeps_the_spinner_alive() {
     // TurnEnded — the thinking events contributed nothing.
     assert_eq!(lines.len(), 3);
     assert_eq!(lines[0], "── turn 1 ──");
-    assert_eq!(lines[1], "\r● streaming… 3 chars");
+    assert_eq!(lines[1], "\rgg streaming… 3 chars");
     assert_eq!(lines[2], "\r\u{1b}[2K\n");
     // Thinking never reaches the answer either.
     assert_eq!(p.answer(), "ans");
 }
 
 /// Print mode spins the footer's frames, so the two surfaces say the same
-/// thing while a run works: the dot beats on, off, on, one frame per text
-/// delta, and the word after it keeps its column on the blank frame.
+/// thing while a run works: the name flashes on, off, on, one frame per
+/// text delta, and the word after it keeps its column on the blank frame.
 #[test]
-fn the_spinner_beats_the_footer_s_mark() {
+fn the_spinner_flashes_the_footer_s_mark() {
     let delta = |text: &str| AgentEvent::AssistantText { delta: text.into() };
     let mut p = Printer::new();
     let lines = render(&mut p, vec![delta("a"), delta("b"), delta("c"), delta("d")]);
     assert_eq!(
         lines,
         vec![
-            "\r● streaming… 1 chars",
+            "\rgg streaming… 1 chars",
             "\r  streaming… 2 chars",
-            "\r● streaming… 3 chars",
-            "\r● streaming… 4 chars",
+            "\rgg streaming… 3 chars",
+            "\rgg streaming… 4 chars",
         ]
     );
     assert_eq!(p.answer(), "abcd");
