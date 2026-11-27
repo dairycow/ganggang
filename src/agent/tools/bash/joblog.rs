@@ -158,6 +158,85 @@ fn read_one(log: &JobLog, name: &str) -> JobState {
     read_all(log).remove(name).unwrap_or(JobState::Unknown)
 }
 
+/// The first `cap` characters of `text`, with an ellipsis when cut. Long
+/// commands and progress lines are trimmed for `/jobs`.
+pub(super) fn clamp_chars(text: &str, cap: usize) -> String {
+    let mut out: String = text.chars().take(cap).collect();
+    if text.chars().count() > cap {
+        out.push('…');
+    }
+    out
+}
+
+/// The last non-empty line of `NAME.err`, trimmed to `cap` characters.
+fn last_err_line(dir: &Path, name: &str, cap: usize) -> Option<String> {
+    let text = std::fs::read_to_string(dir.join(format!("{name}.err"))).ok()?;
+    let line = text.lines().rev().find(|line| !line.trim().is_empty())?;
+    Some(clamp_chars(line, cap))
+}
+
+/// How long `pid` has been alive: the system's uptime less the process's
+/// start time, both read from /proc. Linux numbers start times in fixed
+/// 100 Hz ticks (`USER_HZ`). `None` off Linux, or once the process is gone.
+fn pid_age(pid: u32) -> Option<Duration> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // The command name is in parentheses and may contain spaces or a
+    // closing one; every field after the last parenthesis is fixed.
+    let after_comm = stat.rsplit_once(')')?.1;
+    let start_ticks: f64 = after_comm.split_whitespace().nth(19)?.parse().ok()?;
+    let uptime = std::fs::read_to_string("/proc/uptime").ok()?;
+    let uptime: f64 = uptime.split_whitespace().next()?.parse().ok()?;
+    const USER_HZ: f64 = 100.0;
+    let secs = uptime - start_ticks / USER_HZ;
+    if !secs.is_finite() {
+        return None;
+    }
+    Some(Duration::from_secs_f64(secs.max(0.0)))
+}
+
+/// A duration for `/jobs`: `42s`, `4m`, then `1h3m`.
+fn age_text(age: Duration) -> String {
+    let secs = age.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+/// One line per registered job, latest record winning, in name order:
+/// `NAME · running 4m · pid 1234 · <last line of NAME.err>` or
+/// `NAME · done exit N · NOTE`. For `/jobs`.
+pub(super) fn report(log: &JobLog) -> Vec<String> {
+    read_all(log)
+        .into_iter()
+        .filter_map(|(name, state)| match state {
+            JobState::Unknown => None,
+            JobState::Running { pid, dir } => {
+                let age = pid_age(pid).map_or_else(
+                    || "running".to_string(),
+                    |age| format!("running {}", age_text(age)),
+                );
+                let tail = last_err_line(&dir, &name, 120)
+                    .map_or_else(String::new, |line| format!(" · {line}"));
+                Some(format!("{name} · {age} · pid {pid}{tail}"))
+            }
+            JobState::Finished { exit, note, .. } => {
+                let done =
+                    exit.map_or_else(|| "done".to_string(), |code| format!("done exit {code}"));
+                let note = if note.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {note}")
+                };
+                Some(format!("{name} · {done}{note}"))
+            }
+        })
+        .collect()
+}
+
 /// One line: `start NAME PID DIR` or `done NAME EXIT NOTE`, tab
 /// separated. Anything else is skipped.
 fn parse_line(line: &str) -> Option<(String, Record)> {

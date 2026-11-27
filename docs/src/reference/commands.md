@@ -10,6 +10,7 @@ Generated from the command catalogue that drives the `/` suggestion popup.
 | `/compact` | [instructions] | summarise and rebuild the context |
 | `/session` | [filter\|copy\|info] | pick a saved session, copy its path, or show session info |
 | `/context` |  | show the assembled system prompt |
+| `/jobs` |  | show background and registered jobs |
 | `/hooks` |  | list loaded hooks |
 | `/skill` | &lt;name> [args] | run a skill now |
 | `/model` | [provider/model] | list or switch provider and model |

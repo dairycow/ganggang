@@ -229,6 +229,12 @@ impl Agent {
         )
     }
 
+    /// What the tools hold: `/jobs` shows exactly this report, the way
+    /// `/context` shows the system prompt. `None` when no tool holds a job.
+    pub fn jobs_report(&self) -> Option<String> {
+        self.tools.jobs_report()
+    }
+
     /// The discovered skills, in discovery order: what the TUI's `/skill`
     /// rows render after a `/reload`.
     pub fn skills(&self) -> &[skills::Skill] {

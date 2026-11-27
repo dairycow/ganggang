@@ -376,7 +376,7 @@ fn suggestion_popup_tracks_the_composer() {
     assert!(!state.suggest_open(), "plain composer: no popup");
     state.editor.insert_char('/');
     assert!(state.suggest_open(), "a bare slash opens the catalog");
-    assert_eq!(state.suggestions().len(), 10, "the built-in set");
+    assert_eq!(state.suggestions().len(), 11, "the built-in set");
 
     // Filtering: one down and one up leaves the highlight on /compact.
     state.suggest_next();
@@ -670,7 +670,7 @@ fn the_selection_stops_at_the_last_drawn_row_on_short_terminals() {
         state.suggest_next();
     }
     state.complete_suggestion();
-    assert_eq!(state.editor.text(), "/hooks ", "row 4 of the catalog");
+    assert_eq!(state.editor.text(), "/jobs ", "row 4 of the catalog");
 
     // Never rendered: the whole list is reachable.
     state.editor.set_text("/");
@@ -1918,6 +1918,16 @@ async fn task_events_fold_into_the_view() {
     )
     .await;
     assert_eq!(state_line_texts(&state), vec!["⚠ careful"]);
+
+    // `/jobs` lands in the transcript as an info line, as `/context` does.
+    let mut state = fresh();
+    let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
+    apply(UiEvent::Jobs("no jobs".into()), &mut state, &mut input_tx).await;
+    assert_eq!(state_line_texts(&state), vec!["no jobs"]);
+    assert!(
+        input_rx.try_recv().is_err(),
+        "a query leaves nothing to run"
+    );
 }
 
 // ------------------------------------------------------------- the queue --

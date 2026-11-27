@@ -48,6 +48,9 @@ pub enum Command {
     Session,
     /// Dump the assembled system prompt (§12's debugging affordance).
     Context,
+    /// Show what the tools hold: the bash tool's kept background jobs and
+    /// the jobs commands have registered in the run's job log.
+    Jobs,
     /// List loaded user-level hooks (§22), or say why there are none.
     Hooks,
     /// `/skill <name> [args]` runs a skill: `name` is the first word
@@ -104,6 +107,7 @@ pub fn classify_submission(text: &str) -> Submission {
             "compact" => Command::Compact(Some(arg)).filter_arg(),
             "session" => Command::Session,
             "context" => Command::Context,
+            "jobs" => Command::Jobs,
             "model" => Command::Model(Some(arg)).filter_arg(),
             "think" => Command::Think(Some(arg)).filter_arg(),
             "reload" => Command::Reload,
@@ -143,7 +147,7 @@ impl Command {
 
 /// The valid commands, for unknown-command feedback.
 pub fn known_commands() -> &'static str {
-    "/new /compact [instructions] /session [filter|copy|info] /context /hooks /skill <name> [args] /model [provider/model] /think [effort|off|default] [budget] /reload /quit"
+    "/new /compact [instructions] /session [filter|copy|info] /context /jobs /hooks /skill <name> [args] /model [provider/model] /think [effort|off|default] [budget] /reload /quit"
 }
 
 /// Everything a command needs to act: view state, the agent channels, the
@@ -222,6 +226,12 @@ pub(super) async fn handle_command(command: Command, ctx: CmdCtx<'_>) -> anyhow:
             // The agent task answers with UiEvent::SystemPrompt — the
             // exact assembly the next request carries, not a rebuild.
             input_tx.send(super::AgentInput::DumpContext).await?;
+        }
+        Command::Jobs => {
+            // The agent task answers with UiEvent::Jobs — the tools'
+            // report of the jobs they hold, as `/context` shows the
+            // system prompt.
+            input_tx.send(super::AgentInput::DumpJobs).await?;
         }
         Command::Compact(instructions) => {
             // §14's manual path: the agent task runs the same compaction

@@ -103,6 +103,14 @@ pub trait Tool: Send + Sync {
     /// answering with an error result that says it was aborted. It lives as
     /// long as the call's future, so a tool may hold it across an await.
     fn execute<'a>(&'a self, args: &'a Value, cancel: &'a Cancel) -> BoxFuture<'a, ToolResult>;
+
+    /// What `/jobs` shows for this tool: one line per job it holds, `None`
+    /// when it holds none. The registry joins the reports in advertisement
+    /// order; the agent exposes the result the way `/context` shows the
+    /// system prompt.
+    fn jobs_report(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Ordered tool set. Order of registration is the order of advertisement.
@@ -134,6 +142,15 @@ impl Registry {
             .iter()
             .find(|t| t.name() == name)
             .is_some_and(|t| t.is_read_only())
+    }
+
+    /// `/jobs`: every tool's report, joined in advertisement order; `None`
+    /// when no tool holds a job.
+    pub fn jobs_report(&self) -> Option<String> {
+        self.0
+            .iter()
+            .filter_map(|t| t.jobs_report())
+            .reduce(|joined, report| format!("{joined}\n{report}"))
     }
 
     /// The request `tools` array: OpenAI function declarations.

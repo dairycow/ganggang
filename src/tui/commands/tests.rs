@@ -29,6 +29,10 @@ fn slash_lines_classify_to_commands() {
         Submission::Command(Command::Hooks)
     );
     assert_eq!(
+        classify_submission("/jobs"),
+        Submission::Command(Command::Jobs)
+    );
+    assert_eq!(
         classify_submission("/skills"),
         Submission::Command(Command::Unknown("skills".into()))
     );
@@ -45,6 +49,58 @@ fn reload_classifies_and_is_known() {
         Submission::Command(Command::Reload)
     );
     assert!(known_commands().contains("/reload"));
+}
+
+/// `/jobs` classifies, is in the valid set, and forwards to the agent
+/// task, which answers with `UiEvent::Jobs` — no run begins.
+#[tokio::test]
+async fn jobs_classifies_is_known_and_forwards_to_the_agent_task() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    assert_eq!(
+        classify_submission("/jobs"),
+        Submission::Command(Command::Jobs)
+    );
+    assert!(known_commands().contains("/jobs"));
+
+    let mut state = super::super::view::State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        Arc::new(vec![]),
+        History::default(),
+    );
+    let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
+    let (ui_tx, _ui_rx) = tokio::sync::mpsc::channel(4);
+    let factory: super::super::Factory =
+        Arc::new(|_, _, _, _| unreachable!("no /new on this path"));
+    let config = crate::config::Config::default();
+    let mut active_endpoint = config.active_endpoint();
+    let abort = Arc::new(AtomicBool::new(false));
+    let mut cwd = std::path::PathBuf::from("/tmp/x");
+
+    handle_command(
+        Command::Jobs,
+        CmdCtx {
+            state: &mut state,
+            factory: &factory,
+            input_tx: &mut input_tx,
+            ui_tx: &ui_tx,
+            skills: Arc::new(Vec::new()),
+            hooks: &crate::agent::hooks::Hooks::default(),
+            cwd: &mut cwd,
+            abort: &abort,
+            config: &config,
+            active_endpoint: &mut active_endpoint,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        input_rx.try_recv().unwrap(),
+        super::super::AgentInput::DumpJobs
+    ));
 }
 
 /// `/reload` forwards to the agent task, which re-discovers and answers

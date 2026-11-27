@@ -19,6 +19,7 @@ fn a_bare_slash_lists_the_whole_builtin_set() {
             "/compact [instructions]",
             "/session [filter|copy|info]",
             "/context",
+            "/jobs",
             "/hooks",
             "/skill <name> [args]",
             "/model [provider/model]",
@@ -35,6 +36,7 @@ fn the_typed_prefix_filters_and_keeps_order() {
     assert_eq!(labels("/re"), vec!["/reload"]);
     assert_eq!(labels("/ses"), vec!["/session [filter|copy|info]"]);
     assert_eq!(labels("/c"), vec!["/compact [instructions]", "/context"]);
+    assert_eq!(labels("/jo"), vec!["/jobs"]);
     assert_eq!(labels("/sk"), vec!["/skill <name> [args]"]);
     assert_eq!(labels("/skills"), Vec::<String>::new());
     assert_eq!(labels("/zzz"), Vec::<String>::new());

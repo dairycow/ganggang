@@ -49,6 +49,8 @@ type Settled = watch::Receiver<Option<std::result::Result<ExitStatus, String>>>;
 
 /// One command kept past its deadline.
 struct Job {
+    /// The command, for `/jobs`'s running line.
+    command: String,
     capture: SharedCapture,
     pgid: Option<u32>,
     /// Set once the shell has been reaped. Until then the group id is
@@ -92,7 +94,7 @@ impl Jobs {
                 return Start::Settled(BashOutcome::Failed(format!("failed to spawn bash: {e}")));
             }
         };
-        let job = Arc::new(Job::running(spawned));
+        let job = Arc::new(Job::running(spawned, command));
         tokio::select! {
             biased;
             result = Arc::clone(&job).finished() => Start::Settled(match result {
@@ -186,6 +188,33 @@ impl Jobs {
         }
     }
 
+    /// One line per kept job, for `/jobs`: the command while it runs,
+    /// the exit once it has one.
+    pub(super) fn report(&self) -> Vec<String> {
+        self.with(|jobs| {
+            jobs.iter()
+                .enumerate()
+                .map(|(at, job)| {
+                    let id = at + 1;
+                    match job.settled.borrow().as_ref() {
+                        Some(Ok(status)) => format!(
+                            "#{id} exited: {}",
+                            status.code().map_or_else(
+                                || "killed by signal".to_string(),
+                                |code| format!("exit {code}"),
+                            )
+                        ),
+                        Some(Err(e)) => format!("#{id} exited: {e}"),
+                        None => format!(
+                            "#{id} running: {}",
+                            super::joblog::clamp_chars(&job.command, 80)
+                        ),
+                    }
+                })
+                .collect()
+        })
+    }
+
     /// Keep a job still running and give it its number. The exit registry
     /// gets a handle too, so an exit that skips [`Drop`] can still kill it.
     fn keep(&self, job: Arc<Job>) -> u64 {
@@ -223,10 +252,11 @@ impl Job {
     /// Hand a started command to its own task, so the call that waits on
     /// it may end first; `settled` is what that task answers, and `exited`
     /// is set as soon as the shell is reaped.
-    fn running(spawned: Spawned) -> Self {
+    fn running(spawned: Spawned, command: &str) -> Self {
         let (answer, settled) = watch::channel(None);
         let (shell_exited, exited) = watch::channel(false);
         Self {
+            command: command.to_string(),
             capture: Arc::clone(&spawned.capture),
             pgid: spawned.pgid,
             exited,

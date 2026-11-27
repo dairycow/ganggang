@@ -172,6 +172,16 @@ impl Tool for BashTool {
         "bash"
     }
 
+    fn jobs_report(&self) -> Option<String> {
+        let mut lines = self.jobs.report();
+        lines.extend(joblog::report(&self.joblog));
+        Some(if lines.is_empty() {
+            "no jobs".to_string()
+        } else {
+            lines.join("\n")
+        })
+    }
+
     fn description(&self) -> &'static str {
         "Run a shell command in bash; returns merged stdout+stderr and the exit code. \
  Output keeps the start and end when over 10 KiB. Nonzero exits are errors that still \

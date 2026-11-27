@@ -39,6 +39,7 @@ pub(crate) const BUILTINS: &[(&str, &str, &str)] = &[
         "pick a saved session, copy its path, or show session info",
     ),
     ("/context", "", "show the assembled system prompt"),
+    ("/jobs", "", "show background and registered jobs"),
     ("/hooks", "", "list loaded hooks"),
     ("/skill", " <name> [args]", "run a skill now"),
     (

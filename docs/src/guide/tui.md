@@ -94,6 +94,8 @@ A session's 8-hex id works as a filter: `/session 3fa9` leaves that session high
 
 `/reload` re-discovers `AGENTS.md` files and skills from disk: the next system prompt picks up new files and skills, the `/skill` rows refresh, and the local servers' `/v1/models` probes run again in the background. The session's entries and identity are kept (see [Reloading context and skills](context-and-skills.md#reloading-context-and-skills)).
 
+`/jobs` shows what the session's tools hold. The `bash` tool reports one line per [background job](tools.md#bash) it kept (`#1 running: <command>` while it runs, `#1 exited: exit 0` once collected) and one per job a command registered in the run's job log, named as the command named it: `build · running 4m · pid 1234 · compiling src/main.rs` while it runs, with how long it has been alive, its pid and the last line of its progress file, or `build · done exit 0 · finished clean` once a done record lands. With nothing held and nothing registered, it says `no jobs`.
+
 The command list is in [TUI slash commands](../reference/commands.md). Unknown commands are rejected with the valid set.
 
 ## Shell lines: `!` and `!!`

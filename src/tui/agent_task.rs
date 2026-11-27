@@ -43,6 +43,8 @@ pub enum UiEvent {
     /// Reply to `/context`: the exact system prompt the next request
     /// carries (§12's other debugging affordance).
     SystemPrompt(String),
+    /// Reply to `/jobs`: what the tools hold, one line per job.
+    Jobs(String),
     /// Reply to `/compact` (§14): one line about what the compaction
     /// did — including "nothing to compact" and failure, which the run
     /// survives — plus a fresh context-token estimate for the footer
@@ -84,6 +86,7 @@ pub enum UiEvent {
 pub enum AgentInput {
     Prompt(String),
     DumpContext,
+    DumpJobs,
     Compact(Option<String>),
     SwitchEndpoint(crate::config::Endpoint),
     Reload,
@@ -102,6 +105,11 @@ pub(super) async fn agent_task(
         let input = match input {
             AgentInput::DumpContext => {
                 let _ = ui.send(UiEvent::SystemPrompt(agent.system_prompt())).await;
+                continue;
+            }
+            AgentInput::DumpJobs => {
+                let report = agent.jobs_report().unwrap_or_else(|| "no jobs".to_string());
+                let _ = ui.send(UiEvent::Jobs(report)).await;
                 continue;
             }
             AgentInput::Compact(instructions) => {
@@ -280,6 +288,9 @@ pub(super) async fn apply(
         }
         UiEvent::SystemPrompt(prompt) => {
             state.push_info(&format!("— system prompt —\n{prompt}"));
+        }
+        UiEvent::Jobs(report) => {
+            state.push_info(&report);
         }
         UiEvent::Compacted {
             message,
