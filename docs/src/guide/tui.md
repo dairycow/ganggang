@@ -11,6 +11,7 @@ If stdin is not a terminal and no prompt is given, `gg` exits with an error; use
 | `Enter` | Send the message; in an open list, act on the highlighted row: open the session or run its `copy path` or `info` row, switch to the model, or run the skill |
 | `Alt+Enter`, `Ctrl+J` | Newline (`Shift+Enter` too, where the terminal reports modified keys) |
 | `Backspace` | Delete before the cursor |
+| `Delete` | Delete at the cursor (at the end of a line, the next line joins on) |
 | `←` / `→` | Move the cursor |
 | `Ctrl+←` / `Ctrl+→` | Move the cursor by word |
 | `↑` / `↓` | Recall prompts while you are browsing history, even with the `/` suggestion list or the `/session`, `/model` or `/skill` list open over a recalled command; otherwise navigate that list while one is open, or recall prompts while the composer is empty or single-line, or move between its lines |

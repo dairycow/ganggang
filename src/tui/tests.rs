@@ -93,6 +93,30 @@ fn readline_keys_edit_the_composer_and_arrows_move_the_cursor() {
     );
 }
 
+/// Delete and Backspace each delete on their own side of the cursor,
+/// whatever modifier a terminal dresses them with: no other action claims
+/// those chords.
+#[test]
+fn delete_and_backspace_delete_whatever_their_modifiers() {
+    for modifiers in [
+        KeyModifiers::NONE,
+        KeyModifiers::SHIFT,
+        KeyModifiers::CONTROL,
+        KeyModifiers::ALT,
+    ] {
+        assert_eq!(
+            classify(key(KeyCode::Delete, modifiers)),
+            KeyAction::Delete,
+            "Delete with {modifiers:?}"
+        );
+        assert_eq!(
+            classify(key(KeyCode::Backspace, modifiers)),
+            KeyAction::Backspace,
+            "Backspace with {modifiers:?}"
+        );
+    }
+}
+
 #[test]
 fn ctrl_c_interrupts_ctrl_o_expands_ctrl_t_thinks_esc_aborts_pages_scroll() {
     assert_eq!(

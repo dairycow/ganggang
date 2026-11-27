@@ -262,6 +262,8 @@ fn events_hooks_and_keys_are_exhaustively_documented() {
         match a {
             KeyAction::Insert(_) | KeyAction::Ignore => &[],
             KeyAction::Backspace => &["Backspace"],
+            // Backticked: the Backspace row's prose says "Delete" too.
+            KeyAction::Delete => &["`Delete`"],
             KeyAction::Newline => &["Alt+Enter", "Ctrl+J"],
             KeyAction::Send => &["Enter"],
             KeyAction::Abort => &["Esc"],
@@ -288,6 +290,7 @@ fn events_hooks_and_keys_are_exhaustively_documented() {
     for a in [
         KeyAction::Insert('a'),
         KeyAction::Backspace,
+        KeyAction::Delete,
         KeyAction::Newline,
         KeyAction::Send,
         KeyAction::Abort,

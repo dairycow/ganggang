@@ -554,6 +554,7 @@ pub async fn run(
                         }
                         KeyAction::Newline => state.editor.newline(),
                         KeyAction::Backspace => state.editor.backspace(),
+                        KeyAction::Delete => state.editor.delete_forward(),
                         KeyAction::Insert(c) => state.editor.insert_char(c),
                         KeyAction::LineStart => state.editor.move_home(),
                         KeyAction::LineEnd => state.editor.move_end(),

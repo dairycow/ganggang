@@ -8,6 +8,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent
 pub enum KeyAction {
     Insert(char),
     Backspace,
+    /// Delete: the char at the cursor goes and the cursor stays; at the end
+    /// of a line the newline goes, joining the next line on (readline's
+    /// delete-char).
+    Delete,
     Newline,
     Send,
     Abort,
@@ -120,7 +124,10 @@ pub fn classify(key: KeyEvent) -> KeyAction {
         KeyCode::Char('p') if ctrl => KeyAction::HistoryPrev,
         KeyCode::Char('n') if ctrl => KeyAction::HistoryNext,
         KeyCode::Esc => KeyAction::Abort,
+        // Shift, Ctrl or Alt on either key still deletes: no other action
+        // claims those chords.
         KeyCode::Backspace => KeyAction::Backspace,
+        KeyCode::Delete => KeyAction::Delete,
         KeyCode::Home => KeyAction::LineStart,
         KeyCode::End => KeyAction::LineEnd,
         KeyCode::Left if ctrl => KeyAction::WordLeft,

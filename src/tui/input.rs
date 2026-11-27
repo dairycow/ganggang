@@ -42,6 +42,18 @@ impl Editor {
         self.cursor -= 1;
     }
 
+    /// Delete: the char at the cursor goes and the cursor stays. No-op at
+    /// the very end; over a newline the lines join, as [`kill_to_end`]
+    /// joins them at the end of a line (readline's delete-char).
+    pub fn delete_forward(&mut self) {
+        if self.cursor >= self.char_count() {
+            return;
+        }
+        let start = self.char_to_byte(self.cursor);
+        let end = self.char_to_byte(self.cursor + 1);
+        self.text.replace_range(start..end, "");
+    }
+
     /// One char left, clamped at the start.
     pub fn move_left(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
@@ -403,6 +415,54 @@ mod tests {
         ed.kill_to_end();
         assert_eq!(ed.lines(), vec!["otwo"]);
         assert_eq!(ed.cursor_row_col(), (0, 1));
+    }
+
+    #[test]
+    fn delete_removes_the_char_at_the_cursor_and_joins_at_a_line_end() {
+        // One char per press, multibyte or not, and the cursor stays put.
+        let mut ed = Editor::default();
+        ed.insert_str("héllo");
+        ed.set_cursor(1);
+        ed.delete_forward();
+        assert_eq!(ed.lines(), vec!["hllo"]);
+        assert_eq!(ed.cursor_row_col(), (0, 1));
+
+        let mut ed = Editor::default();
+        ed.insert_str("日本語");
+        ed.set_cursor(1);
+        ed.delete_forward();
+        assert_eq!(ed.lines(), vec!["日語"]);
+
+        // At the very end of the text there is nothing ahead to delete.
+        let mut ed = Editor::default();
+        ed.insert_str("one\ntwo");
+        ed.set_cursor(7); // seven chars: the end of the text
+        ed.delete_forward();
+        assert_eq!(ed.lines(), vec!["one", "two"]);
+        assert_eq!(ed.cursor_row_col(), (1, 3));
+
+        // Over a newline the lines join, as Ctrl+K joins them at a line end.
+        ed.set_cursor(3);
+        ed.delete_forward();
+        assert_eq!(ed.lines(), vec!["onetwo"]);
+        assert_eq!(ed.cursor_row_col(), (0, 3));
+        ed.set_cursor(0);
+        ed.delete_forward();
+        assert_eq!(ed.lines(), vec!["netwo"]);
+
+        // A newline is a char like any other, on the last line too.
+        let mut ed = Editor::default();
+        ed.insert_str("one\n");
+        ed.set_cursor(3);
+        ed.delete_forward();
+        assert_eq!(ed.lines(), vec!["one"]);
+        assert_eq!(ed.cursor_row_col(), (0, 3));
+
+        // An empty composer stays empty.
+        let mut ed = Editor::default();
+        ed.delete_forward();
+        assert_eq!(ed.lines(), vec![""]);
+        assert_eq!(ed.cursor_row_col(), (0, 0));
     }
 
     #[test]
