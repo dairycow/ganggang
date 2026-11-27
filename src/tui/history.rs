@@ -193,9 +193,12 @@ impl History {
 /// Which editing action one arrow press means (gap §4's rule), decided
 /// before any state moves:
 ///
-/// * the suggestion popup owns the arrows while it is open;
-/// * a browse in progress owns them next — ↑ older, ↓ newer, whatever the
-///   recalled text looks like (a multi-line prompt must stay walkable);
+/// * a browse in progress owns the arrows — ↑ older, ↓ newer, whatever the
+///   recalled text looks like: a multi-line prompt must stay walkable, and
+///   the suggestion list or `/session`, `/model`, `/skill` list a recalled
+///   command opens over the composer does not take them, or the newest
+///   entry would be as far as a walk gets;
+/// * the suggestion popup owns them next, while it is open;
 /// * ↑ starts a browse from an empty composer or a single logical line;
 /// * a multi-line composer keeps its line-by-line cursor, and ↓ there —
 ///   with no browse running, it has no history to walk — does nothing.
@@ -221,15 +224,15 @@ pub enum Arrow {
 /// for a composer holding nothing at all (see
 /// [`line_count`](super::input::Editor::line_count)).
 pub fn history_for(up: bool, popup_open: bool, browsing: bool, logical_lines: usize) -> Arrow {
+    if browsing {
+        return if up { Arrow::Prev } else { Arrow::Next };
+    }
     if popup_open {
         return if up {
             Arrow::SuggestPrev
         } else {
             Arrow::SuggestNext
         };
-    }
-    if browsing {
-        return if up { Arrow::Prev } else { Arrow::Next };
     }
     if logical_lines > 1 {
         return if up { Arrow::LineUp } else { Arrow::LineDown };

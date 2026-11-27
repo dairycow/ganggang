@@ -37,11 +37,13 @@ pub enum KeyAction {
     WordLeft,
     /// Ctrl+→: past the word after the cursor (readline's forward-word).
     WordRight,
-    /// ↑: suggestion previous while the popup is open; history recall or
-    /// cursor up otherwise (the loop decides — see
+    /// ↑: history recall while a browse is in progress; otherwise
+    /// suggestion previous while the popup is open, then history recall or
+    /// cursor up (the loop decides — see
     /// [`history_for`](super::history::history_for)).
     SuggestPrev,
-    /// ↓: suggestion next while the popup is open; history recall, cursor
+    /// ↓: history recall while a browse is in progress; otherwise
+    /// suggestion next while the popup is open, then history recall, cursor
     /// down, or nothing (same rule).
     SuggestNext,
     /// Ctrl+P / Ctrl+N: history recall whatever the composer holds, arrows
@@ -127,9 +129,10 @@ pub fn classify(key: KeyEvent) -> KeyAction {
         KeyCode::Right => KeyAction::CursorRight,
         KeyCode::PageUp => KeyAction::ScrollUp,
         KeyCode::PageDown => KeyAction::ScrollDown,
-        // Arrow keys belong to the suggestion popup when it is open; with
-        // it closed they move the composer's cursor (PageUp/Down own
-        // paging).
+        // Arrow keys: `SuggestPrev`/`SuggestNext`, the popup's while it is
+        // open and no browse is in progress; otherwise history or the
+        // composer's cursor, which the loop decides. PageUp/Down own
+        // paging.
         KeyCode::Up => KeyAction::SuggestPrev,
         KeyCode::Down => KeyAction::SuggestNext,
         KeyCode::Tab => KeyAction::SuggestComplete,

@@ -940,6 +940,102 @@ fn the_open_popup_outranks_history_for_the_arrows() {
     assert_eq!(state.arrow(false), Arrow::SuggestNext);
 }
 
+/// Once a browse has started the arrows stay on history, even where the
+/// recalled text opens a popup over the composer: the suggestion list of a
+/// bare command word. ↑ walks on to the entry before it and ↓ walks back;
+/// past the newest the draft returns and the browse ends.
+#[test]
+fn a_browse_keeps_the_arrows_over_the_recalled_text() {
+    let mut state = state_with_history(&["first prompt", "/new"]);
+    assert_eq!(state.arrow(true), Arrow::Prev);
+    state.recall_prev();
+    assert!(
+        state.suggest_open(),
+        "the popup is live over the recalled command"
+    );
+    assert_eq!(state.arrow(true), Arrow::Prev);
+    assert_eq!(state.arrow(false), Arrow::Next);
+
+    state.recall_prev();
+    assert_eq!(state.editor.text(), "first prompt");
+    assert!(!state.popup_open(), "a plain prompt opens nothing");
+    state.recall_next();
+    assert_eq!(state.editor.text(), "/new");
+    assert!(state.suggest_open());
+    assert_eq!(
+        state.arrow(false),
+        Arrow::Next,
+        "and the arrows are still the browse's"
+    );
+
+    state.recall_next();
+    assert_eq!(state.editor.text(), "", "the draft, and the browse is over");
+    assert!(!state.suggest_open());
+    assert_eq!(state.arrow(true), Arrow::Prev, "a fresh ↑ starts over");
+}
+
+/// The same over a recalled list command. The next frame's sync opens the
+/// `/model` list over it, as it would over a typed one, and the arrows
+/// still walk history under the list. Each frame then closes the list for
+/// text that opens none, or refilters it for text that opens the same one,
+/// so nothing stale stays drawn over the composer.
+#[test]
+fn a_browse_keeps_the_arrows_over_a_recalled_list_command() {
+    let mut state = state_with_history(&["first prompt", "/model claude", "/model gpt"]);
+    state.set_models(std::sync::Arc::new(vec![
+        model_choice("anthropic", "claude-sonnet", 200_000),
+        model_choice("openai", "gpt-5", 400_000),
+    ]));
+    assert_eq!(state.arrow(true), Arrow::Prev);
+    state.recall_prev();
+    state.sync_picker();
+    assert!(
+        state.picker_open(),
+        "the list is open over the recalled command"
+    );
+    assert_eq!(picker_names(&state), ["openai/gpt-5"]);
+    assert_eq!(state.arrow(true), Arrow::Prev);
+    assert_eq!(state.arrow(false), Arrow::Next);
+
+    // ↑: the same list, filtered by the command now shown.
+    state.recall_prev();
+    state.sync_picker();
+    assert_eq!(state.editor.text(), "/model claude");
+    assert!(state.picker_open(), "the same list, still open");
+    assert_eq!(
+        picker_names(&state),
+        ["anthropic/claude-sonnet"],
+        "refiltered for the text it is drawn over"
+    );
+
+    // ↑: a plain prompt opens no list, so the list closes.
+    state.recall_prev();
+    state.sync_picker();
+    assert_eq!(state.editor.text(), "first prompt");
+    assert!(!state.popup_open(), "no list over text that opens none");
+    assert_eq!(state.arrow(false), Arrow::Next);
+
+    // ↓: back onto a list command, the list reopens; the arrows are still
+    // history's.
+    state.recall_next();
+    state.sync_picker();
+    assert_eq!(state.editor.text(), "/model claude");
+    assert!(state.picker_open());
+    assert_eq!(state.arrow(false), Arrow::Next);
+    state.recall_next();
+    state.sync_picker();
+    assert_eq!(state.editor.text(), "/model gpt");
+    assert_eq!(picker_names(&state), ["openai/gpt-5"]);
+
+    // ↓ past the newest: the draft returns, the browse ends, and the list
+    // goes with the text that opened it.
+    state.recall_next();
+    state.sync_picker();
+    assert_eq!(state.editor.text(), "");
+    assert!(!state.picker_open());
+    assert_eq!(state.arrow(true), Arrow::Prev, "a fresh ↑ starts over");
+}
+
 /// The highlighted row of the open list.
 fn highlighted(state: &State) -> usize {
     state

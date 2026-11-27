@@ -78,8 +78,9 @@ impl crate::tui::view::State {
         }
     }
 
-    /// What one arrow key means for this composer: the popup while it is
-    /// open, then history, then the composer's own lines.
+    /// What one arrow key means for this composer: a browse in progress,
+    /// then the popup while it is open, then history, then the composer's
+    /// own lines.
     pub fn arrow(&self, up: bool) -> Arrow {
         history_for(
             up,

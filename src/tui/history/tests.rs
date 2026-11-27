@@ -275,7 +275,7 @@ fn an_unwritable_file_leaves_the_history_working() {
 // ------------------------------------------------------- the arrow rule --
 
 #[test]
-fn the_popup_owns_the_arrows_while_it_is_open() {
+fn the_popup_owns_the_arrows_unless_a_browse_is_under_way() {
     assert_eq!(
         history_for(true, true, false, 1),
         Arrow::SuggestPrev,
@@ -283,8 +283,8 @@ fn the_popup_owns_the_arrows_while_it_is_open() {
     );
     assert_eq!(
         history_for(false, true, true, 3),
-        Arrow::SuggestNext,
-        "and even while browsing"
+        Arrow::Next,
+        "but a browse in progress keeps them, a three-line entry included"
     );
 }
 
@@ -293,6 +293,9 @@ fn browsing_owns_the_arrows_whatever_the_recalled_text_looks_like() {
     // A three-line recalled prompt is still walked, not edited by line.
     assert_eq!(history_for(true, false, true, 3), Arrow::Prev);
     assert_eq!(history_for(false, false, true, 3), Arrow::Next);
+    // So is a recalled command word: the suggestion list it opens over the
+    // composer does not take the arrows from the browse.
+    assert_eq!(history_for(true, true, true, 1), Arrow::Prev);
 }
 
 #[test]

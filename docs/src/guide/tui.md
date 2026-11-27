@@ -13,7 +13,7 @@ If stdin is not a terminal and no prompt is given, `gg` exits with an error; use
 | `Backspace` | Delete before the cursor |
 | `←` / `→` | Move the cursor |
 | `Ctrl+←` / `Ctrl+→` | Move the cursor by word |
-| `↑` / `↓` | Navigate the `/` suggestion list or the `/session`, `/model` or `/skill` list while one is open; otherwise recall prompts while the composer is empty or single-line, or move between its lines |
+| `↑` / `↓` | Recall prompts while you are browsing history, even with the `/` suggestion list or the `/session`, `/model` or `/skill` list open over a recalled command; otherwise navigate that list while one is open, or recall prompts while the composer is empty or single-line, or move between its lines |
 | `Ctrl+P` / `Ctrl+N` | Recall the previous / next prompt, whatever the composer holds, unless the suggestion list or the `/session`, `/model` or `/skill` list is open |
 | `Ctrl+A`, `Home` | Start of line |
 | `Ctrl+E`, `End` | End of line |
@@ -34,7 +34,7 @@ When you stop a run, the footer shows `stopping…` while active streams close a
 
 ## Prompt history
 
-Submitted prompts, `!`/`!!` commands, and slash commands (except `/quit`) are stored in `~/.gg/history.jsonl` (one JSON string per line, mode `0600`, newest 500 entries). Use `↑`/`↓` to browse history when the composer is empty or single-line, or `Ctrl+P`/`Ctrl+N` at any time. Pressing `↑` saves your current draft; pressing `↓` past the latest entry restores it. Recalled entries can be edited before sending. Without `HOME`, history is kept in memory for the current run only.
+Submitted prompts, `!`/`!!` commands, and slash commands (except `/quit`) are stored in `~/.gg/history.jsonl` (one JSON string per line, mode `0600`, newest 500 entries). Use `↑`/`↓` to browse history when the composer is empty or single-line, or `Ctrl+P`/`Ctrl+N` at any time; once you are browsing, `↑`/`↓` keep walking history even when a recalled slash command opens the suggestion list or the `/session`, `/model` or `/skill` list. Pressing `↑` saves your current draft; pressing `↓` past the latest entry restores it. Recalled entries can be edited before sending. Without `HOME`, history is kept in memory for the current run only.
 
 ## Theme and layout
 
@@ -61,9 +61,9 @@ Assistant answers render a deliberately small markdown subset; your own messages
 
 ## Slash commands
 
-Typing `/` opens a suggestion list above the composer: the built-ins. `↑`/`↓` move the highlight, `Tab` completes, and `Enter` still sends exactly what you typed, except in the `/session`, `/model` and `/skill` lists, where it acts on the highlighted row.
+Typing `/` opens a suggestion list above the composer: the built-ins. `↑`/`↓` move the highlight (except while you are browsing history), `Tab` completes, and `Enter` still sends exactly what you typed, except in the `/session`, `/model` and `/skill` lists, where it acts on the highlighted row.
 
-Those three commands open a list in the panel above the composer as soon as the command is typed, and what follows the command filters it. In every list, `↑`/`↓` and the mouse wheel move the highlight, the panel scrolls to follow it, `Enter` acts on the highlighted row, and `Esc` or `Ctrl+C` clear the line and close it. A failed action keeps the list and shows the error in its last row.
+Those three commands open a list in the panel above the composer as soon as the command is typed, and what follows the command filters it. In every list, `↑`/`↓` (except while you are browsing history) and the mouse wheel move the highlight, the panel scrolls to follow it, `Enter` acts on the highlighted row, and `Esc` or `Ctrl+C` clear the line and close it. A failed action keeps the list and shows the error in its last row.
 
 Typing `/model` opens the model list in the same panel, with one row per model: `provider/model`, its context window, any discovery status, `no key` when its key is missing, and the `· active` mark on the model in use. With nothing typed after the command the active model is highlighted, so `Enter` on a bare `/model` changes nothing (`already on …`). Typing after the command filters the list case-insensitively: every word has to appear in a row's `provider/model` or its description, so `loaded`, `no key` and `active` narrow the list, and `Enter` switches to the highlighted model; a switch that fails, say over a missing key or an unknown model, keeps the list and shows the error in its last row. `Tab` completes the highlighted `provider/model` into the command. Live local models (Strata, `llama-server`, Ollama, vLLM) refresh in the background at startup and on `/reload`: their `/v1/models` endpoints are probed off the render loop with short timeouts, so the list picks up models loaded after the session began without waiting on a down server.
 

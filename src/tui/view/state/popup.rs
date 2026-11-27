@@ -21,8 +21,10 @@ impl crate::tui::view::State {
             && !self.suggestions().is_empty()
     }
 
-    /// Whether a popup has the arrows: the suggestion list or the
-    /// `/session` list.
+    /// Whether a popup is open: the suggestion list or the `/session`,
+    /// `/model` or `/skill` list. Ctrl+P and Ctrl+N stand down while one
+    /// is, and the arrows are its too unless a browse is in progress (see
+    /// [`history_for`](crate::tui::history::history_for)).
     pub fn popup_open(&self) -> bool {
         self.picker.is_some() || self.suggest_open()
     }

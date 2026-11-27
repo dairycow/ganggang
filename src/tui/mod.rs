@@ -567,11 +567,13 @@ pub async fn run(
                         KeyAction::ToggleThinking => state.toggle_thinking(),
                         KeyAction::ScrollUp => state.scroll_up(SCROLL_STEP),
                         KeyAction::ScrollDown => state.scroll_down(SCROLL_STEP),
-                        // ↑/↓ belong to the open popup (the suggestion
-                        // list or the `/session` list) while it is
-                        // open; otherwise they recall history (from an empty
-                        // or single-line composer) or move between the
-                        // composer's lines — the rule itself is
+                        // ↑/↓ recall history while a browse is in progress,
+                        // whatever the composer holds; otherwise they
+                        // belong to the open popup (the suggestion list or
+                        // a `/session`, `/model` or `/skill` list) while it
+                        // is open; otherwise they recall history (from an
+                        // empty or single-line composer) or move between
+                        // the composer's lines — the rule itself is
                         // [`history::history_for`].
                         KeyAction::SuggestPrev => match state.arrow(true) {
                             Arrow::SuggestPrev => state.popup_prev(),
@@ -590,8 +592,8 @@ pub async fn run(
                         },
                         // Ctrl+P / Ctrl+N: history whatever the composer
                         // holds, a three-line draft included (readline's
-                        // muscle memory). While the popup is open the arrows
-                        // are its, so these keys stand down.
+                        // muscle memory). While a popup is open they stand
+                        // down, browse or no browse.
                         KeyAction::HistoryPrev if !state.popup_open() => state.recall_prev(),
                         KeyAction::HistoryNext if !state.popup_open() => state.recall_next(),
                         KeyAction::SuggestComplete if state.suggest_open() => {
