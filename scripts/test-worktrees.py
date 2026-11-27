@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Tests for .agents/skills/orchestrator/orchestrator.sh, the orchestrator skill's git helper.
+"""Tests for .agents/skills/delegate/worktrees.sh, the delegate skill's git helper for jobs that edit.
 
-Run with ``python3 scripts/test-orchestrator.py``.
+Run with ``python3 scripts/test-worktrees.py``.
 
 A temporary git repository stands in for the developer's main checkout.
 The ``gg`` on PATH is a stub that records how it was called and, in
@@ -20,7 +20,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent.parent / ".agents" / "skills" / "orchestrator" / "orchestrator.sh"
+SCRIPT = Path(__file__).resolve().parent.parent / ".agents" / "skills" / "delegate" / "worktrees.sh"
 
 STUB = """#!/usr/bin/env bash
 printf '%s\\0' "$@" > "$STUB_DIR/argv"
@@ -42,9 +42,9 @@ esac
 """
 
 
-class OrchestratorTest(unittest.TestCase):
+class WorktreesTest(unittest.TestCase):
     def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix="gg-orchestrator-"))
+        self.root = Path(tempfile.mkdtemp(prefix="gg-worktrees-"))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         self.home = self.root / "home"
         self.bin = self.root / "bin"
@@ -88,7 +88,7 @@ class OrchestratorTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         return proc.stdout.strip()
 
-    def orch(self, *args, cwd=None, env=None, timeout=20):
+    def sh(self, *args, cwd=None, env=None, timeout=20):
         return subprocess.run(
             [str(SCRIPT), *args],
             cwd=cwd or self.main,
@@ -99,7 +99,7 @@ class OrchestratorTest(unittest.TestCase):
         )
 
     def new(self, name, *options):
-        proc = self.orch("new", name, *options)
+        proc = self.sh("new", name, *options)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         return proc
 
@@ -108,14 +108,14 @@ class OrchestratorTest(unittest.TestCase):
 
     def work(self, name, msg="job"):
         """A stub run: the job commits job.txt in its worktree."""
-        proc = self.orch(
+        proc = self.sh(
             "run", name, "--prompt", str(self.prompt), "--dir", str(self.jobs),
             env=self.env(STUB_MODE="commit", STUB_MSG=msg),
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
     def gate(self, name, **mode):
-        return self.orch("gate", name, env=self.env(**mode))
+        return self.sh("gate", name, env=self.env(**mode))
 
     def head(self, name):
         return self.git("rev-parse", "HEAD", cwd=self.wt(name))
@@ -123,7 +123,7 @@ class OrchestratorTest(unittest.TestCase):
     def recorded(self, branch):
         """The commit gate recorded for the branch, or None."""
         proc = subprocess.run(
-            ["git", "rev-parse", "--verify", "-q", f"refs/gg/orchestrator/{branch}"],
+            ["git", "rev-parse", "--verify", "-q", f"refs/gg/worktrees/{branch}"],
             cwd=self.main,
             env=self.env(),
             capture_output=True,
@@ -138,7 +138,7 @@ class OrchestratorTest(unittest.TestCase):
 
     def line(self, name):
         """The one line `list` prints for NAME."""
-        proc = self.orch("list")
+        proc = self.sh("list")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         lines = [line for line in proc.stdout.splitlines() if line.split()[:1] == [name]]
         self.assertEqual(len(lines), 1, proc.stdout)
@@ -147,7 +147,7 @@ class OrchestratorTest(unittest.TestCase):
     def refused(self, proc, *messages):
         """Exit 2, a message of its own, and nothing done."""
         self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
-        self.assertIn("orchestrator:", proc.stderr)
+        self.assertIn("worktrees:", proc.stderr)
         for message in messages:
             self.assertIn(message, proc.stderr)
 
@@ -186,7 +186,7 @@ class OrchestratorTest(unittest.TestCase):
         self.assertEqual(self.recorded("feat/a"), self.head("a"))
         self.assertRegex(self.line("a"), rf"^a\s+feat/a\s+behind 0\s+ahead 1\s+clean\s+gated\s+{path}$")
 
-        proc = self.orch("merge", "a")
+        proc = self.sh("merge", "a")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(self.main_head(), self.recorded("feat/a"))
         self.assertEqual((self.main / "job.txt").read_text(), "job a\n")
@@ -194,12 +194,12 @@ class OrchestratorTest(unittest.TestCase):
         self.assertEqual(self.git("ls-files", "--others", "--exclude-standard"), "scratch.txt")
         self.assertRegex(self.line("a"), rf"^a\s+feat/a\s+behind 0\s+ahead 0\s+clean\s+merged gated\s+{path}$")
 
-        proc = self.orch("drop", "a")
+        proc = self.sh("drop", "a")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertFalse(self.wt("a").exists())
         self.assertEqual(self.git("branch", "--list", "feat/a"), "")
         self.assertIsNone(self.recorded("feat/a"))
-        self.assertEqual(self.orch("list").stdout.splitlines(), ["orchestrator: worktrees against main"])
+        self.assertEqual(self.sh("list").stdout.splitlines(), ["worktrees: against main"])
 
     def main_head(self):
         return self.git("rev-parse", "main")
@@ -210,10 +210,10 @@ class OrchestratorTest(unittest.TestCase):
         self.assertEqual(self.gate("b").returncode, 0)
         self.move_main()
         moved = self.main_head()
-        self.refused(self.orch("merge", "b"), "main moved since b branched", "update b")
+        self.refused(self.sh("merge", "b"), "main moved since b branched", "update b")
         self.assertEqual(self.main_head(), moved)
 
-        proc = self.orch("update", "b")
+        proc = self.sh("update", "b")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("now has main", proc.stdout)
         self.assertEqual(self.git("merge-base", "main", "HEAD", cwd=self.wt("b")), moved)
@@ -221,21 +221,21 @@ class OrchestratorTest(unittest.TestCase):
         self.assertEqual(len(self.git("log", "--oneline", "--merges", "main..HEAD", cwd=self.wt("b")).splitlines()), 1)
         # The merge commit ran no hook, so the gate's record no longer
         # covers the tip: update must be followed by gate.
-        self.refused(self.orch("merge", "b"), "moved since the gate")
+        self.refused(self.sh("merge", "b"), "moved since the gate")
         self.assertEqual(self.gate("b").returncode, 0)
-        proc = self.orch("merge", "b")
+        proc = self.sh("merge", "b")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(self.main_head(), self.head("b"))
         landed = self.git("log", "--oneline", f"{moved}..main")
         self.assertIn("job b", landed)
         self.assertIn("Merge branch 'main' into feat/b", landed)
-        self.assertEqual(self.orch("drop", "b").returncode, 0)
+        self.assertEqual(self.sh("drop", "b").returncode, 0)
 
     def test_update_leaves_conflicts_for_the_job(self):
         self.new("c")
         self.work("c")
         self.move_main(text="main", name="job.txt")
-        proc = self.orch("update", "c")
+        proc = self.sh("update", "c")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("conflicts with main", proc.stderr)
         status = self.git("status", "--porcelain", cwd=self.wt("c"))
@@ -246,14 +246,14 @@ class OrchestratorTest(unittest.TestCase):
         self.git("add", "job.txt", cwd=self.wt("c"))
         self.git("commit", "-qm", "resolve", cwd=self.wt("c"))
         self.assertEqual(self.gate("c").returncode, 0)
-        self.assertEqual(self.orch("merge", "c").returncode, 0)
+        self.assertEqual(self.sh("merge", "c").returncode, 0)
         self.assertEqual((self.main / "job.txt").read_text(), "resolved\n")
 
     def test_update_with_main_unmoved_changes_nothing(self):
         self.new("d")
         self.work("d")
         tip = self.head("d")
-        proc = self.orch("update", "d")
+        proc = self.sh("update", "d")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("already has main", proc.stdout)
         self.assertEqual(self.head("d"), tip)
@@ -273,12 +273,12 @@ class OrchestratorTest(unittest.TestCase):
             ["new", "e", "--from", "nope"],
         ):
             with self.subTest(args=args):
-                proc = self.orch(*args)
+                proc = self.sh(*args)
                 self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
-                self.assertIn("orchestrator:", proc.stderr)
+                self.assertIn("worktrees:", proc.stderr)
         self.new("e", "-b", "feat/e")
-        self.refused(self.orch("new", "e"), "already exists")
-        self.refused(self.orch("new", "f", "-b", "feat/e"), "branch feat/e already exists")
+        self.refused(self.sh("new", "e"), "already exists")
+        self.refused(self.sh("new", "f", "-b", "feat/e"), "branch feat/e already exists")
         # The worktree is cut from the given commit; the branch defaults to feat/NAME.
         first = self.git("rev-list", "--max-parents=0", "HEAD")
         self.new("old", "--from", first)
@@ -289,22 +289,22 @@ class OrchestratorTest(unittest.TestCase):
         # A repository without a main branch has nothing to cut from.
         other = self.root / "other"
         self.git("init", "-q", "-b", "master", str(other))
-        self.refused(self.orch("new", "x", cwd=other), "main is not a commit")
+        self.refused(self.sh("new", "x", cwd=other), "main is not a commit")
         self.assertEqual(sorted(self.git("branch", "--format=%(refname:short)").split()), ["feat/e", "feat/old", "feat/plain", "main"])
 
     def test_run_refusals(self):
-        self.refused(self.orch("run", "nope"), "no worktree nope")
+        self.refused(self.sh("run", "nope"), "no worktree nope")
         # A plain directory under .worktrees/ is no worktree: git -C there
         # would reach the main checkout.
         (self.main / ".worktrees" / "fake").mkdir(parents=True)
-        self.refused(self.orch("run", "fake"), "no worktree fake")
+        self.refused(self.sh("run", "fake"), "no worktree fake")
         self.new("ok")
-        proc = self.orch("run", "ok")
+        proc = self.sh("run", "ok")
         self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
         self.assertIn("delegate: --prompt is required", proc.stderr)
         self.assertIsNone(self.argv(), "gg must not be started")
         # NAME wins over a --job of the caller's; the other options pass through.
-        proc = self.orch(
+        proc = self.sh(
             "run", "ok", "--job", "other", "--prompt", str(self.prompt),
             "--dir", str(self.jobs), "--max-turns", "5",
         )
@@ -314,7 +314,7 @@ class OrchestratorTest(unittest.TestCase):
         self.assertEqual(self.argv()[self.argv().index("--max-turns") + 1], "5")
 
     def test_gate_refusals(self):
-        self.refused(self.orch("gate", "nope"), "no worktree nope")
+        self.refused(self.sh("gate", "nope"), "no worktree nope")
         self.new("g")
         (self.wt("g") / "x.txt").write_text("x\n", encoding="utf-8")
         self.refused(self.gate("g"), "has changes")
@@ -335,49 +335,49 @@ class OrchestratorTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("moved during the gate", proc.stderr)
         self.assertIsNone(self.recorded("feat/i"))
-        self.refused(self.orch("merge", "i"), "no gate recorded")
+        self.refused(self.sh("merge", "i"), "no gate recorded")
 
     def test_merge_refusals(self):
-        self.refused(self.orch("merge", "nope"), "no worktree nope")
+        self.refused(self.sh("merge", "nope"), "no worktree nope")
         self.new("m")
         self.work("m")
         self.assertEqual(self.gate("m").returncode, 0)
         before = self.main_head()
         self.git("checkout", "-q", "-b", "side")
-        self.refused(self.orch("merge", "m"), "the main checkout is on side")
+        self.refused(self.sh("merge", "m"), "the main checkout is on side")
         self.git("checkout", "-q", "--detach")
-        self.refused(self.orch("merge", "m"), "the main checkout is on (detached)")
+        self.refused(self.sh("merge", "m"), "the main checkout is on (detached)")
         self.git("checkout", "-q", "main")
         (self.main / "staged.txt").write_text("s\n", encoding="utf-8")
         self.git("add", "staged.txt")
-        self.refused(self.orch("merge", "m"), "has staged changes")
+        self.refused(self.sh("merge", "m"), "has staged changes")
         self.git("rm", "-q", "--cached", "staged.txt")
         (self.main / "staged.txt").unlink()
         (self.main / "job.txt").write_text("local\n", encoding="utf-8")
-        self.refused(self.orch("merge", "m"), "changes in files the merge would touch")
+        self.refused(self.sh("merge", "m"), "changes in files the merge would touch")
         self.assertEqual((self.main / "job.txt").read_text(), "local\n")
         (self.main / "job.txt").unlink()
         (self.wt("m") / "x.txt").write_text("x\n", encoding="utf-8")
-        self.refused(self.orch("merge", "m"), "has changes")
+        self.refused(self.sh("merge", "m"), "has changes")
         (self.wt("m") / "x.txt").unlink()
         self.work("m", "more")
-        self.refused(self.orch("merge", "m"), "moved since the gate")
+        self.refused(self.sh("merge", "m"), "moved since the gate")
         self.assertEqual(self.main_head(), before)
         # A job with no commits has nothing to land.
         self.new("n")
-        proc = self.orch("merge", "n")
+        proc = self.sh("merge", "n")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("nothing to land", proc.stdout)
 
     def test_drop_refusals(self):
-        self.refused(self.orch("drop", "nope"), "no worktree nope")
+        self.refused(self.sh("drop", "nope"), "no worktree nope")
         self.new("u")
         self.work("u")
         self.assertEqual(self.gate("u").returncode, 0)
         (self.wt("u") / "x.txt").write_text("x\n", encoding="utf-8")
-        self.refused(self.orch("drop", "u"), "has changes")
+        self.refused(self.sh("drop", "u"), "has changes")
         (self.wt("u") / "x.txt").unlink()
-        self.refused(self.orch("drop", "u"), "not on main yet")
+        self.refused(self.sh("drop", "u"), "not on main yet")
         self.assertTrue(self.wt("u").exists())
         self.assertIn("feat/u", self.git("branch", "--list", "feat/u"))
         self.assertEqual(self.recorded("feat/u"), self.head("u"))
@@ -390,10 +390,10 @@ class OrchestratorTest(unittest.TestCase):
         self.new("o")
         self.work("o")
         self.assertEqual(self.gate("o").returncode, 0)
-        self.assertEqual(self.orch("merge", "o").returncode, 0)
+        self.assertEqual(self.sh("merge", "o").returncode, 0)
         # A branch that does not contain the job: `branch -d` would keep it.
         self.git("checkout", "-q", "-b", "side", "main~1")
-        proc = self.orch("drop", "o")
+        proc = self.sh("drop", "o")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertFalse(self.wt("o").exists())
         self.assertEqual(self.git("branch", "--list", "feat/o"), "")
@@ -408,12 +408,12 @@ class OrchestratorTest(unittest.TestCase):
         self.new("c")
         self.work("c", "job c")
         self.gate("c")
-        self.assertEqual(self.orch("merge", "c").returncode, 0)
+        self.assertEqual(self.sh("merge", "c").returncode, 0)
         self.move_main()
         self.git("worktree", "add", "-q", str(self.wt("gone")), "-b", "gone")
         shutil.rmtree(self.wt("gone"))
         self.git("checkout", "-q", "--detach", cwd=self.wt("b"))
-        proc = self.orch("list")
+        proc = self.sh("list")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         lines = {line.split()[0]: line for line in proc.stdout.splitlines()[1:]}
         self.assertEqual(sorted(lines), ["a", "b", "c", "gone"])
@@ -426,10 +426,10 @@ class OrchestratorTest(unittest.TestCase):
     def test_outside_a_repository_it_refuses(self):
         for args in (["list"], ["new", "x"], ["drop", "x"]):
             with self.subTest(args=args):
-                self.refused(self.orch(*args, cwd=self.outside), "not inside a git repository")
+                self.refused(self.sh(*args, cwd=self.outside), "not inside a git repository")
         bare = self.root / "bare.git"
         subprocess.run(["git", "init", "-q", "--bare", str(bare)], env=self.env(), check=True)
-        self.refused(self.orch("list", cwd=bare), "bare repository")
+        self.refused(self.sh("list", cwd=bare), "bare repository")
 
     def test_the_script_passes_bash_n_and_is_executable(self):
         proc = subprocess.run(["bash", "-n", str(SCRIPT)], capture_output=True, text=True)

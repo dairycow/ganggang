@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# orchestrator.sh: the git side of the orchestrator skill, one worktree per
-# delegated job.
+# worktrees.sh: the git side of the delegate skill, one worktree per job
+# that edits.
 #
 # A job is a delegate.sh job that runs in a worktree of its own,
 # $MAIN/.worktrees/NAME, on a branch cut from main. $MAIN is the
@@ -15,7 +15,7 @@
 #                                     worktree; the other options are its
 #   gate NAME                          run scripts/pre-commit-check.sh in the
 #                                     worktree and record the commit that
-#                                     passed in refs/gg/orchestrator/BRANCH
+#                                     passed in refs/gg/worktrees/BRANCH
 #   update NAME                        merge main into the job's branch
 #   merge NAME                         fast-forward main to the recorded commit
 #   drop NAME                          remove a clean worktree whose branch tip
@@ -29,7 +29,7 @@
 #
 # Exit status: 0 done, 2 refused or misused (nothing was changed), and 1
 # when a step ran and failed: the gate, an update with conflicts, a merge
-# git refused. See scripts/test-orchestrator.py.
+# git refused. See scripts/test-worktrees.py.
 set -euo pipefail
 
 S=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -37,28 +37,28 @@ MAIN_BRANCH=main
 
 usage() {
   cat <<'EOF'
-usage: orchestrator.sh new NAME [-b BRANCH] [--from REF]
-       orchestrator.sh run NAME --prompt FILE [delegate.sh options]
-       orchestrator.sh gate NAME
-       orchestrator.sh update NAME
-       orchestrator.sh merge NAME
-       orchestrator.sh drop NAME
-       orchestrator.sh list
+usage: worktrees.sh new NAME [-b BRANCH] [--from REF]
+       worktrees.sh run NAME --prompt FILE [delegate.sh options]
+       worktrees.sh gate NAME
+       worktrees.sh update NAME
+       worktrees.sh merge NAME
+       worktrees.sh drop NAME
+       worktrees.sh list
 
-Runs the git side of the orchestrator skill: one worktree per delegated
-job, under the main checkout's .worktrees/. NAME may use letters, digits,
-dot, dash and underscore.
+Runs the git side of the delegate skill: one worktree per job that edits,
+under the main checkout's .worktrees/. NAME may use letters, digits, dot,
+dash and underscore.
 EOF
 }
 
 # die: refused or misused, nothing changed. fail: a step ran and failed.
 die() {
-  echo "orchestrator: $*" >&2
+  echo "worktrees: $*" >&2
   exit 2
 }
 
 fail() {
-  echo "orchestrator: $*" >&2
+  echo "worktrees: $*" >&2
   exit 1
 }
 
@@ -118,7 +118,7 @@ clean() {
 on_branch() {
   branch=$(git -C "$wt" symbolic-ref --short -q HEAD) ||
     die "worktree $name is detached; a job runs on a branch"
-  ref="refs/gg/orchestrator/$branch"
+  ref="refs/gg/worktrees/$branch"
 }
 
 short() {
@@ -161,17 +161,17 @@ cmd_new() {
   mkdir -p "$common/info"
   exclude="$common/info/exclude"
   grep -qxF '.worktrees/' "$exclude" 2>/dev/null || echo '.worktrees/' >>"$exclude"
-  echo "orchestrator: worktree $name at $wt, on $branch at $(short "$tip") ($from)"
+  echo "worktrees: worktree $name at $wt, on $branch at $(short "$tip") ($from)"
 }
 
 cmd_run() {
   job "$1"
   shift
-  [[ -x "$S/../delegate/delegate.sh" ]] || die "delegate.sh not found beside the orchestrator skill"
-  echo "orchestrator: job $name in $wt" >&2
+  [[ -x "$S/delegate.sh" ]] || die "delegate.sh not found beside worktrees.sh"
+  echo "worktrees: job $name in $wt" >&2
   cd "$wt"
   # --job goes last, so NAME wins over one of the caller's.
-  exec "$S/../delegate/delegate.sh" "$@" --job "$name"
+  exec "$S/delegate.sh" "$@" --job "$name"
 }
 
 cmd_gate() {
@@ -182,13 +182,13 @@ cmd_gate() {
   [[ -x "$wt/scripts/pre-commit-check.sh" ]] ||
     die "no executable scripts/pre-commit-check.sh in $wt"
   before=$(git -C "$wt" rev-parse HEAD)
-  echo "orchestrator: gating $name at $(short "$before")" >&2
+  echo "worktrees: gating $name at $(short "$before")" >&2
   (cd "$wt" && scripts/pre-commit-check.sh) || fail "gate FAILED for $name; nothing recorded"
   after=$(git -C "$wt" rev-parse HEAD)
   [[ "$after" == "$before" ]] || fail "$name moved during the gate; gate it again"
   clean
   git -C "$wt" update-ref "$ref" "$after"
-  echo "orchestrator: gate passed for $name; recorded $(short "$after")"
+  echo "worktrees: gate passed for $name; recorded $(short "$after")"
 }
 
 cmd_update() {
@@ -198,7 +198,7 @@ cmd_update() {
   local tip
   tip=$(git -C "$wt" rev-parse HEAD)
   if git -C "$wt" merge-base --is-ancestor $MAIN_BRANCH "$tip"; then
-    echo "orchestrator: $name already has $MAIN_BRANCH"
+    echo "worktrees: $name already has $MAIN_BRANCH"
     return
   fi
   if ! git -C "$wt" merge --no-edit $MAIN_BRANCH; then
@@ -208,7 +208,7 @@ cmd_update() {
     fi
     fail "git did not merge $MAIN_BRANCH into $name"
   fi
-  echo "orchestrator: $name now has $MAIN_BRANCH, at $(git -C "$wt" rev-parse --short HEAD); review, then gate"
+  echo "worktrees: $name now has $MAIN_BRANCH, at $(git -C "$wt" rev-parse --short HEAD); review, then gate"
 }
 
 # The main checkout is on main: a fast-forward moves its working tree.
@@ -241,7 +241,7 @@ cmd_merge() {
   local tip gated count
   tip=$(git -C "$wt" rev-parse HEAD)
   if git -C "$wt" merge-base --is-ancestor "$tip" $MAIN_BRANCH; then
-    echo "orchestrator: $name is already on $MAIN_BRANCH at $(short "$tip"); nothing to land"
+    echo "worktrees: $name is already on $MAIN_BRANCH at $(short "$tip"); nothing to land"
     return
   fi
   gated=$(git -C "$wt" rev-parse --verify --quiet "$ref") ||
@@ -253,7 +253,7 @@ cmd_merge() {
   main_checkout_clear "$tip"
   count=$(git -C "$MAIN" rev-list --count "$MAIN_BRANCH..$tip")
   git -C "$MAIN" merge --ff-only --quiet "$tip" || fail "git refused the merge; ask the developer, and stash nothing"
-  echo "orchestrator: landed $name on $MAIN_BRANCH at $(short "$tip"), $count commit(s)"
+  echo "worktrees: landed $name on $MAIN_BRANCH at $(short "$tip"), $count commit(s)"
 }
 
 cmd_drop() {
@@ -275,14 +275,14 @@ cmd_drop() {
     fail "worktree removed, but branch $branch moved since the check and is kept"
   git -C "$MAIN" update-ref -d "$ref" 2>/dev/null || true
   git -C "$MAIN" worktree prune
-  echo "orchestrator: dropped $name, and branch $branch"
+  echo "worktrees: dropped $name, and branch $branch"
 }
 
 # One line per worktree past the main one: branch, behind and ahead of
 # main, clean, and whether it is merged, gated or stale.
 cmd_list() {
   local path name branch count behind ahead state flags tip
-  echo "orchestrator: worktrees against $MAIN_BRANCH"
+  echo "worktrees: against $MAIN_BRANCH"
   local paths=() line
   while IFS= read -r line; do
     [[ "$line" == "worktree "* ]] && paths+=("${line#worktree }")
@@ -301,7 +301,7 @@ cmd_list() {
     flags=''
     tip=$(git -C "$path" rev-parse HEAD)
     git merge-base --is-ancestor "$tip" $MAIN_BRANCH && flags+=' merged'
-    if [[ "$branch" != '(detached)' && "$(git rev-parse --verify --quiet "refs/gg/orchestrator/$branch")" == "$tip" ]]; then
+    if [[ "$branch" != '(detached)' && "$(git rev-parse --verify --quiet "refs/gg/worktrees/$branch")" == "$tip" ]]; then
       flags+=' gated'
     fi
     printf '%-20s %-28s behind %-3s ahead %-3s %-6s%s  %s\n' "$name" "$branch" "$behind" "$ahead" "$state" "$flags" "$path"
