@@ -8,7 +8,7 @@ gg -p - --session-file review.jsonl < prompt.md > answer.md 2> progress.log
 
 The prompt goes in through stdin (`-p -`), so it needs no quoting. The answer is `gg`'s stdout and the progress is its stderr, so the two stay apart. `read answer.md` then returns up to 2000 lines, where a `bash` result keeps 10 KiB.
 
-Jobs that do not depend on each other run at once with `&` and `wait`:
+Jobs that do not depend on each other run at once with `&` and `wait`. They share the working tree they start in, so jobs that edit files need a git worktree each (see [the `orchestrator` skill](#the-orchestrator-skill)):
 
 ```sh
 gg -p - --session-file a.jsonl < a.md > a.out 2> a.err &
@@ -54,3 +54,12 @@ The `ganggang` repository ships a `delegate` skill in `.agents/skills/delegate/`
 - `delegate.sh` runs one job and keeps `NAME.prompt.md`, `NAME.out`, `NAME.err` and `NAME.jsonl` together. It stops a job at `--timeout` and reports an empty answer as `NO ANSWER`. A `--timeout` of 20 s or more gives the job a [time budget](modes.md#run-budgets) 10 s short of the timeout (`--timeout 60` passes `--max-seconds 50`), so the job asks for its final answer and writes `NAME.out` before the watchdog stops it.
 
 Copy the directory into `~/.agents/skills/` to use it in any repository.
+
+## The `orchestrator` skill
+
+The `orchestrator` skill builds on `delegate` for jobs that edit files. Each job runs in a git worktree of its own, on a branch cut from `main`, so jobs that run at once never share a working tree and the main checkout keeps its uncommitted work. The run reviews each job's diff, gates it and lands it:
+
+- `SKILL.md` gives the flow: plan, prompt, review, gate, land.
+- `orchestrator.sh` has one command per step. `new` creates the worktree and `run` starts a `delegate.sh` job in it. `gate` runs `scripts/pre-commit-check.sh` there and records the commit that passed, and `merge` fast-forwards `main` to that commit and to nothing else. When `main` has moved, `update` merges it into the job's branch, and the job is reviewed and gated again before `merge`. `drop` removes a clean worktree whose branch is on `main`, and `list` shows what remains.
+
+Copy both directories into `~/.agents/skills/` to use them in any repository: `orchestrator` runs `delegate.sh` from the directory beside it.
