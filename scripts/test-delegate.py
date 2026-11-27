@@ -25,6 +25,9 @@ cat > "$STUB_DIR/stdin"
 case "${STUB_MODE:-ok}" in
   ok) echo "the answer" ;;
   empty) echo "some progress" >&2 ;;
+  cut) echo "warning: response truncated by max_tokens=100 before producing visible output; stopping instead of continuing" >&2 ;;
+  budget) echo "warning: reached max_turns (40); stopping run" >&2 ;;
+  noise) echo '▸ bash grep -n max_seconds src/agent' >&2; echo "some progress" >&2 ;;
   fail) echo "something went wrong" >&2; exit 3 ;;
   hang) sleep 30 ;;
 esac
@@ -80,10 +83,14 @@ class DelegateTest(unittest.TestCase):
                 return Path(line.removeprefix("delegate dir: "))
         self.fail(f"no directory line in: {proc.stdout!r}")
 
+    def records(self, path):
+        """The job log's tab-separated records, as lists of fields."""
+        return [line.split("\t") for line in path.read_text(encoding="utf-8").splitlines()]
+
     def test_one_job_keeps_its_files_and_reports_the_answer(self):
         proc = self.delegate("--job", "a", "--prompt", str(self.prompt))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("job a: exit 0 | answer: a.out (", proc.stdout)
+        self.assertIn("job a: ok | 11 bytes | answer: a.out | progress: a.err | session: a.jsonl", proc.stdout)
         directory = self.job_dir(proc)
         # The default directory is under HOME, one per calling shell,
         # keyed by the cwd slug gg's session store uses.
@@ -157,24 +164,88 @@ class DelegateTest(unittest.TestCase):
         self.assertIn("job a: NO ANSWER", proc.stdout)
         self.assertEqual((self.job_dir(proc) / "a.err").read_text(), "some progress\n")
 
+    def test_a_no_answer_says_why(self):
+        # The detail is read from NAME.err: a response cut off by max_tokens,
+        # a budget gg names, or a pointer to the progress file. A command line
+        # in the file that names a budget is not gg's warning.
+        cases = {
+            "empty": "read a.err",
+            "cut": "cut off by max_tokens before any visible output",
+            "budget": "reached its turn or time budget",
+            "noise": "read a.err",
+        }
+        for mode, detail in cases.items():
+            with self.subTest(mode=mode):
+                proc = self.delegate("--job", "a", "--prompt", str(self.prompt), env=self.env(STUB_MODE=mode))
+                self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+                self.assertIn(
+                    f"job a: NO ANSWER | {detail} | answer: a.out | progress: a.err | session: a.jsonl",
+                    proc.stdout,
+                )
+
     def test_the_jobs_own_exit_status_is_returned(self):
+        log = self.root / "fail.log"
         proc = self.delegate(
-            "--job", "a", "--prompt", str(self.prompt), env=self.env(STUB_MODE="fail")
+            "--job", "a", "--prompt", str(self.prompt), env=self.env(STUB_MODE="fail", GG_JOB_LOG=str(log))
         )
         self.assertEqual(proc.returncode, 3)
-        self.assertIn("job a: exit 3", proc.stdout)
+        self.assertIn("job a: failed | exit 3 | answer: a.out | progress: a.err | session: a.jsonl", proc.stdout)
+        self.assertEqual(self.records(log)[-1], ["done", "a", "3", "failed: exit 3"])
 
     def test_a_hanging_job_is_stopped_at_its_timeout(self):
         started = time.monotonic()
+        log = self.root / "timeout.log"
         proc = self.delegate(
             "--job", "a",
             "--prompt", str(self.prompt),
             "--timeout", "1",
-            env=self.env(STUB_MODE="hang"),
+            env=self.env(STUB_MODE="hang", GG_JOB_LOG=str(log)),
         )
         self.assertEqual(proc.returncode, 124, proc.stdout + proc.stderr)
-        self.assertIn("job a: timed out after 1s", proc.stdout)
+        self.assertIn("job a: timed out | after 1s | answer: a.out | progress: a.err | session: a.jsonl", proc.stdout)
         self.assertLess(time.monotonic() - started, 15)
+        self.assertEqual(self.records(log)[-1], ["done", "a", "124", "timed out: after 1s"])
+
+    def test_the_job_log_records_start_and_done(self):
+        log = self.root / "job.log"
+        directory = self.root / "jobs"
+        proc = self.delegate(
+            "--job", "a", "--prompt", str(self.prompt), "--dir", str(directory),
+            env=self.env(GG_JOB_LOG=str(log)),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        pid = (directory / "a.pid").read_text(encoding="utf-8").strip()
+        self.assertEqual(
+            self.records(log),
+            [["start", "a", pid, str(directory)], ["done", "a", "0", "ok"]],
+        )
+
+    def test_the_job_log_notes_a_no_answer(self):
+        log = self.root / "job.log"
+        proc = self.delegate(
+            "--job", "a", "--prompt", str(self.prompt),
+            env=self.env(STUB_MODE="budget", GG_JOB_LOG=str(log)),
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(
+            self.records(log)[-1],
+            ["done", "a", "1", "NO ANSWER: reached its turn or time budget"],
+        )
+
+    def test_without_gg_job_log_no_log_is_written(self):
+        directory = self.root / "jobs"
+        proc = self.delegate("--job", "a", "--prompt", str(self.prompt), "--dir", str(directory))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(list(directory.glob("*.log")), [])
+
+    def test_a_job_log_with_a_missing_directory_is_ignored(self):
+        # The log must not fail the job, and nothing is created.
+        proc = self.delegate(
+            "--job", "a", "--prompt", str(self.prompt),
+            env=self.env(GG_JOB_LOG=str(self.root / "nope" / "job.log")),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertFalse((self.root / "nope").exists())
 
     def test_bad_names_and_missing_prompts_are_refused(self):
         for args in (

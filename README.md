@@ -49,7 +49,7 @@ curl -s 127.0.0.1:8080/health
 
 ## Configuration
 
-Precedence: CLI flags > environment (`GG_PROVIDER`, `GG_BASE_URL`, `GG_MODEL`, `GG_API_KEY`, `GG_BASH_TIMEOUT`, `GG_MAX_RETRIES`, `GG_REQUEST_TIMEOUT`, `GG_MAX_TURNS`, `GG_DEBUG_PROMPT=1`, plus provider keys `ZHIPU_API_KEY`, `OPENCODE_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`) > `.gg/config.toml` > `~/.gg/config.toml` > defaults.
+Precedence: CLI flags > environment (`GG_PROVIDER`, `GG_BASE_URL`, `GG_MODEL`, `GG_API_KEY`, `GG_BASH_TIMEOUT`, `GG_NESTED_BASH_TIMEOUT`, `GG_MAX_RETRIES`, `GG_REQUEST_TIMEOUT`, `GG_MAX_TURNS`, `GG_DEBUG_PROMPT=1`, plus provider keys `ZHIPU_API_KEY`, `OPENCODE_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`) > `.gg/config.toml` > `~/.gg/config.toml` > defaults.
 
 ```toml
 # ~/.gg/config.toml
@@ -57,6 +57,7 @@ Precedence: CLI flags > environment (`GG_PROVIDER`, `GG_BASE_URL`, `GG_MODEL`, `
 max_tokens = 16384
 # context_window = 131072   # auto-probed from Strata /health when unset
 bash_timeout_secs = 30
+nested_bash_timeout_secs = 600
 max_retries = 5           # extra attempts on a transient transport failure
 request_timeout_secs = 600  # whole-response timeout (a stream included)
 tools = ["read", "bash", "edit", "write", "grep", "find", "ls", "outline"]

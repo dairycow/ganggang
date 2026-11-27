@@ -22,6 +22,7 @@ max_tokens = 16384
 # reasoning_effort = "high"         # empty string clears it
 # reasoning_budget_tokens = 8192    # 0 disables
 bash_timeout_secs = 30
+nested_bash_timeout_secs = 600
 max_retries = 5
 request_timeout_secs = 600
 tools = ["read", "bash", "edit", "write", "grep", "find", "ls", "outline"]
@@ -35,7 +36,7 @@ model = "deepseek-flash"
 # api_key = "…"  # or export DEEPSEEK_API_KEY
 ```
 
-Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `api_key`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`, `max_turns`, `max_seconds`, `bash_timeout_secs`, `max_retries`, `request_timeout_secs`, `tools`. The flat provider-level keys only apply when they belong to the active provider; `max_retries` and `request_timeout_secs` are top-level only.
+Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `api_key`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`, `max_turns`, `max_seconds`, `bash_timeout_secs`, `nested_bash_timeout_secs`, `max_retries`, `request_timeout_secs`, `tools`. The flat provider-level keys only apply when they belong to the active provider; `max_retries` and `request_timeout_secs` are top-level only.
 
 - `api` is `"open-ai-completions"` (default) or `"anthropic-messages"` (note the spelling: the `openai-completions` shown by `--list-models` is display text, not the config value).
 - `auth` is `"auto"` (Bearer for OpenAI, `x-api-key` for Anthropic), `"bearer"`, or `"x-api-key"`.
@@ -43,7 +44,8 @@ Top-level keys: `provider`, `model`, `base_url`, `api`, `auth`, `max_tokens`, `a
 - `compact_threshold_tokens` caps when auto-compaction triggers (e.g. `65536` on `strata` to stay within local VRAM KV residency; `0` disables).
 - `max_turns` caps turns per run (`0` disables); `gg` nudges the model to wrap up at 80% of the budget.
 - `max_seconds` caps the wall-clock time of one run, in seconds (`0` disables). At 80% of the budget `gg` nudges the model to wrap up. Once the budget is spent, the next request tells the model to answer without tools and the run ends with that answer. A budget of under 5 s has no nudge. See [Run budgets](modes.md#run-budgets).
-- `bash_timeout_secs` is the ceiling for one `bash` call, in seconds (minimum `1`); a call's `timeout_secs` is clamped to it. A [nested run](delegation.md) started from `bash` lives inside that call, so delegating needs either a ceiling of minutes or `background: true` on the call, which keeps the run as a [background job](tools.md#bash) past the ceiling.
+- `bash_timeout_secs` is the ceiling for one `bash` call, in seconds (minimum `1`); a call's `timeout_secs` is clamped to it. A [nested run](delegation.md) started from `bash` lives inside that call, so the call's `timeout_secs` still bounds the nested run as a whole; `background: true` keeps the run as a [background job](tools.md#bash) past the ceiling.
+- `nested_bash_timeout_secs` is the ceiling for one `bash` call inside a [nested run](delegation.md), in seconds (minimum `1`). Nobody watches a nested run, so its own commands get this ceiling (default `600`) instead of `bash_timeout_secs`.
 - `max_retries` sets the number of extra attempts for transient LLM failures (HTTP 408, 429, 5xx, timeouts, and dropped connections). Backoff starts at 1000 ms with jitter and doubles with each retry, up to 30 s; a `Retry-After` header overrides the backoff (also capped at 30 s). A stream that fails before its first output, such as a connection that drops or a body that ends empty, is retried on the same budget. Once any text has streamed, a cut answer is [continued](modes.md#truncated-responses) rather than retried, so nothing is shown twice. Set to `0` to disable retries. Other 4xx responses fail immediately. When every attempt fails, the run ends and the error is [recorded in the session](sessions-compaction.md#failed-runs).
 - `request_timeout_secs` sets the total timeout in seconds for a complete LLM request and response stream (minimum `1`). Responses exceeding this limit are cut off and partial text is kept (see [Output modes and export](modes.md#print-mode)).
 - `tools` is the allowlist of tools offered to the model (also `--tools read,grep`). Unknown names are an error. See [Tools](tools.md).
@@ -124,6 +126,7 @@ models = [
 | `GG_BASE_URL` | Override the endpoint base URL |
 | `GG_API_KEY` | API key, overriding every other key source |
 | `GG_BASH_TIMEOUT` | Maximum seconds for one bash call |
+| `GG_NESTED_BASH_TIMEOUT` | Maximum seconds for one bash call inside a nested run |
 | `GG_MAX_TURNS` | Maximum turns per run (`0` disables) |
 | `GG_MAX_SECONDS` | Maximum wall-clock seconds per run (`0` disables) |
 | `GG_MAX_RETRIES` | Extra attempts per transient LLM failure (`0` disables) |

@@ -24,15 +24,17 @@ SCRIPT = Path(__file__).resolve().parent.parent / ".agents" / "skills" / "delega
 
 STUB = """#!/usr/bin/env bash
 printf '%s\\0' "$@" > "$STUB_DIR/argv"
+printf '%s' "${CARGO_TARGET_DIR-}" > "$STUB_DIR/target_dir"
 cat > "$STUB_DIR/stdin"
 case "${STUB_MODE:-ok}" in
   ok) echo "the answer" ;;
-  commit) echo "${STUB_MSG:-job}" >> job.txt && git add job.txt && git commit -q -m "${STUB_MSG:-job}" && echo "the answer" ;;
+  commit) echo "${STUB_MSG:-job}" >> "${STUB_FILE:-job.txt}" && git add "${STUB_FILE:-job.txt}" && git commit -q -m "${STUB_MSG:-job}" && echo "the answer" ;;
 esac
 """
 
 GATE = """#!/usr/bin/env bash
 # A stand-in for the commit gate: no cargo runs in the tests.
+printf '%s' "${CARGO_TARGET_DIR-}" > "$STUB_DIR/gate_target"
 echo "stub gate in $PWD"
 case "${GATE_MODE:-ok}" in
   ok) ;;
@@ -106,11 +108,11 @@ class WorktreesTest(unittest.TestCase):
     def wt(self, name):
         return self.main / ".worktrees" / name
 
-    def work(self, name, msg="job"):
-        """A stub run: the job commits job.txt in its worktree."""
+    def work(self, name, msg="job", **extra):
+        """A stub run: the job commits its file in its worktree."""
         proc = self.sh(
             "run", name, "--prompt", str(self.prompt), "--dir", str(self.jobs),
-            env=self.env(STUB_MODE="commit", STUB_MSG=msg),
+            env=self.env(STUB_MODE="commit", STUB_MSG=msg, **extra),
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
@@ -257,6 +259,103 @@ class WorktreesTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("already has main", proc.stdout)
         self.assertEqual(self.head("d"), tip)
+
+    def test_run_and_gate_leave_cargo_target_dir_unset(self):
+        # Each worktree builds into its own target/; nothing exports one.
+        self.new("t")
+        proc = self.sh("run", "t", "--prompt", str(self.prompt), "--dir", str(self.jobs))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual((self.stub_dir / "target_dir").read_text(), "")
+        self.work("t")
+        self.assertEqual(self.gate("t").returncode, 0)
+        self.assertEqual((self.stub_dir / "gate_target").read_text(), "")
+
+    def reflink_probe(self):
+        """Can this filesystem clone files? One small cp decides."""
+        src = self.root / "reflink-probe-src"
+        dst = self.root / "reflink-probe-dst"
+        src.write_text("x\n", encoding="utf-8")
+        return subprocess.run(
+            ["cp", "-a", "--reflink=always", str(src), str(dst)], capture_output=True
+        ).returncode == 0
+
+    def test_new_seeds_the_build_from_the_main_checkout(self):
+        deps = self.main / "target" / "debug" / "deps"
+        deps.mkdir(parents=True)
+        warm = deps / "libwarm.rlib"
+        warm.write_text("warm\n", encoding="utf-8")
+        proc = self.sh("new", "s")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        copied = self.wt("s") / "target" / "debug" / "deps" / "libwarm.rlib"
+        if not self.reflink_probe():
+            # No reflinks on this filesystem (tmpfs, say): the seed says
+            # so and leaves the worktree to build from nothing.
+            self.assertIn("worktrees: target not seeded; s builds from nothing", proc.stdout)
+            self.assertFalse(copied.exists())
+            return
+        self.assertIn("worktrees: seeded s's target from the main checkout", proc.stdout)
+        self.assertEqual(copied.read_text(), "warm\n")
+        # The seed reads the main checkout and writes the worktree only:
+        # the file there is unchanged, and the copy has an inode of its own.
+        self.assertEqual(warm.read_text(), "warm\n")
+        self.assertNotEqual(warm.stat().st_ino, copied.stat().st_ino)
+
+    def test_new_without_a_target_in_the_main_checkout_says_so(self):
+        proc = self.new("n")
+        self.assertIn("worktrees: target not seeded; n builds from nothing", proc.stdout)
+        self.assertFalse((self.wt("n") / "target").exists())
+
+    def test_land_lands_several_jobs_in_order(self):
+        # Disjoint files: jobs that edit the same file land one after the
+        # other by hand, not in one queue.
+        for name, msg, file in (("a", "job a", "a.txt"), ("b", "job b", "b.txt")):
+            self.new(name)
+            self.work(name, msg, STUB_FILE=file)
+            self.assertEqual(self.gate(name).returncode, 0)
+        before = self.main_head()
+        proc = self.sh("land", "a", "b")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(
+            [line for line in proc.stdout.splitlines() if line.startswith("worktrees: landed")],
+            [
+                f"worktrees: landed a at {self.git('rev-parse', '--short', self.head('a'))}",
+                f"worktrees: landed b at {self.git('rev-parse', '--short', self.head('b'))}",
+            ],
+        )
+        self.assertEqual(self.main_head(), self.head("b"))
+        self.assertNotEqual(self.main_head(), before)
+        self.assertEqual((self.main / "a.txt").read_text(), "job a\n")
+        self.assertEqual((self.main / "b.txt").read_text(), "job b\n")
+        # a was gated at its tip and its branch held main, so only b is
+        # re-gated after its update: b's record covers the new tip.
+        self.assertIn("gate passed for b", proc.stderr)
+        self.assertNotIn("gating a ", proc.stderr)
+        self.assertEqual(self.recorded("feat/b"), self.head("b"))
+
+    def test_land_stops_at_a_conflict_and_names_the_rest(self):
+        self.new("c")
+        self.work("c", "job c")
+        self.new("d")
+        self.work("d", "job d")
+        self.assertEqual(self.gate("d").returncode, 0)
+        self.move_main(text="main", name="job.txt")
+        before = self.main_head()
+        proc = self.sh("land", "c", "d")
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("conflicts with main", proc.stderr)
+        self.assertIn("worktrees: not attempted: d", proc.stderr)
+        self.assertEqual(
+            [line for line in proc.stdout.splitlines() if line.startswith("worktrees: landed")], [],
+        )
+        self.assertEqual(self.main_head(), before)
+
+    def test_land_refusals(self):
+        self.refused(self.sh("land"), "land needs at least one NAME")
+        self.refused(self.sh("land", "nope"), "no worktree nope")
+        # A refusal stops the queue too, and the rest are named.
+        proc = self.sh("land", "nope", "other")
+        self.refused(proc, "no worktree nope")
+        self.assertIn("worktrees: not attempted: other", proc.stderr)
 
     def test_new_refusals(self):
         for args in (

@@ -17,6 +17,10 @@
 #                                     worktree and record the commit that
 #                                     passed in refs/gg/worktrees/BRANCH
 #   update NAME                        merge main into the job's branch
+#   land NAME...                       for each NAME in order: update, gate
+#                                      when the tip moved since the gate,
+#                                      and merge; a refusal or a failure
+#                                      stops the queue and names the rest
 #   merge NAME                         fast-forward main to the recorded commit
 #   drop NAME                          remove a clean worktree whose branch tip
 #                                     is on main, and delete the branch
@@ -27,9 +31,19 @@
 # and only by fast-forward. merge is the one command that writes in the
 # main checkout. Nothing is pushed, rebased, forced or stashed.
 #
+# One CARGO_TARGET_DIR shared by the worktrees would be wrong: cargo names
+# a path package's artifacts by a hash relative to the workspace root, so
+# two checkouts of one repository share one artifact file, and freshness
+# is by mtime, so a gate could pass on another worktree's binary. Instead
+# `new` seeds the worktree's target/debug from the main checkout's with
+# reflinks, copy-on-write clones with inodes of their own: warm
+# dependencies, nothing shared, and a filesystem without reflinks builds
+# from nothing.
+#
 # Exit status: 0 done, 2 refused or misused (nothing was changed), and 1
 # when a step ran and failed: the gate, an update with conflicts, a merge
-# git refused. See scripts/test-worktrees.py.
+# git refused, a land queue stopped by one of those. See
+# scripts/test-worktrees.py.
 set -euo pipefail
 
 S=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -41,13 +55,16 @@ usage: worktrees.sh new NAME [-b BRANCH] [--from REF]
        worktrees.sh run NAME --prompt FILE [delegate.sh options]
        worktrees.sh gate NAME
        worktrees.sh update NAME
+       worktrees.sh land NAME...
        worktrees.sh merge NAME
        worktrees.sh drop NAME
        worktrees.sh list
 
 Runs the git side of the delegate skill: one worktree per job that edits,
-under the main checkout's .worktrees/. NAME may use letters, digits, dot,
-dash and underscore.
+under the main checkout's .worktrees/. land updates, re-gates and merges
+each NAME in turn. NAME may use letters, digits, dot, dash and underscore.
+new seeds the worktree's target/debug from the main checkout's with
+reflinks; without them the worktree builds from nothing.
 EOF
 }
 
@@ -161,6 +178,29 @@ cmd_new() {
   mkdir -p "$common/info"
   exclude="$common/info/exclude"
   grep -qxF '.worktrees/' "$exclude" 2>/dev/null || echo '.worktrees/' >>"$exclude"
+  # Seed the build before anything in the worktree is edited, so the
+  # crate's own sources are newer than the seeded fingerprints and it
+  # rebuilds while its dependencies stay fresh. -a keeps the mtimes, and
+  # --reflink=always fails rather than shares an inode, so on a filesystem
+  # without reflinks nothing is kept and the worktree builds from nothing.
+  seeded=no
+  if [[ -d "$MAIN/target/debug/deps" ]]; then
+    mkdir -p "$wt/target/debug"
+    seeded=yes
+    for part in deps build .fingerprint; do
+      if [[ -e "$MAIN/target/debug/$part" ]] &&
+        ! cp -a --reflink=always "$MAIN/target/debug/$part" "$wt/target/debug/$part" 2>/dev/null; then
+        rm -rf "$wt/target/debug"
+        seeded=no
+        break
+      fi
+    done
+  fi
+  if [[ "$seeded" == yes ]]; then
+    echo "worktrees: seeded $name's target from the main checkout"
+  else
+    echo "worktrees: target not seeded; $name builds from nothing"
+  fi
   echo "worktrees: worktree $name at $wt, on $branch at $(short "$tip") ($from)"
 }
 
@@ -256,6 +296,46 @@ cmd_merge() {
   echo "worktrees: landed $name on $MAIN_BRANCH at $(short "$tip"), $count commit(s)"
 }
 
+# One job of the land queue, called in a subshell: die and fail stop only
+# the subshell, and cmd_land reports. The steps' own lines go to stderr,
+# so land prints one line per job on stdout.
+land_one() {
+  local name=$1 tip gated
+  cmd_update "$name" >&2
+  tip=$(git -C "$wt" rev-parse HEAD)
+  gated=$(git -C "$wt" rev-parse --verify --quiet "$ref" || true)
+  if [[ "$tip" != "$gated" ]]; then
+    cmd_gate "$name" >&2
+  fi
+  cmd_merge "$name" >&2
+  echo "worktrees: landed $name at $(short "$tip")"
+}
+
+# land NAME...: the merge queue. Every landing moves main, so N parallel
+# jobs would need N rounds of update, gate and merge by hand. Each NAME in
+# the order given is updated, gated when its tip is not the commit gate
+# recorded, and merged. A refused or failed job stops the queue; land
+# exits 2 on a refusal, 1 on a failed step, and names the jobs after it.
+cmd_land() {
+  [[ $# -ge 1 ]] || die "land needs at least one NAME"
+  local name rc queue
+  queue="$* "
+  rc=0
+  for name in "$@"; do
+    queue=${queue#"$name "}
+    ( land_one "$name" ) || rc=$?
+    if (( rc != 0 )); then
+      break
+    fi
+  done
+  if [[ -n "$queue" ]]; then
+    echo "worktrees: not attempted: $queue" >&2
+  fi
+  if (( rc != 0 )); then
+    exit "$rc"
+  fi
+}
+
 cmd_drop() {
   job "$1"
   clean
@@ -317,6 +397,7 @@ case $cmd in
     cmd_run "$@" ;;
   gate | update | merge | drop) [[ $# -eq 1 ]] || die "$cmd takes one NAME"
     "cmd_$cmd" "$1" ;;
+  land) cmd_land "$@" ;;
   list) [[ $# -eq 0 ]] || die "list takes no arguments"
     cmd_list ;;
   -h | --help | help) usage

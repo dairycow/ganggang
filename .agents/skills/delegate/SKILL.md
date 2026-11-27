@@ -60,7 +60,7 @@ Each job ends with one line: the exit status, the answer's size and the session 
 - To end one job early, kill its process group by the pid `delegate.sh` wrote: `kill -TERM -- -$(cat <dir>/<job>.pid)`.
 - A subagent cannot delegate: subagents are one level deep.
 - Jobs share the working tree. Give jobs that edit disjoint files, or give each one a worktree (**Jobs that edit**).
-- A fresh worktree builds from nothing, so its first gate takes minutes. The job's `--timeout` has to cover its own gate run, and `gate` takes several `wait_for` calls.
+- The worktrees build into their own `target/`, and `new` seeds a new one with a copy-on-write copy of the main checkout's build, so the first gate compiles only the crate; a filesystem without reflinks builds from nothing. The job's `--timeout` has to cover its gate run, and `gate` takes several `wait_for` calls.
 - `delegate.sh` runs `gg` from `PATH`. Set `GG=/path/to/gg` to use another build.
 
 ## Jobs that edit
@@ -90,14 +90,14 @@ Make a small change in this run, on a branch. This run writes the prompts, reads
    Check the diff against the prompt: only the files the job was given, the style in `AGENTS.md`, tests with the change, and docs updated when user-facing behaviour changed (`docs-maintenance`).
 6. Gate it: `"$S/worktrees.sh" gate <name>` in a call with `background: true`, collected with `wait_for` until it exits. It runs `scripts/pre-commit-check.sh` in the worktree and records the commit that passed.
 7. Apply review notes as a follow-up prompt under the same job name, which continues the job's session, then review and gate again. A fix of a line or two can be made in the worktree and committed there.
-8. Land it: `"$S/worktrees.sh" merge <name>`. It fast-forwards `main` in the main checkout and lands only the commit `gate` recorded. When `main` has moved it refuses: run `update <name>`, which merges `main` into the job's branch, hand any conflicts to the job as a follow-up prompt, then review, gate and merge again.
+8. Land it: `"$S/worktrees.sh" merge <name>`, or `land <name>...` when several jobs are ready. `merge` fast-forwards `main` in the main checkout and lands only the commit `gate` recorded. When `main` has moved it refuses: run `update <name>`, which merges `main` into the job's branch, hand any conflicts to the job as a follow-up prompt, then review, gate and merge again. `land` runs that round itself for each job in turn, `update`, the re-gate when the branch moved, then `merge`, and stops at the first job it cannot land, naming the ones it skipped.
 9. Drop it: `"$S/worktrees.sh" drop <name>` once the job is on `main`. Finish with `"$S/worktrees.sh" list`, which shows what is merged and what is stale.
 
 ### Rules for the job
 
 - Stay in the worktree. No other checkout, no branch switch, no stash, no merge, no push, no delegation.
 - Commit on the branch. The hook runs the commit gate, which outlives a plain `bash` call: commit with `background: true` and collect with `wait_for`. Never `--no-verify`.
-- Leave `CARGO_TARGET_DIR` alone. A worktree builds into its own `target/`; the main checkout's holds the installed `gg`.
+- Leave `CARGO_TARGET_DIR` alone. A worktree builds into its own `target/`, seeded by `new`; the main checkout's holds the installed `gg`.
 
 ### Rules for the run
 
