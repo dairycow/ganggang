@@ -168,7 +168,7 @@ async fn a_command_that_times_out_is_told_about_jobs() {
     let tool = BashTool::new(std::env::temp_dir(), 1, no_nest());
     let r = tool
         .execute(
-            &serde_json::json!({"command": "sleep 10", "timeout_secs": 999}),
+            &serde_json::json!({"command": "sleep 10", "timeout_secs": 1}),
             &no_cancel(),
         )
         .await;

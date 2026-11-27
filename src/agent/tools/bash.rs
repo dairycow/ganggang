@@ -2,7 +2,8 @@
 //!
 //! Runs with the user's permissions in the session cwd — the documented
 //! trust boundary (spec §10). Everything that can hang has a number: the
-//! per-call timeout is clamped to the configured maximum. And everything
+//! configured ceiling bounds every command, and a `timeout_secs` over it
+//! is refused before the command starts. And everything
 //! that can hang can also be stopped: the user's abort takes down the
 //! whole process group, the same kill the timeout uses.
 //!
@@ -194,8 +195,9 @@ impl Tool for BashTool {
             "properties": {
                 "command": {"type": "string", "description": "Shell command to run (required unless wait_for, wait_job or stop is set)"},
                 "timeout_secs": {"type": "integer", "description": format!(
-                    "Kill the command after this many seconds; the most this session allows is {}. \
-                      A command always keeps that ceiling, and wait_for waits it by default. A wait \
+                    "Kill the command after this many seconds; the most this session allows is {}, \
+                      and a larger value is refused. A command always keeps that ceiling, and \
+                      wait_for waits it by default. A wait \
                       (wait_for or wait_job) may pass a budget past the ceiling: wait_job defaults \
                       to 600 s, both clamp to {} s",
                     self.max_timeout_secs,
@@ -237,11 +239,15 @@ impl Tool for BashTool {
             let Some(command) = args.command else {
                 return ToolResult::err(jobs::NO_COMMAND.to_string());
             };
-            let timeout = Duration::from_secs(
-                args.timeout_secs
-                    .unwrap_or(self.max_timeout_secs)
-                    .min(self.max_timeout_secs),
-            );
+            // The ceiling is final, for a foreground call and a background
+            // one alike: a larger `timeout_secs` is refused, not clamped.
+            if let Some(secs) = args
+                .timeout_secs
+                .filter(|secs| *secs > self.max_timeout_secs)
+            {
+                return ToolResult::err(jobs::over_the_ceiling(secs, self.max_timeout_secs));
+            }
+            let timeout = Duration::from_secs(args.timeout_secs.unwrap_or(self.max_timeout_secs));
             let outcome = if args.background == Some(true) {
                 match self
                     .jobs

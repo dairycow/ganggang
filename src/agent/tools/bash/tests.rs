@@ -102,19 +102,70 @@ async fn nonzero_exit_is_an_error_result_with_output() {
     );
 }
 
+/// The deadline is the one the call asked for: `timeout_secs` is not
+/// pulled down to the ceiling, so a command dies where the caller said.
 #[tokio::test]
-async fn timeout_kills_the_command_and_clamps_to_the_max() {
+async fn timeout_kills_the_command_at_the_requested_deadline() {
     let tool = BashTool::new(std::env::temp_dir(), 1, no_nest());
     let started = std::time::Instant::now();
     let r = tool
         .execute(
-            &serde_json::json!({"command": "sleep 30", "timeout_secs": 999}),
+            &serde_json::json!({"command": "sleep 30", "timeout_secs": 1}),
             &no_cancel(),
         )
         .await;
     assert!(r.is_error);
     assert!(r.output.contains("timed out after 1s"));
     assert!(started.elapsed().as_secs() < 5, "kill must be prompt");
+}
+
+/// A `timeout_secs` over the ceiling is refused before any process
+/// starts: the marker proves the command never ran, so no work is lost
+/// to a clamp that would have killed it at the ceiling instead.
+#[tokio::test]
+async fn a_timeout_over_the_ceiling_is_refused_and_the_command_does_not_run() {
+    refuse_over_ceiling(false).await;
+}
+
+/// The same refusal for a `background: true` call: the ceiling is final
+/// there too, before a job is ever kept.
+#[tokio::test]
+async fn a_background_call_over_the_ceiling_is_refused_too() {
+    refuse_over_ceiling(true).await;
+}
+
+/// The body of both refusal tests: `timeout_secs` 999 against a ceiling
+/// of 1, a command that would touch `marker` and sleep, and the checks
+/// that say it never did.
+async fn refuse_over_ceiling(background: bool) {
+    let marker = std::env::temp_dir().join(format!(
+        "gg-bash-ceiling-refusal-{}-{}",
+        std::process::id(),
+        if background { "bg" } else { "fg" }
+    ));
+    let _ = std::fs::remove_file(&marker);
+    let tool = BashTool::new(std::env::temp_dir(), 1, no_nest());
+    let command = format!("touch {}; sleep 30", marker.display());
+    let r = tool
+        .execute(
+            &serde_json::json!({
+                "command": command,
+                "timeout_secs": 999,
+                "background": background,
+            }),
+            &no_cancel(),
+        )
+        .await;
+    assert!(r.is_error);
+    assert!(r.output.contains("did not run"), "{}", r.output);
+    assert!(r.output.contains("999"), "{}", r.output);
+    assert!(r.output.contains("ceiling of 1 s"), "{}", r.output);
+    assert!(
+        !r.output.contains("timed out"),
+        "the command never ran, so nothing timed out: {}",
+        r.output
+    );
+    assert!(!marker.exists(), "the command never started");
 }
 
 #[tokio::test]

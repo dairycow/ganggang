@@ -36,6 +36,17 @@ pub(super) const NO_COMMAND: &str = "bash needs a command, or wait_for, wait_job
 /// learns that the deadline is final, and what to do about it.
 pub(super) const NEEDS_BACKGROUND: &str = "; a longer command needs background: true";
 
+/// What a call whose `timeout_secs` is over the ceiling is told, before
+/// any process starts: the numbers name the ask and the ceiling, and the
+/// fixes are lowering it or going background.
+pub(super) fn over_the_ceiling(secs: u64, ceiling: u64) -> String {
+    format!(
+        "timeout_secs {secs} is over this run's bash ceiling of {ceiling} s, so the command \
+         did not run; lower it to {ceiling} s or less, or pass background: true for a longer \
+         command"
+    )
+}
+
 /// The jobs a tool has kept, numbered from 1 in the order they were kept.
 #[derive(Default)]
 pub(super) struct Jobs(Mutex<Vec<Arc<Job>>>);
