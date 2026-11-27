@@ -24,7 +24,7 @@ Shipped default, when no flag, environment variable or config file names a provi
 
 | Model | Wire API | Context window | Max tokens | Replays reasoning | Thinking off | Forced thinking | Base URL |
 |---|---|---|---|---|---|---|---|
-| `glm-5.3-flash` (default) | `openai-completions` | 1000000 | 16384 | yes |  | yes | `https://api.z.ai/api/coding/paas/v4` |
+| `glm-5.3-flash` (default) | `openai-completions` | 1000000 | 16384 | yes |  |  | `https://api.z.ai/api/coding/paas/v4` |
 | `glm-5.4` | `openai-completions` | 1000000 | 16384 | yes |  |  | `https://api.z.ai/api/coding/paas/v4` |
 
 ## opencode-go
@@ -33,8 +33,8 @@ Shipped default, when no flag, environment variable or config file names a provi
 |---|---|---|---|---|---|---|---|
 | `deepseek-v4.1-flash` (default) | `openai-completions` | 1000000 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
 | `deepseek-v4-pro` | `openai-completions` | 1000000 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
-| `glm-5.3-flash` | `openai-completions` | 1000000 | 16384 | yes |  | yes | `https://opencode.ai/inference/go/openai/v1` |
-| `glm-5.3` | `openai-completions` | 1000000 | 16384 | yes |  | yes | `https://opencode.ai/inference/go/openai/v1` |
+| `glm-5.3-flash` | `openai-completions` | 1000000 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
+| `glm-5.3` | `openai-completions` | 1000000 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
 | `kimi-k3.1-pro` | `openai-completions` | 1048576 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
 | `kimi-k3` | `openai-completions` | 1048576 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
 | `kimi-k2.7-code` | `openai-completions` | 262144 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |

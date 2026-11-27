@@ -152,16 +152,16 @@ fn the_window_of_a_line_is_char_wise() {
 /// enough, and gives up the hint first when it is not.
 #[test]
 fn the_title_gives_up_the_hint_before_the_name() {
-    let wide = title(&TRUECOLOR, 60);
+    let wide = title(&TRUECOLOR, 60, " Enter send · Esc stop ");
     let text: String = wide.spans.iter().map(|s| s.content.as_ref()).collect();
     assert!(text.starts_with(" compose "), "{text:?}");
     assert!(text.ends_with(" Enter send · Esc stop "), "{text:?}");
     assert_eq!(text.chars().count(), 60, "the border is filled");
 
-    let tight = title(&TRUECOLOR, 12);
+    let tight = title(&TRUECOLOR, 12, " Enter send · Esc stop ");
     let text: String = tight.spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(text, " compose ", "the name survives, the hint goes");
-    let narrow = title(&TRUECOLOR, 4);
+    let narrow = title(&TRUECOLOR, 4, " Enter send · Esc stop ");
     assert_eq!(narrow.spans[0].content, " com");
 }
 
@@ -181,6 +181,7 @@ fn a_frame_draws_the_box_the_title_and_the_placeholder() {
                 areas.composer,
                 false,
                 false,
+                " Enter send · Esc stop ",
             );
         })
         .unwrap();

@@ -9,7 +9,8 @@
 //! The struct and its construction live here; its behaviour is split by
 //! what it is about: [`log`] is the conversation (what is pushed, seeded,
 //! and measured), [`turn`] the live run (starting, stopping, recalling,
-//! scrolling), [`popup`] the suggestion list's selection and which popup
+//! scrolling), [`queue`] the prompts held back while a run works,
+//! [`popup`] the suggestion list's selection and which popup
 //! has the arrows, [`picker`] a list (what is open, its highlight, its
 //! keys), and [`sessions`] the session listing a `/session` list is built
 //! from.
@@ -17,6 +18,7 @@
 mod log;
 mod picker;
 mod popup;
+mod queue;
 mod sessions;
 mod turn;
 
@@ -66,6 +68,18 @@ pub struct State {
     /// scan's bookkeeping. The tests sit in the module tree and reach in
     /// through it.
     pub sessions: crate::tui::picker::SessionListing,
+    /// Prompts Enter held back while a run worked, and whether a stop or
+    /// a failure is holding them. The behaviour is [`queue`]'s.
+    queue: queue::Queue,
+    /// The run in flight says it was stopped: `RunAborted` sets this, and
+    /// the run's outcome reads and clears it (in `run_finished`). A flag
+    /// rather than a read of the transcript, so a block that lands between
+    /// the abort mark and the outcome cannot hide the stop.
+    run_stopped: bool,
+    /// The directory the session runs in: where `@mentions` in a queued
+    /// prompt resolve when its turn comes (they expand at send time, as
+    /// they do for a prompt typed at rest).
+    cwd: std::path::PathBuf,
     /// The `/session` list while it is open; the text after the command
     /// is its filter. `None` = closed.
     pub picker: Option<crate::tui::picker::Picker>,
@@ -142,6 +156,9 @@ impl State {
             tokens_out: 0,
             sessions: crate::tui::picker::SessionListing::new(cwd),
             picker: None,
+            queue: queue::Queue::default(),
+            run_stopped: false,
+            cwd: cwd.to_path_buf(),
             context_window: context_window as u64,
             last_context_tokens: 0,
             skills,
@@ -157,6 +174,11 @@ impl State {
     /// The palette in use.
     pub fn palette(&self) -> Palette {
         self.palette
+    }
+
+    /// The directory the session runs in.
+    pub fn cwd(&self) -> &std::path::Path {
+        &self.cwd
     }
 
     /// The model rows the `/model` list is built from, as an `Arc`: the

@@ -27,9 +27,11 @@ impl super::super::State {
     /// The directory gg is working in, as the footer shows it: where the
     /// run's session file lives, so where the `/session` list files this
     /// directory's rows. The listing itself stays until the next scan
-    /// replaces it; the new directory is owed a scan of its own.
+    /// replaces it; the new directory is owed a scan of its own. Queued
+    /// prompts resolve their `@mentions` here when their turn comes.
     pub fn set_directory(&mut self, directory: &std::path::Path) {
         self.footer.set_directory(directory);
+        self.cwd = directory.to_path_buf();
         self.sessions.dir = crate::agent::session::io::sessions_dir(directory);
         self.request_session_scan();
     }
@@ -119,6 +121,9 @@ impl super::super::State {
         // A recall from the old session has nothing to do with the new one;
         // a Ctrl+C that was waiting to be confirmed is over too.
         self.history.reset();
+        // The queue is the session's: a new session has no waiting prompts
+        // and no hold from its stops and failures.
+        self.queue.clear();
         self.set_stopping(false);
         self.interrupt_armed = false;
         let where_ = self
@@ -144,6 +149,11 @@ impl super::super::State {
     }
 
     pub fn apply(&mut self, event: &AgentEvent) {
+        // The run's own word that it was stopped: read with the run's
+        // outcome, however many blocks fold in between.
+        if matches!(event, AgentEvent::RunAborted) {
+            self.run_stopped = true;
+        }
         // A turn's end is where the backend's figures arrive: the context
         // the next request will carry, and how fast this one decoded.
         if let AgentEvent::TurnEnded {

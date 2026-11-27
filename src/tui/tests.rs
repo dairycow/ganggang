@@ -69,14 +69,6 @@ fn readline_keys_edit_the_composer_and_arrows_move_the_cursor() {
         KeyAction::KillToStart
     );
     assert_eq!(
-        classify(key(KeyCode::Home, KeyModifiers::NONE)),
-        KeyAction::LineStart
-    );
-    assert_eq!(
-        classify(key(KeyCode::End, KeyModifiers::NONE)),
-        KeyAction::LineEnd
-    );
-    assert_eq!(
         classify(key(KeyCode::Left, KeyModifiers::NONE)),
         KeyAction::CursorLeft
     );
@@ -91,6 +83,26 @@ fn readline_keys_edit_the_composer_and_arrows_move_the_cursor() {
         classify(key(KeyCode::Char('k'), KeyModifiers::NONE)),
         KeyAction::Insert('k')
     );
+}
+
+/// Home and End scroll the transcript to its ends; the line moves they
+/// used to share stay on Ctrl+A and Ctrl+E.
+#[test]
+fn home_and_end_scroll_the_transcript_and_ctrl_a_e_keep_the_line_moves() {
+    assert_eq!(
+        classify(key(KeyCode::Home, KeyModifiers::NONE)),
+        KeyAction::ScrollTop
+    );
+    assert_eq!(
+        classify(key(KeyCode::End, KeyModifiers::NONE)),
+        KeyAction::ScrollEnd
+    );
+    let ctrl = KeyModifiers::CONTROL;
+    assert_eq!(
+        classify(key(KeyCode::Char('a'), ctrl)),
+        KeyAction::LineStart
+    );
+    assert_eq!(classify(key(KeyCode::Char('e'), ctrl)), KeyAction::LineEnd);
 }
 
 /// Delete and Backspace each delete on their own side of the cursor,
@@ -854,6 +866,49 @@ fn scrolling_stays_within_the_transcript() {
     assert_eq!(state.offset_for_test(), 94);
     state.scroll_down(1000); // reaching the bottom re-pins
     assert_eq!(state.offset_for_test(), 0);
+}
+
+/// Home lands where paging past the clamp lands, End re-pins to the
+/// newest, and a transcript that fits the view has no ends to reach.
+#[test]
+fn home_and_end_take_the_transcript_to_its_ends() {
+    let mut state = State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        std::sync::Arc::new(vec![]),
+        History::default(),
+    );
+    for i in 0..100 {
+        // One text per turn: TurnStarted closes the previous assistant
+        // line (consecutive deltas append — that is the streaming shape).
+        state.apply(&AgentEvent::TurnStarted);
+        state.apply(&AgentEvent::AssistantText {
+            delta: format!("line {i}"),
+        });
+    }
+    state.scroll_up(1000); // paging up past the clamp: the far end
+    let far = state.offset_for_test();
+    assert_eq!(far, 99, "pre-render the view is one row, so 99 is the end");
+    state.scroll_to_end();
+    assert_eq!(state.offset_for_test(), 0, "End re-pins to the newest");
+    state.scroll_to_top();
+    assert_eq!(
+        state.offset_for_test(),
+        far,
+        "Home lands on the clamp paging up ends at"
+    );
+
+    // One row fits every view: nothing to scroll, either way.
+    let mut short = state_with_history(&[]);
+    short.apply(&AgentEvent::TurnStarted);
+    short.apply(&AgentEvent::AssistantText {
+        delta: "only line".into(),
+    });
+    short.scroll_to_top();
+    assert_eq!(short.offset_for_test(), 0, "the first row is all there is");
+    short.scroll_to_end();
+    assert_eq!(short.offset_for_test(), 0, "the newest row is it too");
 }
 
 #[test]
@@ -1863,4 +1918,334 @@ async fn task_events_fold_into_the_view() {
     )
     .await;
     assert_eq!(state_line_texts(&state), vec!["⚠ careful"]);
+}
+
+// ------------------------------------------------------------- the queue --
+
+/// Enter while busy: a plain prompt queues and leaves the composer, a
+/// slash command or a shell line keeps today's note and the text, and a
+/// press while the run is stopping waits with it.
+#[test]
+fn busy_enter_queues_a_plain_prompt_and_keeps_a_command_or_shell_line() {
+    let mut state = state_with_history(&[]);
+    state.begin_run();
+
+    assert!(state.busy_submit("queued text", false));
+    assert_eq!(state.editor.text(), "", "the composer empties");
+    state.recall_prev();
+    assert_eq!(state.editor.text(), "queued text", "history keeps it");
+    state.editor.clear();
+    assert_eq!(
+        state_line_texts(&state),
+        vec!["queued 1: queued text"],
+        "the transcript names the item's place"
+    );
+    assert_eq!(state.queued_count(), 1);
+
+    state.editor.set_text("second, multiline\nin line one");
+    assert!(state.busy_submit("second, multiline\nin line one", false));
+    assert_eq!(
+        state_line_texts(&state)[1],
+        "queued 2: second, multiline",
+        "the queued line shows the first line only"
+    );
+
+    // A slash command and a `!` line are not queued: the note is today's
+    // and the text stays where it was typed.
+    for text in ["/new", "!ls", "!!ls"] {
+        state.editor.set_text(text);
+        assert!(!state.busy_submit(text, false), "{text} does not queue");
+        assert_eq!(state.editor.text(), text, "{text} stays in the composer");
+    }
+    assert_eq!(state.queued_count(), 2);
+
+    // While the run is stopping, nothing queues either.
+    state.editor.set_text("plain but stopping");
+    assert!(!state.busy_submit("plain but stopping", true));
+    assert_eq!(state.editor.text(), "plain but stopping");
+    assert_eq!(state.queued_count(), 2);
+}
+
+/// The queue is first in, first out, and ↑ on an empty composer takes
+/// the newest item back into the composer, out of the queue.
+#[test]
+fn queued_prompts_keep_order_and_up_takes_the_newest_back() {
+    let mut state = state_with_history(&[]);
+    state.queue_prompt("first prompt");
+    state.queue_prompt("second prompt");
+
+    assert_eq!(state.queue_next_run().as_deref(), Some("first prompt"));
+    assert_eq!(state.queue_next_run().as_deref(), Some("second prompt"));
+    assert_eq!(state.queue_next_run(), None, "the queue is empty");
+
+    state.queue_prompt("a");
+    state.queue_prompt("b");
+    assert_eq!(state.queue_take_back().as_deref(), Some("b"));
+    assert_eq!(state.editor.text(), "b");
+    assert_eq!(state.queue_take_back().as_deref(), Some("a"));
+    assert_eq!(state.editor.text(), "a");
+    assert_eq!(state.queue_take_back(), None);
+
+    // An empty queue leaves the composer alone.
+    state.editor.set_text("a draft");
+    assert_eq!(state.queue_take_back(), None);
+    assert_eq!(state.editor.text(), "a draft");
+}
+
+/// Enter with a draft must not drain a held queue under the draft: the
+/// guard on `queue_send_first` is held plus an empty composer.
+#[test]
+fn queue_send_first_needs_a_held_queue_and_an_empty_composer() {
+    let mut state = state_with_history(&[]);
+    state.queue_prompt("first");
+    state.queue_prompt("second");
+    state.queue_hold_after_stop();
+    assert!(state.queue_held());
+
+    // A typed draft comes first: nothing is taken, nothing changes, and
+    // the ordinary send that follows leaves the hold in place.
+    state.editor.set_text("a typed draft");
+    assert_eq!(state.queue_send_first(), None);
+    assert_eq!(state.editor.text(), "a typed draft");
+    assert!(state.queue_held(), "the hold stays with the draft");
+    assert_eq!(state.queued_count(), 2);
+
+    // Whitespace only is still an empty composer.
+    state.editor.set_text("   ");
+    assert_eq!(state.queue_send_first().as_deref(), Some("first"));
+    assert!(!state.queue_held(), "the hold lifts with the first item");
+    assert_eq!(state.queued_count(), 1);
+}
+
+/// A stopped run holds the queue: nothing sends until Enter on an empty
+/// composer sends the first item, and the rest follow at each run end.
+#[tokio::test]
+async fn a_stopped_run_holds_the_queue_until_enter_sends_the_first() {
+    use super::agent_task::AgentInput;
+    use std::sync::Arc;
+
+    let mut state = State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        Arc::new(vec![]),
+        History::default(),
+    );
+    let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
+    state.queue_prompt("first");
+    state.queue_prompt("second");
+    state.begin_run();
+
+    // The stop mark folds in from the event stream; the run then reports
+    // itself complete. Together that is a stopped run, not a finished one.
+    apply(
+        UiEvent::Agent(AgentEvent::RunAborted),
+        &mut state,
+        &mut input_tx,
+    )
+    .await;
+    apply(
+        UiEvent::RunComplete {
+            tokens_in: 0,
+            tokens_out: 0,
+            cache_read_tokens: 0,
+            cache_tokens: (0, 0),
+            context_tokens: 0,
+            entries: 0,
+        },
+        &mut state,
+        &mut input_tx,
+    )
+    .await;
+    assert!(!state.busy);
+    assert!(state.queue_held(), "the stop holds the queue");
+    assert!(input_rx.try_recv().is_err(), "a stopped run sends nothing");
+    assert!(
+        state_line_texts(&state).contains(&"2 queued: Enter sends the next".to_string()),
+        "{:#?}",
+        state_line_texts(&state)
+    );
+
+    // Enter on an empty composer: what the loop's Send arm does. It
+    // sends the first item and lifts the hold.
+    let prompt = state
+        .queue_send_first()
+        .expect("the held queue has a first item");
+    state.push_user(&prompt);
+    state.begin_run();
+    input_tx.send(AgentInput::Prompt(prompt)).await.unwrap();
+    assert!(state.busy);
+    assert!(!state.queue_held(), "the hold lifts with the first item");
+    assert!(matches!(input_rx.recv().await, Some(AgentInput::Prompt(t)) if t == "first"));
+
+    // The next completed run drains the second, and then the queue is done.
+    apply(
+        UiEvent::RunComplete {
+            tokens_in: 0,
+            tokens_out: 0,
+            cache_read_tokens: 0,
+            cache_tokens: (0, 0),
+            context_tokens: 0,
+            entries: 0,
+        },
+        &mut state,
+        &mut input_tx,
+    )
+    .await;
+    assert!(state.busy);
+    assert!(matches!(input_rx.recv().await, Some(AgentInput::Prompt(t)) if t == "second"));
+    apply(
+        UiEvent::RunComplete {
+            tokens_in: 0,
+            tokens_out: 0,
+            cache_read_tokens: 0,
+            cache_tokens: (0, 0),
+            context_tokens: 0,
+            entries: 0,
+        },
+        &mut state,
+        &mut input_tx,
+    )
+    .await;
+    assert!(!state.busy);
+    assert!(input_rx.try_recv().is_err(), "the queue is empty");
+}
+
+/// A completed run drains exactly one queued item: the second goes on
+/// the next completed run.
+#[tokio::test]
+async fn a_completed_run_drains_one_queued_item_at_a_time() {
+    use std::sync::Arc;
+
+    let mut state = State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        Arc::new(vec![]),
+        History::default(),
+    );
+    let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
+    state.queue_prompt("first");
+    state.queue_prompt("second");
+    state.begin_run();
+
+    let complete = || UiEvent::RunComplete {
+        tokens_in: 0,
+        tokens_out: 0,
+        cache_read_tokens: 0,
+        cache_tokens: (0, 0),
+        context_tokens: 0,
+        entries: 0,
+    };
+    apply(complete(), &mut state, &mut input_tx).await;
+    assert!(state.busy, "the first item's run starts at once");
+    assert!(
+        matches!(input_rx.try_recv(), Ok(super::agent_task::AgentInput::Prompt(t)) if t == "first")
+    );
+    assert!(input_rx.try_recv().is_err(), "exactly one item per run end");
+
+    apply(complete(), &mut state, &mut input_tx).await;
+    assert!(state.busy);
+    assert!(
+        matches!(input_rx.try_recv(), Ok(super::agent_task::AgentInput::Prompt(t)) if t == "second")
+    );
+
+    apply(complete(), &mut state, &mut input_tx).await;
+    assert!(!state.busy, "nothing is left to run");
+    assert!(input_rx.try_recv().is_err());
+}
+
+/// A failed run returns the first queued item to the composer so it can
+/// be edited, and holds the rest.
+#[tokio::test]
+async fn a_failed_run_returns_the_first_queued_item_and_holds_the_rest() {
+    use std::sync::Arc;
+
+    let mut state = State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        Arc::new(vec![]),
+        History::default(),
+    );
+    let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
+    state.queue_prompt("first");
+    state.queue_prompt("second");
+    state.begin_run();
+
+    apply(
+        UiEvent::RunFailed {
+            error: "boom".into(),
+        },
+        &mut state,
+        &mut input_tx,
+    )
+    .await;
+    assert!(!state.busy);
+    assert_eq!(state.editor.text(), "first", "the item is back for editing");
+    assert!(state.queue_held());
+    assert_eq!(state.queued_count(), 1, "the rest stay queued");
+    assert!(
+        state_line_texts(&state)
+            .contains(&"the first queued message is back in the composer; 1 held".to_string()),
+        "{:#?}",
+        state_line_texts(&state)
+    );
+    assert!(input_rx.try_recv().is_err(), "a failed run sends nothing");
+}
+
+/// The stop is a flag on the run, not a read of the transcript: a block
+/// that lands between the abort mark and the outcome cannot hide it.
+#[tokio::test]
+async fn a_stop_survives_blocks_folded_in_after_the_abort_mark() {
+    use std::sync::Arc;
+
+    let mut state = State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        Arc::new(vec![]),
+        History::default(),
+    );
+    let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
+    state.queue_prompt("first");
+    state.queue_prompt("second");
+    state.begin_run();
+
+    apply(
+        UiEvent::Agent(AgentEvent::RunAborted),
+        &mut state,
+        &mut input_tx,
+    )
+    .await;
+    // A late warning folds in after the mark, before the outcome.
+    apply(
+        UiEvent::Agent(AgentEvent::Warned {
+            message: "late".into(),
+        }),
+        &mut state,
+        &mut input_tx,
+    )
+    .await;
+    apply(
+        UiEvent::RunComplete {
+            tokens_in: 0,
+            tokens_out: 0,
+            cache_read_tokens: 0,
+            cache_tokens: (0, 0),
+            context_tokens: 0,
+            entries: 0,
+        },
+        &mut state,
+        &mut input_tx,
+    )
+    .await;
+    assert!(!state.busy);
+    assert!(state.queue_held(), "the stop is still a stop");
+    assert!(input_rx.try_recv().is_err(), "nothing sends after a stop");
+    assert!(
+        state_line_texts(&state).contains(&"2 queued: Enter sends the next".to_string()),
+        "{:#?}",
+        state_line_texts(&state)
+    );
 }

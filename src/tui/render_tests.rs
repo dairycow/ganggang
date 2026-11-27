@@ -152,16 +152,17 @@ fn an_80_by_24_frame_is_the_theme_not_the_terminal() {
     }
 }
 
-/// `gg` sits at the left edge of the footer, and while a run is live the
-/// name itself flashes in those two cells: the start of the row says a
-/// run is working without a status word, and the rest of the row keeps
-/// its cells. When the run ends, the name sits still again. No dot and
-/// no ring is drawn anywhere in the row, frame after frame.
+/// `gg` sits at the left edge of the footer, at rest and on every frame
+/// of a run: the glyphs never change, so the row's text is the rest row
+/// in every frame, and the colour the mark wears, not the glyphs, says
+/// a run is live. It cycles the crest's three reds, one per frame. No
+/// dot and no ring is drawn anywhere in the row.
 #[test]
-fn the_mark_is_gg_at_rest_and_flashes_while_a_run_works() {
+fn the_mark_is_gg_at_rest_and_while_a_run_works() {
     use crate::tui::footer::MARK_FRAMES as FRAMES;
 
-    // Idle: the mark is the name, at the left edge of the footer's row.
+    // Idle: the mark is the name, at the left edge of the footer's row,
+    // in the crest's scarlet.
     let (mut terminal, mut state) = fresh(80, 24);
     draw(&mut terminal, &mut state);
     let rest = row(&terminal, 23);
@@ -170,25 +171,17 @@ fn the_mark_is_gg_at_rest_and_flashes_while_a_run_works() {
         "the mark sits at the left of the footer: {rest:?}"
     );
 
-    // A run is live: the name's two cells become the mark, and the
-    // flash is all the row says about the run.
+    // A run is live: the row reads as the rest row, frame after frame,
+    // and the mark's colour is all that moves.
     state.begin_run();
+    let mut seen = Vec::new();
     for frame in 0..FRAMES.len() as u16 {
         state.tick_spinner();
         draw(&mut terminal, &mut state);
         let footer = row(&terminal, 23);
-        // The row opens with the frame the footer is actually on — read
-        // back from the footer, so the test checks the drawing rather than
-        // a count it could get wrong.
-        let expected = state.footer.mark();
         assert_eq!(
-            expected.chars().count(),
-            2,
-            "the mark takes the name's two cells: {expected:?}"
-        );
-        assert!(
-            footer.starts_with(expected.as_str()),
-            "frame {frame} leads the footer: {footer:?}, expected {expected:?}"
+            footer, rest,
+            "frame {frame} reads as the rest row: {footer:?}"
         );
         assert!(
             !footer.contains('●') && !footer.contains('○'),
@@ -198,22 +191,24 @@ fn the_mark_is_gg_at_rest_and_flashes_while_a_run_works() {
             !footer.contains("working") && !footer.contains("ready"),
             "frame {frame} carries no status word: {footer:?}"
         );
-        // What follows the mark is what followed the name, to the cell.
-        assert_eq!(
-            footer.strip_prefix(expected.as_str()),
-            rest.strip_prefix("gg"),
-            "frame {frame} moves nothing behind the mark: {footer:?}"
-        );
+        seen.push(terminal.backend().buffer()[(0, 23)].style().fg);
     }
+    // The run began on the crest, so the drawn frames come round soft,
+    // deep, scarlet: the beat is the crest's three reds, one per frame.
+    let p = state.palette();
+    assert_eq!(
+        seen,
+        vec![Some(p.accent_soft), Some(p.accent_deep), Some(p.accent)],
+        "the crest's three reds, one per drawn frame: {seen:?}"
+    );
 
-    // The run ends and the mark is the name again.
+    // The run ends and the mark sits still in its crest red.
     state.run_finished();
     draw(&mut terminal, &mut state);
     let footer = row(&terminal, 23);
-    assert!(
-        footer.starts_with("gg │ "),
-        "the mark comes back: {footer:?}"
-    );
+    assert_eq!(footer, rest, "the row is the rest row again: {footer:?}");
+    let fg = terminal.backend().buffer()[(0, 23)].style().fg;
+    assert_eq!(fg, Some(p.accent), "the mark rests in the crest's scarlet");
 }
 
 /// A 24×8 terminal is a real thing (a narrow split, a phone terminal): the
@@ -373,6 +368,51 @@ fn a_transcript_that_overflows_shows_a_scrollbar_and_one_that_fits_does_not() {
     assert!(
         row(&terminal, 19).contains("line 19"),
         "the last transcript row is still text, not a gap: {text}"
+    );
+}
+
+/// Home puts the session's first row at the top of the transcript; End
+/// puts the newest row back, where new output can follow it.
+#[test]
+fn home_scrolls_to_the_first_row_and_end_back_to_the_newest() {
+    let (mut terminal, mut state) = fresh(80, 24);
+    for i in 0..25 {
+        state.apply(&AgentEvent::TurnStarted);
+        state.apply(&AgentEvent::AssistantText {
+            delta: format!("line {i}"),
+        });
+    }
+    draw(&mut terminal, &mut state);
+    assert!(
+        row(&terminal, 19).contains("line 24"),
+        "at rest the newest row is the transcript's last: {}",
+        screen(&terminal)
+    );
+
+    state.scroll_to_top();
+    draw(&mut terminal, &mut state);
+    assert!(
+        row(&terminal, 0).contains("line 0"),
+        "Home: the session's first row is the transcript's first: {}",
+        screen(&terminal)
+    );
+    assert!(
+        !shows(&terminal, "line 24"),
+        "Home leaves the newest row below the fold: {}",
+        screen(&terminal)
+    );
+
+    state.scroll_to_end();
+    draw(&mut terminal, &mut state);
+    assert!(
+        row(&terminal, 19).contains("line 24"),
+        "End: the newest row is the transcript's last again: {}",
+        screen(&terminal)
+    );
+    assert!(
+        !shows(&terminal, "line 0"),
+        "End scrolls the first row away: {}",
+        screen(&terminal)
     );
 }
 
@@ -703,8 +743,8 @@ fn an_indexed_session_draws_only_indexed_colours() {
         shows(&terminal, "fn a() {}"),
         "the code band still reads: {text}"
     );
-    // The footer is the last row: the mark leads it in the name's two
-    // cells, the row has no status word, and no dot is drawn.
+    // The footer is the last row: the mark leads it, and the row is the
+    // rest row while a run works, the beat being colour only.
     let footer = row(&terminal, 15);
     assert_eq!(
         footer, "gg │ …/tmp/x │ m │ ↑0 ↓0",
@@ -800,4 +840,54 @@ fn degenerate_terminals_do_not_panic() {
         state.picker_next();
         draw(&mut terminal, &mut state);
     }
+}
+
+/// The composer's hint follows the queue: what Enter queues while a run
+/// works, what ↑ takes back, and what a held queue says it waits for.
+#[test]
+fn the_composer_hint_follows_the_queue() {
+    // A run in flight, nothing queued.
+    let (mut terminal, mut state) = fresh(80, 24);
+    state.begin_run();
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(shows(&terminal, "Enter queue · Esc stop"), "{text}");
+
+    // A run in flight, items queued: ↑ can take one back.
+    state.queue_prompt("later");
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(
+        shows(&terminal, "Enter queue · ↑ take back · Esc stop"),
+        "{text}"
+    );
+
+    // Idle with items held by a stop: the count and the way out.
+    state.run_finished();
+    state.queue_hold_after_stop();
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(
+        shows(&terminal, "1 queued · Enter sends the next"),
+        "{text}"
+    );
+
+    // Idle with an empty queue: today's hint.
+    assert!(state.queue_send_first().is_some());
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(shows(&terminal, "Enter send · Esc stop"), "{text}");
+}
+
+/// A queued message names its place in line, first line only.
+#[test]
+fn a_queued_message_shows_its_place_in_the_transcript() {
+    let (mut terminal, mut state) = fresh(80, 24);
+    state.queue_prompt("first line\nsecond line");
+    state.queue_prompt("next");
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(shows(&terminal, "queued 1: first line"), "{text}");
+    assert!(shows(&terminal, "queued 2: next"), "{text}");
+    assert!(!shows(&terminal, "second line"), "{text}");
 }
