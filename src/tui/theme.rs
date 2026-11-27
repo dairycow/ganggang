@@ -233,8 +233,10 @@ impl Palette {
         )
     }
 }
+mod beat;
 mod fallback;
 
+pub use beat::BEAT_FRAMES;
 pub use fallback::indexed_palette;
 #[cfg(test)]
 mod tests;

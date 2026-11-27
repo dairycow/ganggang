@@ -71,6 +71,28 @@ pub fn nearest_index(r: u8, g: u8, b: u8) -> u8 {
     nearest_indexes(r, g, b).next().unwrap_or(0)
 }
 
+/// The RGB triple an xterm-256 index stands for: the cube's steps for
+/// 16..=231, the grey ramp for 232..=255. The base sixteen (0..=15) are
+/// the terminal's own and carry no fixed value here, so they come back
+/// `None`. The beat blends in RGB and needs the way back.
+pub(crate) fn rgb_of_index(index: u8) -> Option<(u8, u8, u8)> {
+    match index {
+        16..=231 => {
+            let i = usize::from(index - 16);
+            Some((
+                CUBE[i / 36] as u8,
+                CUBE[(i / 6) % 6] as u8,
+                CUBE[i % 6] as u8,
+            ))
+        }
+        232..=255 => {
+            let grey = (8 + 10 * u16::from(index - 232)) as u8;
+            Some((grey, grey, grey))
+        }
+        _ => None,
+    }
+}
+
 /// Every xterm-256 candidate for an RGB triple, nearest first: what the
 /// palette walks when its first choice has been claimed by a role that
 /// needed it more.

@@ -14,10 +14,12 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-/// One frame every 600 ms: three beats per turn, long enough that a
-/// reader can follow each one. The old 100 ms turn ran ten frames a
-/// second, so the mark flipped faster than the eye could track.
-pub const PERIOD: Duration = Duration::from_millis(600);
+/// One frame every 25 ms: forty shades a second, faster than the eye
+/// separates, so the footer's forty-eight-shade crest pulse reads as one
+/// smooth breath rather than a sequence of steps. The old 600 ms paced a
+/// three-frame glyph flip, where each beat had to be followable on its
+/// own; a colour blend wants the opposite, steps too small to pick out.
+pub const PERIOD: Duration = Duration::from_millis(25);
 
 /// The spinner's next frame: armed while something is spinning, never
 /// otherwise — an idle view does not wake on a timer.

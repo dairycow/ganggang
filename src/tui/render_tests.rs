@@ -155,11 +155,11 @@ fn an_80_by_24_frame_is_the_theme_not_the_terminal() {
 /// `gg` sits at the left edge of the footer, at rest and on every frame
 /// of a run: the glyphs never change, so the row's text is the rest row
 /// in every frame, and the colour the mark wears, not the glyphs, says
-/// a run is live. It cycles the crest's three reds, one per frame. No
-/// dot and no ring is drawn anywhere in the row.
+/// a run is live. It breathes through the crest's reds, one shade per
+/// frame. No dot and no ring is drawn anywhere in the row.
 #[test]
 fn the_mark_is_gg_at_rest_and_while_a_run_works() {
-    use crate::tui::footer::MARK_FRAMES as FRAMES;
+    use crate::tui::theme::BEAT_FRAMES;
 
     // Idle: the mark is the name, at the left edge of the footer's row,
     // in the crest's scarlet.
@@ -175,7 +175,7 @@ fn the_mark_is_gg_at_rest_and_while_a_run_works() {
     // and the mark's colour is all that moves.
     state.begin_run();
     let mut seen = Vec::new();
-    for frame in 0..FRAMES.len() as u16 {
+    for frame in 0..BEAT_FRAMES as u16 {
         state.tick_spinner();
         draw(&mut terminal, &mut state);
         let footer = row(&terminal, 23);
@@ -193,13 +193,36 @@ fn the_mark_is_gg_at_rest_and_while_a_run_works() {
         );
         seen.push(terminal.backend().buffer()[(0, 23)].style().fg);
     }
-    // The run began on the crest, so the drawn frames come round soft,
-    // deep, scarlet: the beat is the crest's three reds, one per frame.
+    // The run began on the crest, so the drawn frames are 1..=48 of the
+    // pulse: the cheek's orange lands a sixth round, the flare's peak a
+    // third round, scarlet two thirds round, the deep crest red five
+    // sixths round, and the wrap back home on scarlet.
     let p = state.palette();
+    let drawn = |frame: usize| seen[frame - 1];
     assert_eq!(
-        seen,
-        vec![Some(p.accent_soft), Some(p.accent_deep), Some(p.accent)],
-        "the crest's three reds, one per drawn frame: {seen:?}"
+        drawn(BEAT_FRAMES / 6),
+        Some(p.accent_soft),
+        "the cheek a sixth round: {seen:?}"
+    );
+    assert_eq!(
+        drawn(BEAT_FRAMES / 3),
+        Some(Color::Rgb(225, 151, 145)),
+        "the flare's peak, half way to the cream: {seen:?}"
+    );
+    assert_eq!(
+        drawn(2 * BEAT_FRAMES / 3),
+        Some(p.accent),
+        "scarlet two thirds round: {seen:?}"
+    );
+    assert_eq!(
+        drawn(5 * BEAT_FRAMES / 6),
+        Some(p.accent_deep),
+        "the deep red five sixths round: {seen:?}"
+    );
+    assert_eq!(
+        drawn(BEAT_FRAMES),
+        Some(p.accent),
+        "the wrap lands home: {seen:?}"
     );
 
     // The run ends and the mark sits still in its crest red.

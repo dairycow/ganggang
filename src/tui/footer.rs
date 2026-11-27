@@ -12,13 +12,15 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line as UiLine, Span};
 
-use super::theme::Palette;
+use super::theme::{BEAT_FRAMES, Palette};
 
-/// The mark's frames, one per [`crate::tui::tick::PERIOD`] tick: each
-/// pair is the frame's two cells, one per element, and the cells
+/// The mark's glyph frames, one per [`crate::tui::tick::PERIOD`] tick:
+/// each pair is the frame's two cells, one per element, and the cells
 /// concatenate to the name's width, so nothing behind the mark moves
 /// while the turn turns. Every frame spells the name; the beat is
-/// colour only, [`mark_colour`](Footer::mark_colour)'s three reds.
+/// colour only, the theme's [`crest_beat`](Palette::crest_beat) pulse.
+/// The glyph cycle runs its three frames within the pulse's
+/// forty-eight (`BEAT_FRAMES`), which is what the spinner counts.
 ///
 /// Not a different glyph: the name is the mark, at rest and at work.
 /// Print mode takes these frames too, and its stderr has no colour, so
@@ -169,21 +171,24 @@ impl Footer {
     }
 
     /// Advance the spinner one frame. Called from the event loop's timer
-    /// arm only while [`spinning`](Self::spinning).
+    /// arm only while [`spinning`](Self::spinning). The frame counts the
+    /// colour pulse ([`BEAT_FRAMES`]), and the glyph cycle picks its
+    /// three frames out of it by remainder.
     pub fn tick(&mut self) {
-        self.frame = (self.frame + 1) % MARK_FRAMES.len();
+        self.frame = (self.frame + 1) % BEAT_FRAMES;
     }
 
     /// The colour the mark takes while a run is live: scarlet throughout
-    /// a stop and, while the run works, the crest's three reds one per
-    /// frame, scarlet, orange-red cheek, deep crest red, then round
-    /// again.
+    /// a stop and, while the run works, the crest beat — the pulse in
+    /// [`crest_beat`](Palette::crest_beat), which blends from the crest's
+    /// scarlet out to the cheek's orange-red, up to a bright peak half
+    /// way toward the cream, back down the way it came, on to the deep
+    /// crest red, and home, one shade per tick.
     pub fn mark_colour(&self, palette: &Palette) -> ratatui::style::Color {
         if self.stopping {
             return palette.accent;
         }
-        let cycle = [palette.accent, palette.accent_soft, palette.accent_deep];
-        cycle[self.frame % MARK_FRAMES.len()]
+        palette.crest_beat(self.frame)
     }
 
     /// Whether the footer is showing the stopping mark.

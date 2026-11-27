@@ -227,33 +227,62 @@ fn the_frames_spell_the_name_in_the_order_they_draw_in() {
     assert_eq!(spelled, vec!["gg", "gg", "gg"], "the turn, spelled out");
 }
 
-/// On brand: the working mark is colour only, and the colours are the
-/// crest's three reds in turn, scarlet, orange-red cheek, deep crest
-/// red, wrapping round; a stop holds the scarlet on every frame.
+/// On brand: the working mark is colour only, and the colour is one
+/// smooth pulse — scarlet out to the cheek's orange, up to a bright
+/// peak half way toward the cream, back down the way it came, on to the
+/// deep crest red, and home; a stop holds the scarlet on every frame.
 #[test]
-fn the_mark_beats_through_the_crest_s_three_reds() {
+fn the_mark_beats_through_the_crest_as_one_smooth_pulse() {
+    use crate::tui::theme::BEAT_FRAMES;
     use crate::tui::theme::TRUECOLOR as T;
     let mut f = footer();
     f.set_busy(true);
-    let cycle = [T.accent, T.accent_soft, T.accent_deep];
-    for _ in 0..MARK_FRAMES.len() * 2 {
+    for _ in 0..BEAT_FRAMES {
         let line = f.spans(&T);
         assert_eq!(
             line.spans[0].content,
             f.mark(),
             "the mark is the frame the footer is on"
         );
-        assert_eq!(
-            line.spans[0].style.fg,
-            Some(cycle[f.frame % MARK_FRAMES.len()]),
-            "frame {} of the cycle {cycle:?}",
-            f.frame % MARK_FRAMES.len()
-        );
         f.tick();
     }
-    // Two turns, so the wrap is proved: the sixth frame is the first's.
+    // The stops land exactly: scarlet at the start, the cheek a sixth
+    // round, the peak a third round, the cheek again at the half,
+    // scarlet two thirds round, the deep red five sixths round, scarlet
+    // again at the wrap.
+    let anchors = [
+        (0, T.accent),
+        (BEAT_FRAMES / 6, T.accent_soft),
+        (BEAT_FRAMES / 3, Color::Rgb(225, 151, 145)),
+        (BEAT_FRAMES / 2, T.accent_soft),
+        (2 * BEAT_FRAMES / 3, T.accent),
+        (5 * BEAT_FRAMES / 6, T.accent_deep),
+        (BEAT_FRAMES, T.accent),
+    ];
+    for (frame, colour) in anchors {
+        f.frame = frame;
+        let line = f.spans(&T);
+        assert_eq!(
+            line.spans[0].style.fg,
+            Some(colour),
+            "frame {frame} of the beat"
+        );
+    }
+    // Between the anchors the beat blends: no frame repeats its
+    // neighbour's shade, so the pulse reads as one breath, not steps.
+    f.frame = 0;
+    let mut shades = Vec::new();
+    for _ in 0..BEAT_FRAMES {
+        let line = f.spans(&T);
+        shades.push(line.spans[0].style.fg);
+        f.tick();
+    }
+    for pair in shades.windows(2) {
+        assert_ne!(pair[0], pair[1], "two frames share a shade: {shades:?}");
+    }
+    // A stop holds the scarlet on every frame.
     f.set_stopping(true);
-    for _ in 0..MARK_FRAMES.len() {
+    for _ in 0..BEAT_FRAMES {
         let line = f.spans(&T);
         assert_eq!(
             line.spans[0].style.fg,
