@@ -608,10 +608,11 @@ fn a_model_row_filters_on_its_description_too() {
     assert_eq!(names(&state), ["deepseek/flash"], "the active mark");
 }
 
-/// `picker_action()` on a model row is its row's command; `picker_tab`
-/// writes it to the composer, and the list stays.
+/// `picker_action()` on a model row is its row's command: what `Enter`
+/// and, in this list, `Tab` run. `picker_tab` writes nothing here (Tab
+/// is Enter, not a completion), and the hint row names both keys.
 #[test]
-fn the_model_row_acts_on_its_command_and_tab_writes_it() {
+fn the_model_row_acts_on_its_command_and_tab_does_not_complete() {
     let mut state = view();
     state.set_models(std::sync::Arc::new(vec![model_row("deepseek", "flash")]));
     state.editor.set_text("/model");
@@ -622,17 +623,16 @@ fn the_model_row_acts_on_its_command_and_tab_writes_it() {
         "the row's command"
     );
     state.picker_tab();
-    assert_eq!(state.editor.text(), "/model deepseek/flash");
-    assert!(state.picker_open(), "the list stays on the completion");
     assert_eq!(
-        state.picker_matches().len(),
-        1,
-        "the completion is the filter's own text: it keeps one row"
+        state.editor.text(),
+        "/model",
+        "a model row has no Tab completion"
     );
+    assert!(state.picker_open(), "the list stays");
     assert_eq!(
-        state.picker_matches()[0].label().map(str::to_string),
-        Some("deepseek/flash".into()),
-        "the one row is the completed model"
+        state.picker_hint_keys(),
+        crate::tui::picker::HintKeys::Same { does: "switch" },
+        "the hint says Enter and Tab both switch"
     );
 }
 

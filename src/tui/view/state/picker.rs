@@ -114,9 +114,9 @@ impl crate::tui::view::State {
             Some(pick) if pick.list == List::Sessions => crate::tui::picker::HintKeys::Sessions {
                 every_directory: self.session_scope_all(),
             },
-            Some(pick) if pick.list == List::Models => crate::tui::picker::HintKeys::Complete {
-                enter: "Enter switches",
-            },
+            Some(pick) if pick.list == List::Models => {
+                crate::tui::picker::HintKeys::Same { does: "switch" }
+            }
             Some(pick) if pick.list == List::Skills => crate::tui::picker::HintKeys::Complete {
                 enter: "Enter runs",
             },
@@ -223,16 +223,17 @@ impl crate::tui::view::State {
         }
     }
 
-    /// Tab in the `/model` or `/skill` list: the highlighted row's
-    /// completion in the composer, the list open still — `provider/model`
-    /// is the filter's own text, and `/skill <name> ` leaves the typed
-    /// arguments after the name, ready to be completed further.
+    /// Tab in the `/skill` list: the highlighted row's completion in the
+    /// composer, the list open still: `/skill <name> ` leaves the typed
+    /// arguments after the name, ready to be completed further. The
+    /// `/model` list is not Tab's to complete: there Tab is `Enter`
+    /// ([`picker_action`](Self::picker_action)), which switches; a model
+    /// row here writes nothing.
     pub fn picker_tab(&mut self) {
         let Some(text) = self
             .picker_matches()
             .get(self.picker.as_ref().map_or(0, |pick| pick.selected))
             .and_then(|row| match row {
-                Row::Model { suggestion, .. } => Some(suggestion.completion.clone()),
                 Row::Skill { suggestion, .. } => {
                     let args = trigger(self.editor.text()).map_or(String::new(), |t| t.args);
                     Some(format!("{}{}", suggestion.completion, args))

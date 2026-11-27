@@ -669,11 +669,21 @@ fn the_hint_names_the_keys_the_scope_and_the_place_in_a_long_list() {
             &TRUECOLOR,
             80,
             HintKeys::Complete {
-                enter: "Enter switches"
+                enter: "Enter runs"
             },
             None
         )),
-        " ↑↓ move · type filters · Enter switches · Tab completes · Esc clears"
+        " ↑↓ move · type filters · Enter runs · Tab completes · Esc clears"
+    );
+    // A list where Tab is Enter names both keys, once.
+    assert_eq!(
+        row_text(&hint_row(
+            &TRUECOLOR,
+            80,
+            HintKeys::Same { does: "switch" },
+            None
+        )),
+        " ↑↓ move · type filters · Enter/Tab switch · Esc clears"
     );
 }
 
