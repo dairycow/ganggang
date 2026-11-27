@@ -80,11 +80,13 @@ finish() {
 
 # Why the job ended without an answer, read from its progress file: gg says
 # when a final response was cut off by max_tokens, and names the budget that
-# spent the run. Anything else is in NAME.err.
+# spent the run. Only gg's own warning lines count: the file also echoes the
+# job's command lines, and one of those may name a budget. Anything else is
+# in NAME.err.
 no_answer_reason() {
-  if grep -q "before producing visible output" "$err" 2>/dev/null; then
+  if grep -qE '^warning: .*before producing visible output' "$err" 2>/dev/null; then
     echo "cut off by max_tokens before any visible output"
-  elif grep -qE 'max_turns|max_seconds' "$err" 2>/dev/null; then
+  elif grep -qE '^warning: reached max_(turns|seconds) \(' "$err" 2>/dev/null; then
     echo "reached its turn or time budget"
   else
     echo "read $job.err"

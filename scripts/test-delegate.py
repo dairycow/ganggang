@@ -26,7 +26,8 @@ case "${STUB_MODE:-ok}" in
   ok) echo "the answer" ;;
   empty) echo "some progress" >&2 ;;
   cut) echo "warning: response truncated by max_tokens=100 before producing visible output; stopping instead of continuing" >&2 ;;
-  budget) echo "run stopped: the max_turns budget is spent" >&2 ;;
+  budget) echo "warning: reached max_turns (40); stopping run" >&2 ;;
+  noise) echo '▸ bash grep -n max_seconds src/agent' >&2; echo "some progress" >&2 ;;
   fail) echo "something went wrong" >&2; exit 3 ;;
   hang) sleep 30 ;;
 esac
@@ -165,11 +166,13 @@ class DelegateTest(unittest.TestCase):
 
     def test_a_no_answer_says_why(self):
         # The detail is read from NAME.err: a response cut off by max_tokens,
-        # a budget gg names, or a pointer to the progress file.
+        # a budget gg names, or a pointer to the progress file. A command line
+        # in the file that names a budget is not gg's warning.
         cases = {
             "empty": "read a.err",
             "cut": "cut off by max_tokens before any visible output",
             "budget": "reached its turn or time budget",
+            "noise": "read a.err",
         }
         for mode, detail in cases.items():
             with self.subTest(mode=mode):
