@@ -8,6 +8,7 @@ use super::*;
 use crate::nested::{DEPTH, MAX_TURNS_CAP, PARENT_MODEL, PARENT_SESSION, TOOL_CAP};
 
 mod joblog;
+mod jobreport;
 mod jobs;
 
 /// Tests that keep background jobs or touch the run's job log hold this
@@ -24,6 +25,52 @@ fn no_nest() -> SharedParentEnv {
 /// timing out, not about the user stopping a command.
 fn no_cancel() -> Cancel {
     Cancel::none()
+}
+
+/// Job-log tests hold the shared slot and use one tool from start to
+/// finish: every tool in the binary has a log of its own now, but the
+/// kept-job tests still serialise on the exit kill below.
+async fn one_log_test() -> tokio::sync::MutexGuard<'static, ()> {
+    ONE_TOOL_AT_A_TIME.lock().await
+}
+
+/// A tool whose ceiling is `max`, for the job-log tests.
+fn log_tool(max: u64) -> BashTool {
+    BashTool::new(std::env::temp_dir(), max, no_nest())
+}
+
+/// Run `script` as a plain command through `tool`.
+async fn run_on(tool: &BashTool, script: &str) -> ToolResult {
+    tool.execute(&serde_json::json!({"command": script}), &no_cancel())
+        .await
+}
+
+/// `wait_job: name`, waiting `budget_secs`.
+async fn wait_job(tool: &BashTool, name: &str, budget_secs: Option<u64>) -> ToolResult {
+    let mut args = serde_json::json!({"wait_job": name});
+    if let Some(secs) = budget_secs {
+        args["timeout_secs"] = serde_json::json!(secs);
+    }
+    tool.execute(&args, &no_cancel()).await
+}
+
+/// Register a job the way a command does: background a sleeper, write its
+/// `start` record with `$!`, leave a line in `NAME.err`, and `extra`, a
+/// `done` record, lands one second later from a background subshell. The
+/// background children send their output to the void, so the command's
+/// own pipe closes when the script ends and nothing kills them.
+fn register(name: &str, body: &str, extra: Option<&str>) -> String {
+    let mut script = format!(
+        "sleep 5 >/dev/null 2>&1 & \
+         printf 'start\\t{name}\\t%s\\t%s\\n' \"$!\" \"$PWD\" >> \"$GG_JOB_LOG\"; \
+         printf '{body}\\n' > {name}.err"
+    );
+    if let Some(record) = extra {
+        script.push_str(&format!(
+            "; (sleep 1; printf '{record}\\n' >> \"$GG_JOB_LOG\") >/dev/null 2>&1 &"
+        ));
+    }
+    script
 }
 
 async fn run(cmd: &str, timeout: Option<u64>) -> ToolResult {

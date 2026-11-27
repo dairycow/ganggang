@@ -3,10 +3,10 @@
 //! `bash_timeout_secs` bounds every [`bash`](super) call, so a command
 //! longer than that ceiling could only be started by the model itself, in
 //! the shell, and polled with sleeps. `background: true` is the harness's
-//! way. The call waits for the command as any call does, and a command
-//! still running at the deadline is kept, as a numbered job, instead of
-//! killed. `wait_for: <id>` waits for a job and returns what a finished
-//! command does; `stop: <id>` kills one.
+//! way: the call waits as any call does, and a command still running at
+//! the deadline is kept, as a numbered job, instead of killed.
+//! `wait_for: <id>` waits for a job and returns what a finished command
+//! does; `stop: <id>` kills one.
 //!
 //! A job lives as long as the tool: when the table is dropped, every job
 //! still running goes down with it, whole process group included. The same
@@ -31,8 +31,7 @@ use crate::nested::ParentEnv;
 pub(super) const JOB_TAKES_NO_COMMAND: &str =
     "wait_for, wait_job and stop take a job and no command, and not each other";
 /// What a call with neither is told.
-pub(super) const NO_COMMAND: &str =
-    "bash needs a command, or wait_for or stop with a job's number, or wait_job with a job's name";
+pub(super) const NO_COMMAND: &str = "bash needs a command, or wait_for, wait_job or stop";
 /// Appended to a timeout: the one place a model that did not read the schema
 /// learns that the deadline is final, and what to do about it.
 pub(super) const NEEDS_BACKGROUND: &str = "; a longer command needs background: true";
@@ -42,15 +41,12 @@ pub(super) const NEEDS_BACKGROUND: &str = "; a longer command needs background: 
 pub(super) struct Jobs(Mutex<Vec<Arc<Job>>>);
 
 /// What the task draining a command answers with once it has exited: its
-/// status, or the error that ended the wait on it. Every waiter reads the
-/// slot, so the error is text rather than an `io::Error`, which cannot be
-/// cloned.
-type Settled = watch::Receiver<Option<std::result::Result<ExitStatus, String>>>;
+/// status, or a text error (`io::Error` cannot be cloned).
+pub(super) type Settled = watch::Receiver<Option<std::result::Result<ExitStatus, String>>>;
 
 /// One command kept past its deadline.
-struct Job {
-    /// The command, for `/jobs`'s running line.
-    command: String,
+pub(super) struct Job {
+    pub(super) command: String,
     capture: SharedCapture,
     pgid: Option<u32>,
     /// Set once the shell has been reaped. Until then the group id is
@@ -58,7 +54,7 @@ struct Job {
     /// process, so the group is no longer signalled.
     exited: watch::Receiver<bool>,
     /// `None` until the command has exited and its pipe is drained.
-    settled: Settled,
+    pub(super) settled: Settled,
     /// The task draining the command; aborted when a kill leaves it nothing
     /// to wait for.
     runner: tokio::task::AbortHandle,
@@ -77,8 +73,7 @@ pub(super) enum Start {
 impl Jobs {
     /// Run `command` as a job: wait for it up to `timeout`, as for any
     /// command, and keep it when the deadline passes. A stop request inside
-    /// that first wait kills it as it would any command. `job_log` is the
-    /// run's job log, set on the command like the nest.
+    /// that first wait kills it as it would any command.
     pub(super) async fn start(
         &self,
         command: &str,
@@ -188,33 +183,6 @@ impl Jobs {
         }
     }
 
-    /// One line per kept job, for `/jobs`: the command while it runs,
-    /// the exit once it has one.
-    pub(super) fn report(&self) -> Vec<String> {
-        self.with(|jobs| {
-            jobs.iter()
-                .enumerate()
-                .map(|(at, job)| {
-                    let id = at + 1;
-                    match job.settled.borrow().as_ref() {
-                        Some(Ok(status)) => format!(
-                            "#{id} exited: {}",
-                            status.code().map_or_else(
-                                || "killed by signal".to_string(),
-                                |code| format!("exit {code}"),
-                            )
-                        ),
-                        Some(Err(e)) => format!("#{id} exited: {e}"),
-                        None => format!(
-                            "#{id} running: {}",
-                            super::joblog::clamp_chars(&job.command, 80)
-                        ),
-                    }
-                })
-                .collect()
-        })
-    }
-
     /// Keep a job still running and give it its number. The exit registry
     /// gets a handle too, so an exit that skips [`Drop`] can still kill it.
     fn keep(&self, job: Arc<Job>) -> u64 {
@@ -234,7 +202,7 @@ impl Jobs {
 
     /// The table itself. A lock a panicked thread left behind still holds
     /// the jobs, so the poison is cleared rather than obeyed.
-    fn with<T>(&self, visit: impl FnOnce(&mut Vec<Arc<Job>>) -> T) -> T {
+    pub(super) fn with<T>(&self, visit: impl FnOnce(&mut Vec<Arc<Job>>) -> T) -> T {
         let mut jobs = match self.0.lock() {
             Ok(jobs) => jobs,
             Err(poisoned) => poisoned.into_inner(),
@@ -311,8 +279,7 @@ static KEPT_JOBS: Mutex<Vec<Arc<Job>>> = Mutex::new(Vec::new());
 
 /// The blocking form of the deadline kill over `jobs`: every job whose
 /// command has not settled and whose shell is still alive goes down with
-/// its whole process group. Answers with the number of groups it sent a
-/// kill to.
+/// its whole process group, answering with the number of groups it killed.
 fn kill_live_groups(jobs: &[Arc<Job>]) -> usize {
     let mut killed = 0;
     for job in jobs

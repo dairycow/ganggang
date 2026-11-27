@@ -1,11 +1,10 @@
 //! The job log: names for the detached jobs a command starts.
 //!
 //! A detached job (`setsid`, a daemonised build) is invisible to the
-//! numbered background jobs of [`jobs`](super::jobs): nothing in the
-//! process keeps it. So every command the [`bash`](super) tool runs
-//! carries `GG_JOB_LOG`, the path of a file this run owns, and a command
-//! that starts a detached job registers it there, one record per line,
-//! tab separated:
+//! numbered background jobs of [`jobs`](super::jobs): nothing keeps it.
+//! So every command the [`bash`](super) tool runs carries `GG_JOB_LOG`,
+//! the path of a file this run owns, and a command that starts a
+//! detached job registers it there, one record per line, tab separated:
 //!
 //! ```text
 //! start   NAME    PID     DIR
@@ -14,17 +13,12 @@
 //!
 //! `DIR` holds `NAME.out`, `NAME.err` and `NAME.jsonl`; `NOTE` is one
 //! line on how the job ended and may be empty. The latest record for a
-//! name wins: a `done` after a `start` means finished, and a `start`
-//! after a `done` means the job started again. Lines that do not parse
-//! are skipped.
-//!
-//! [`wait`](wait) is the waiting side: `wait_job: NAME` on a `bash` call
-//! polls the log until a `done` record lands or the pid is gone, for a
-//! budget of its own that outlasts the session's `bash_timeout_secs`.
+//! name wins: a `done` after a `start` means finished, a `start` after a
+//! `done` a rerun, and unparsable lines are skipped. Reports live in
+//! [`jobreport`](super::jobreport).
 
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
-use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -49,9 +43,9 @@ const ERR_TAIL: usize = 2 * 1024;
 const NO_DONE: &str = "exited without a done record";
 
 /// The budget of a wait call: `timeout_secs` when given, clamped to
-/// [`WAIT_BUDGET_MAX_SECS`]; otherwise `default`, which is the session's
-/// bash ceiling for `wait_for` and [`WAIT_JOB_DEFAULT_SECS`] for
-/// `wait_job`. A wait is never clamped by the ceiling itself.
+/// [`WAIT_BUDGET_MAX_SECS`]; otherwise `default` (the bash ceiling for
+/// `wait_for`, [`WAIT_JOB_DEFAULT_SECS`] for `wait_job`). A wait is
+/// never clamped by the ceiling itself.
 pub(super) fn wait_budget(timeout_secs: Option<u64>, default: u64) -> Duration {
     Duration::from_secs(timeout_secs.map_or(default, |secs| secs.min(WAIT_BUDGET_MAX_SECS)))
 }
@@ -65,25 +59,20 @@ pub(super) struct JobLog {
 
 impl JobLog {
     /// Create the run's log under the temp directory, named with the
-    /// process id, empty and readable only by its owner. An instance
-    /// counter keeps the tools of one process apart, so a new session's
-    /// tool never rewrites the one a live agent still hands out. A log
-    /// that cannot be created leaves the path in place: commands append
-    /// with `>>`, which creates the file, so the wait side still works.
+    /// process id, empty and readable only by its owner; an instance
+    /// counter keeps the tools of one process apart. Creation is best
+    /// effort: commands append with `>>`, which creates the file anyway.
     pub(super) fn create() -> Self {
         static INSTANCES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let instance = INSTANCES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path =
             std::env::temp_dir().join(format!("gg-jobs-{}-{instance}.log", std::process::id()));
-        if let Ok(mut file) = OpenOptions::new()
+        let _ = OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
             .mode(0o600)
-            .open(&path)
-        {
-            let _ = file.flush();
-        }
+            .open(&path);
         Self { path }
     }
 
@@ -109,8 +98,8 @@ pub(super) enum JobState {
     /// job's three files.
     Running { pid: u32, dir: PathBuf },
     /// A `done` is the latest record. `exit` is `None` when a pid
-    /// vanished without a `done`; `dir` is the `start` record's, and may
-    /// be missing when a `done` arrived with no `start` before it.
+    /// vanished without a `done`; `dir` is the `start` record's, absent
+    /// when the `done` had no `start` before it.
     Finished {
         exit: Option<i32>,
         note: String,
@@ -151,90 +140,6 @@ pub(super) fn read_all(log: &JobLog) -> BTreeMap<String, JobState> {
         jobs.insert(name, state);
     }
     jobs
-}
-
-/// [`read_all`] for one name.
-fn read_one(log: &JobLog, name: &str) -> JobState {
-    read_all(log).remove(name).unwrap_or(JobState::Unknown)
-}
-
-/// The first `cap` characters of `text`, with an ellipsis when cut. Long
-/// commands and progress lines are trimmed for `/jobs`.
-pub(super) fn clamp_chars(text: &str, cap: usize) -> String {
-    let mut out: String = text.chars().take(cap).collect();
-    if text.chars().count() > cap {
-        out.push('…');
-    }
-    out
-}
-
-/// The last non-empty line of `NAME.err`, trimmed to `cap` characters.
-fn last_err_line(dir: &Path, name: &str, cap: usize) -> Option<String> {
-    let text = std::fs::read_to_string(dir.join(format!("{name}.err"))).ok()?;
-    let line = text.lines().rev().find(|line| !line.trim().is_empty())?;
-    Some(clamp_chars(line, cap))
-}
-
-/// How long `pid` has been alive: the system's uptime less the process's
-/// start time, both read from /proc. Linux numbers start times in fixed
-/// 100 Hz ticks (`USER_HZ`). `None` off Linux, or once the process is gone.
-fn pid_age(pid: u32) -> Option<Duration> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    // The command name is in parentheses and may contain spaces or a
-    // closing one; every field after the last parenthesis is fixed.
-    let after_comm = stat.rsplit_once(')')?.1;
-    let start_ticks: f64 = after_comm.split_whitespace().nth(19)?.parse().ok()?;
-    let uptime = std::fs::read_to_string("/proc/uptime").ok()?;
-    let uptime: f64 = uptime.split_whitespace().next()?.parse().ok()?;
-    const USER_HZ: f64 = 100.0;
-    let secs = uptime - start_ticks / USER_HZ;
-    if !secs.is_finite() {
-        return None;
-    }
-    Some(Duration::from_secs_f64(secs.max(0.0)))
-}
-
-/// A duration for `/jobs`: `42s`, `4m`, then `1h3m`.
-fn age_text(age: Duration) -> String {
-    let secs = age.as_secs();
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else {
-        format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
-    }
-}
-
-/// One line per registered job, latest record winning, in name order:
-/// `NAME · running 4m · pid 1234 · <last line of NAME.err>` or
-/// `NAME · done exit N · NOTE`. For `/jobs`.
-pub(super) fn report(log: &JobLog) -> Vec<String> {
-    read_all(log)
-        .into_iter()
-        .filter_map(|(name, state)| match state {
-            JobState::Unknown => None,
-            JobState::Running { pid, dir } => {
-                let age = pid_age(pid).map_or_else(
-                    || "running".to_string(),
-                    |age| format!("running {}", age_text(age)),
-                );
-                let tail = last_err_line(&dir, &name, 120)
-                    .map_or_else(String::new, |line| format!(" · {line}"));
-                Some(format!("{name} · {age} · pid {pid}{tail}"))
-            }
-            JobState::Finished { exit, note, .. } => {
-                let done =
-                    exit.map_or_else(|| "done".to_string(), |code| format!("done exit {code}"));
-                let note = if note.is_empty() {
-                    String::new()
-                } else {
-                    format!(" · {note}")
-                };
-                Some(format!("{name} · {done}{note}"))
-            }
-        })
-        .collect()
 }
 
 /// One line: `start NAME PID DIR` or `done NAME EXIT NOTE`, tab
@@ -292,19 +197,19 @@ fn err_tail(dir: Option<&Path>, name: &str) -> String {
     let Some(dir) = dir else {
         return String::new();
     };
-    match std::fs::read(dir.join(format!("{name}.err"))) {
-        Ok(bytes) => suffix_string(&bytes, ERR_TAIL),
-        Err(_) => String::new(),
-    }
+    std::fs::read(dir.join(format!("{name}.err")))
+        .map_or_else(|_| String::new(), |bytes| suffix_string(&bytes, ERR_TAIL))
 }
 
 /// What a finished job reports: the exit and its note, then where the
 /// answer, the progress and the session live. A non-zero or unknown exit
 /// is an error result, with the last of `NAME.err` as partial output.
-fn finished_result(name: &str, state: JobState) -> ToolResult {
-    let JobState::Finished { exit, note, dir } = state else {
-        return ToolResult::err(format!("job {name:?} is not registered as finished"));
-    };
+fn finished_result(
+    name: &str,
+    exit: Option<i32>,
+    note: String,
+    dir: Option<PathBuf>,
+) -> ToolResult {
     let exit = exit.map_or_else(|| "unknown".to_string(), |code| code.to_string());
     let mut message = format!("job {name} finished: exit {exit}");
     if !note.is_empty() {
@@ -338,9 +243,9 @@ fn unknown_job(log: &JobLog, name: &str) -> String {
     };
     format!(
         "no job named {name:?}: {seen}. A job registers through $GG_JOB_LOG, \
-         the log path every bash command receives: append a start record \
-         (name, pid, directory) when it starts and a done record (name, \
-         exit, note) when it ends"
+         the log path every bash command receives: a start record (name, \
+         pid, directory) when it starts, a done record (name, exit, note) \
+         when it ends"
     )
 }
 
@@ -354,50 +259,41 @@ pub(super) async fn wait(
     cancel: &Cancel,
 ) -> ToolResult {
     let started = Instant::now();
-    let mut state = read_one(log, name);
-    if state == JobState::Unknown {
-        return ToolResult::err(unknown_job(log, name));
-    }
+    let mut state = read_all(log).remove(name).unwrap_or(JobState::Unknown);
     loop {
-        match &state {
-            JobState::Finished { .. } => return finished_result(name, state),
+        state = match state {
+            // Unreachable after the first read, which answers a name with
+            // no record before the loop; the arm keeps the match exhaustive.
+            JobState::Unknown => return ToolResult::err(unknown_job(log, name)),
+            JobState::Finished { exit, note, dir } => {
+                return finished_result(name, exit, note, dir);
+            }
             JobState::Running { pid, dir } => {
-                if !pid_alive(*pid) {
-                    return finished_result(
-                        name,
-                        JobState::Finished {
-                            exit: None,
-                            note: NO_DONE.to_string(),
-                            dir: Some(dir.clone()),
-                        },
-                    );
+                if !pid_alive(pid) {
+                    return finished_result(name, None, NO_DONE.to_string(), Some(dir));
                 }
+                if started.elapsed() >= budget {
+                    return ToolResult::ok(with_partial(
+                        format!(
+                            "job {name} is still running after {}s (pid {pid}) · {}; \
+                             call bash with wait_job: {name} to keep waiting",
+                            started.elapsed().as_secs(),
+                            dir.display(),
+                        ),
+                        err_tail(Some(&dir), name),
+                    ));
+                }
+                tokio::select! {
+                    biased;
+                    () = stop_requested(cancel) => {
+                        return ToolResult::err(format!(
+                            "wait for job {name} aborted by user; the job keeps running"
+                        ));
+                    }
+                    () = tokio::time::sleep(POLL) => {}
+                }
+                read_all(log).remove(name).unwrap_or(JobState::Unknown)
             }
-            JobState::Unknown => unreachable!("checked before the loop"),
-        }
-        if started.elapsed() >= budget {
-            let JobState::Running { pid, dir } = &state else {
-                unreachable!("running was matched above");
-            };
-            return ToolResult::ok(with_partial(
-                format!(
-                    "job {name} is still running after {}s (pid {pid}) · {}; \
-                     call bash with wait_job: {name} to keep waiting",
-                    started.elapsed().as_secs(),
-                    dir.display(),
-                ),
-                err_tail(Some(dir), name),
-            ));
-        }
-        tokio::select! {
-            biased;
-            () = stop_requested(cancel) => {
-                return ToolResult::err(format!(
-                    "wait for job {name} aborted by user; the job keeps running"
-                ));
-            }
-            () = tokio::time::sleep(POLL) => {}
-        }
-        state = read_one(log, name);
+        };
     }
 }

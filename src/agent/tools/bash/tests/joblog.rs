@@ -1,55 +1,11 @@
 //! The job log: records a detached job registers, `wait_job` waiting on
 //! them by name, and the two wait budgets that outlast the bash ceiling.
+//! The report side's tests are in [`jobreport`](super::jobreport)'s.
 
 use std::time::Duration;
 
 use super::super::joblog::{self, JobLog, JobState};
 use super::*;
-
-/// Every tool in the binary shares the one log file (it is named with the
-/// process id, and a tool's drop removes it), so these tests hold the
-/// shared slot and use one tool from start to finish.
-async fn one_log_test() -> tokio::sync::MutexGuard<'static, ()> {
-    ONE_TOOL_AT_A_TIME.lock().await
-}
-
-fn log_tool(max: u64) -> BashTool {
-    BashTool::new(std::env::temp_dir(), max, no_nest())
-}
-
-/// Run `script` as a plain command through `tool`.
-async fn run_on(tool: &BashTool, script: &str) -> ToolResult {
-    tool.execute(&serde_json::json!({"command": script}), &no_cancel())
-        .await
-}
-
-/// `wait_job: name`, waiting `budget_secs`.
-async fn wait_job(tool: &BashTool, name: &str, budget_secs: Option<u64>) -> ToolResult {
-    let mut args = serde_json::json!({"wait_job": name});
-    if let Some(secs) = budget_secs {
-        args["timeout_secs"] = serde_json::json!(secs);
-    }
-    tool.execute(&args, &no_cancel()).await
-}
-
-/// Register a job the way a command does: background a sleeper, write its
-/// `start` record with `$!`, leave a line in `NAME.err`, and `extra`, a
-/// `done` record, lands one second later from a background subshell. The
-/// background children send their output to the void, so the command's
-/// own pipe closes when the script ends and nothing kills them.
-fn register(name: &str, body: &str, extra: Option<&str>) -> String {
-    let mut script = format!(
-        "sleep 5 >/dev/null 2>&1 & \
-         printf 'start\\t{name}\\t%s\\t%s\\n' \"$!\" \"$PWD\" >> \"$GG_JOB_LOG\"; \
-         printf '{body}\\n' > {name}.err"
-    );
-    if let Some(record) = extra {
-        script.push_str(&format!(
-            "; (sleep 1; printf '{record}\\n' >> \"$GG_JOB_LOG\") >/dev/null 2>&1 &"
-        ));
-    }
-    script
-}
 
 /// A start record and a done record after one second, parsed from a log
 /// written by hand: the reader's contract without a shell in the middle.
@@ -331,70 +287,4 @@ async fn the_schema_offers_wait_job_and_the_wait_budgets() {
         "{}",
         tool.description()
     );
-}
-
-/// `/jobs` on a fresh tool: nothing held, nothing registered.
-#[tokio::test]
-async fn the_jobs_report_starts_at_no_jobs() {
-    let _log = one_log_test().await;
-    let tool = log_tool(30);
-    assert_eq!(tool.jobs_report().as_deref(), Some("no jobs"));
-}
-
-/// `/jobs` lines: a kept background job by number and command, a
-/// registered job running with its progress line, and one done.
-#[tokio::test]
-async fn the_jobs_report_lists_kept_and_registered_jobs() {
-    let _log = one_log_test().await;
-    let tool = log_tool(30);
-
-    let r = tool
-        .execute(
-            &serde_json::json!({"command": "sleep 3", "background": true, "timeout_secs": 1}),
-            &no_cancel(),
-        )
-        .await;
-    assert!(r.output.contains("background job 1"), "{}", r.output);
-    let report = tool.jobs_report().unwrap();
-    assert!(report.contains("#1 running: sleep 3"), "{report}");
-
-    let script = register("reg", "compiling src/main.rs", None);
-    let r = run_on(&tool, &script).await;
-    assert!(!r.is_error, "{}", r.output);
-    let report = tool.jobs_report().unwrap();
-    assert!(report.contains("reg · running"), "{report}");
-    assert!(report.contains("pid "), "{report}");
-    assert!(report.contains("compiling src/main.rs"), "{report}");
-
-    let script = register("fin", "started", Some("done\tfin\t0\tlanded"));
-    let r = run_on(&tool, &script).await;
-    assert!(!r.is_error, "{}", r.output);
-    let r = wait_job(&tool, "fin", Some(5)).await;
-    assert!(!r.is_error, "{}", r.output);
-    let report = tool.jobs_report().unwrap();
-    assert!(report.contains("fin · done exit 0 · landed"), "{report}");
-    assert!(report.contains("reg · running"), "{report}");
-
-    // Collect the kept job: the line turns to its exit.
-    let r = tool
-        .execute(&serde_json::json!({"wait_for": 1}), &no_cancel())
-        .await;
-    assert!(!r.is_error, "{}", r.output);
-    let report = tool.jobs_report().unwrap();
-    assert!(report.contains("#1 exited: exit 0"), "{report}");
-}
-
-/// Long commands and progress lines are trimmed, at the cap, with an
-/// ellipsis.
-#[test]
-fn jobs_report_trims_long_fields() {
-    assert_eq!(joblog::clamp_chars("short", 80), "short", "nothing to trim");
-    let long = "x".repeat(90);
-    let trimmed = joblog::clamp_chars(&long, 80);
-    assert_eq!(
-        trimmed.chars().count(),
-        81,
-        "80 characters plus the ellipsis"
-    );
-    assert!(trimmed.ends_with('…'));
 }

@@ -29,6 +29,7 @@ use crate::nested::{self, ParentEnv, SharedParentEnv};
 
 mod hint;
 mod joblog;
+mod jobreport;
 mod jobs;
 mod output;
 mod process;
@@ -173,13 +174,7 @@ impl Tool for BashTool {
     }
 
     fn jobs_report(&self) -> Option<String> {
-        let mut lines = self.jobs.report();
-        lines.extend(joblog::report(&self.joblog));
-        Some(if lines.is_empty() {
-            "no jobs".to_string()
-        } else {
-            lines.join("\n")
-        })
+        Some(jobreport::report(&self.jobs, &self.joblog))
     }
 
     fn description(&self) -> &'static str {
