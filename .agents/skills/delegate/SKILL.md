@@ -55,7 +55,7 @@ Each job ends with one line: the exit status, the answer's size and the session 
 
 ## Limits
 
-- A job runs for minutes: a wait is no longer capped at the ceiling. `wait_job` collects a job by name, waiting 600 s by default and up to 3600 s, and `wait_for` takes a `timeout_secs` past the ceiling; either reports a job still running, and a later call keeps waiting.
+- A job runs for minutes, and a wait is not capped at the ceiling: `wait_job` collects a job by name, waiting 600 s by default and up to 3600 s, and `wait_for` takes a `timeout_secs` past the ceiling; either reports a job still running, and a later call keeps waiting.
 - A job started with `--timeout` runs in a session of its own (`delegate.sh` uses `setsid`), so `stop: <id>` cannot reach it: `stop` kills the call's process group, which holds the job's watchdog but not the job, and so does a call killed at the deadline or the end of the session. Wait for every job to finish or time out before answering.
 - To end one job early, kill its process group by the pid `delegate.sh` wrote: `kill -TERM -- -$(cat <dir>/<job>.pid)`.
 - A subagent cannot delegate: subagents are one level deep.
