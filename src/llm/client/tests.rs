@@ -224,6 +224,7 @@ pub(super) fn openrouter_endpoint() -> crate::config::Endpoint {
         reasoning_effort: None,
         reasoning_budget_tokens: None,
         thinking_off: None,
+        forced_thinking: false,
         compact_threshold_tokens: None,
         compact_threshold_explicit: true,
     }

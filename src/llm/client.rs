@@ -60,6 +60,11 @@ pub struct LlmClient {
     /// [`Self::send_stream_without_reasoning`]). `None` sends no `thinking`
     /// key on any request, whatever the API.
     thinking_off: Option<Thinking>,
+    /// The endpoint is a forced-thinking model (config `forced_thinking`):
+    /// a thought-only cut cannot be retried, because no request can switch
+    /// its thinking off. The loop reads this through
+    /// [`Self::forced_thinking`]; the wire never changes with it.
+    forced_thinking: bool,
     session_id: String,
     session_header: Option<String>,
     /// OpenRouter attribution, applied to requests for OpenRouter only. The
@@ -100,6 +105,7 @@ impl LlmClient {
             reasoning_effort: None,
             reasoning_budget_tokens: None,
             thinking_off: None,
+            forced_thinking: false,
             session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
             session_header,
             openrouter_attribution: None,
@@ -117,6 +123,7 @@ impl LlmClient {
             .with_reasoning_effort(endpoint.reasoning_effort.clone())
             .with_reasoning_budget_tokens(endpoint.reasoning_budget_tokens)
             .with_thinking_off(endpoint.thinking_off.clone().map(Thinking::of))
+            .with_forced_thinking(endpoint.forced_thinking)
             .with_openrouter_attribution(OpenRouterAttribution::from_base_url(&endpoint.base_url)))
     }
 

@@ -40,6 +40,9 @@ const RETRY_THOUGHT_ANYWAY: &str = "response truncated by max_tokens=512 with no
 const OFF_THOUGHT_ANYWAY: &str = "response truncated by max_tokens=512 with nothing but reasoning; the request went out with reasoning off and the endpoint thought anyway (512 reasoning tokens); stopping instead of continuing";
 /// [`RETRY_THOUGHT_ANYWAY`] when the provider reports no reasoning tokens.
 const RETRY_THOUGHT_ANYWAY_UNCOUNTED: &str = "response truncated by max_tokens=512 with nothing but reasoning; the retry went out with reasoning off and the endpoint thought anyway; stopping instead of continuing";
+/// The warning a forced-thinking model's thought-only turn earns: no
+/// request can switch its thinking off, so there is no retry.
+const FORCED_STOP: &str = "response truncated by max_tokens=512 with nothing but reasoning; this model cannot switch its thinking off, so there is no retry; stopping instead of continuing";
 
 fn warned(values: &[Value]) -> Vec<&str> {
     values
@@ -147,6 +150,34 @@ async fn a_thinking_off_endpoints_retry_carries_the_switch() {
         event_values(&events).last().unwrap(),
         &json!({"type": "run_ended", "turns": 2})
     );
+}
+
+/// A forced-thinking model's thought-only cut is not retried: no request
+/// can switch its thinking off, so the run stops with the warning that
+/// says so, after exactly one request.
+#[tokio::test]
+async fn a_forced_thinking_model_stops_without_a_retry() {
+    let server = FakeServer::spawn(vec![thought_only_length_response("thinking, forced")]);
+    let client = LlmClient::new(&server.base_url)
+        .unwrap()
+        .with_forced_thinking(true);
+
+    let (result, entries, events) = drive_with(Registry::new(), client, None).await;
+    assert!(result.is_ok(), "{result:?}");
+
+    let values = event_values(&events);
+    assert_eq!(warned(&values), vec![FORCED_STOP], "{values:?}");
+    assert_eq!(
+        values.last().unwrap(),
+        &json!({"type": "run_ended", "turns": 1})
+    );
+    assert_eq!(
+        server.requests.lock().unwrap().len(),
+        1,
+        "no second request"
+    );
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    assert_eq!(messages_of(&entries[1]).role, Role::Assistant);
 }
 
 /// The turn is asked once more with `reasoning_effort: "none"`, over the

@@ -124,7 +124,7 @@ pub(super) fn providers_reference() -> String {
     }
     for p in providers.values() {
         out.push_str(&format!("\n## {}\n\n", p.name));
-        out.push_str("| Model | Wire API | Context window | Max tokens | Replays reasoning | Base URL |\n|---|---|---|---|---|---|\n");
+        out.push_str("| Model | Wire API | Context window | Max tokens | Replays reasoning | Thinking off | Forced thinking | Base URL |\n|---|---|---|---|---|---|---|---|\n");
         for spec in &p.models {
             let ep = p.resolve(Some(&spec.id));
             let default = if spec.id == p.default_model {
@@ -132,8 +132,10 @@ pub(super) fn providers_reference() -> String {
             } else {
                 ""
             };
+            let thinking_off = ep.thinking_off.as_deref().map(code).unwrap_or_default();
+            let forced = if ep.forced_thinking { "yes" } else { "" };
             out.push_str(&format!(
-                "| {}{default} | {} | {} | {} | {} | {} |\n",
+                "| {}{default} | {} | {} | {} | {} | {thinking_off} | {forced} | {} |\n",
                 code(&spec.id),
                 code(ep.api.as_str()),
                 ep.context_window,

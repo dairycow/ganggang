@@ -47,6 +47,20 @@ impl LlmClient {
         self
     }
 
+    /// Mark the endpoint a forced-thinking model (config
+    /// `forced_thinking`): a thought-only cut cannot be retried, so the
+    /// loop stops instead of asking the same thinking turn again.
+    pub fn with_forced_thinking(mut self, forced_thinking: bool) -> Self {
+        self.forced_thinking = forced_thinking;
+        self
+    }
+
+    /// Whether this endpoint is a forced-thinking model
+    /// ([`Self::with_forced_thinking`]).
+    pub fn forced_thinking(&self) -> bool {
+        self.forced_thinking
+    }
+
     pub fn with_session_id(mut self, session_id: String) -> Self {
         self.session_id = session_id;
         self

@@ -129,6 +129,7 @@ pub struct Config {
     pub reasoning_effort: Option<String>,
     pub reasoning_budget_tokens: Option<u32>,
     pub thinking_off: Option<String>,
+    pub forced_thinking: bool,
     pub compact_threshold_tokens: Option<u32>,
     pub compact_threshold_explicit: bool,
     pub max_turns: Option<u32>,
@@ -189,6 +190,7 @@ impl Default for Config {
             reasoning_effort: ep.reasoning_effort,
             reasoning_budget_tokens: ep.reasoning_budget_tokens,
             thinking_off: ep.thinking_off,
+            forced_thinking: ep.forced_thinking,
             compact_threshold_tokens: ep.compact_threshold_tokens,
             compact_threshold_explicit: ep.compact_threshold_explicit,
             max_turns: None,
@@ -232,6 +234,7 @@ impl Config {
             reasoning_effort: self.reasoning_effort.clone(),
             reasoning_budget_tokens: self.reasoning_budget_tokens,
             thinking_off: self.thinking_off.clone(),
+            forced_thinking: self.forced_thinking,
             compact_threshold_tokens: self.compact_threshold_tokens,
             compact_threshold_explicit: self.compact_threshold_explicit,
         }
@@ -441,6 +444,7 @@ impl Config {
         self.reasoning_effort = ep.reasoning_effort.clone();
         self.reasoning_budget_tokens = ep.reasoning_budget_tokens;
         self.thinking_off = ep.thinking_off.clone();
+        self.forced_thinking = ep.forced_thinking;
         self.compact_threshold_tokens = ep.compact_threshold_tokens;
         self.compact_threshold_explicit = ep.compact_threshold_explicit;
     }
@@ -656,6 +660,7 @@ pub fn merge(
         reasoning_effort: ep.reasoning_effort,
         reasoning_budget_tokens: ep.reasoning_budget_tokens,
         thinking_off: ep.thinking_off,
+        forced_thinking: ep.forced_thinking,
         compact_threshold_tokens: ep.compact_threshold_tokens,
         compact_threshold_explicit: ep.compact_threshold_explicit,
         max_turns,

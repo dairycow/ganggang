@@ -16,49 +16,49 @@ Shipped default, when no flag, environment variable or config file names a provi
 
 ## deepseek
 
-| Model | Wire API | Context window | Max tokens | Replays reasoning | Base URL |
-|---|---|---|---|---|---|
-| `deepseek-flash` (default) | `openai-completions` | 1000000 | 16384 | yes | `https://api.deepseek.com` |
+| Model | Wire API | Context window | Max tokens | Replays reasoning | Thinking off | Forced thinking | Base URL |
+|---|---|---|---|---|---|---|---|
+| `deepseek-flash` (default) | `openai-completions` | 1000000 | 16384 | yes |  |  | `https://api.deepseek.com` |
 
 ## glm-coding-plan
 
-| Model | Wire API | Context window | Max tokens | Replays reasoning | Base URL |
-|---|---|---|---|---|---|
-| `glm-5.3-flash` (default) | `openai-completions` | 1000000 | 16384 | yes | `https://api.z.ai/api/coding/paas/v4` |
-| `glm-5.4` | `openai-completions` | 1000000 | 16384 | yes | `https://api.z.ai/api/coding/paas/v4` |
+| Model | Wire API | Context window | Max tokens | Replays reasoning | Thinking off | Forced thinking | Base URL |
+|---|---|---|---|---|---|---|---|
+| `glm-5.3-flash` (default) | `openai-completions` | 1000000 | 16384 | yes |  | yes | `https://api.z.ai/api/coding/paas/v4` |
+| `glm-5.4` | `openai-completions` | 1000000 | 16384 | yes |  |  | `https://api.z.ai/api/coding/paas/v4` |
 
 ## opencode-go
 
-| Model | Wire API | Context window | Max tokens | Replays reasoning | Base URL |
-|---|---|---|---|---|---|
-| `deepseek-v4.1-flash` (default) | `openai-completions` | 1000000 | 16384 | yes | `https://opencode.ai/inference/go/openai/v1` |
-| `deepseek-v4-pro` | `openai-completions` | 1000000 | 16384 | yes | `https://opencode.ai/inference/go/openai/v1` |
-| `glm-5.3-flash` | `openai-completions` | 1000000 | 16384 | yes | `https://opencode.ai/inference/go/openai/v1` |
-| `glm-5.3` | `openai-completions` | 1000000 | 16384 | yes | `https://opencode.ai/inference/go/openai/v1` |
-| `kimi-k3.1-pro` | `openai-completions` | 1048576 | 16384 | yes | `https://opencode.ai/inference/go/openai/v1` |
-| `kimi-k3` | `openai-completions` | 1048576 | 16384 | yes | `https://opencode.ai/inference/go/openai/v1` |
-| `kimi-k2.7-code` | `openai-completions` | 262144 | 16384 | yes | `https://opencode.ai/inference/go/openai/v1` |
-| `minimax-m3.1-flash` | `openai-completions` | 1000000 | 16384 | yes | `https://opencode.ai/inference/go/openai/v1` |
-| `mimo-v2.6-pro` | `openai-completions` | 1048576 | 16384 | yes | `https://opencode.ai/inference/go/openai/v1` |
-| `mimo-v2.6-flash` | `openai-completions` | 1048576 | 16384 | yes | `https://opencode.ai/inference/go/openai/v1` |
-| `beam-free` | `openai-completions` | 1048576 | 16384 | yes | `https://opencode.ai/inference/go/openai/v1` |
-| `hy4` | `openai-completions` | 1048576 | 16384 | no | `https://opencode.ai/inference/go/openai/v1` |
-| `step-5-preview` | `openai-completions` | 1000000 | 16384 | yes | `https://opencode.ai/inference/go/openai/v1` |
-| `claude-haiku-5-5` | `anthropic-messages` | 1000000 | 16384 | no | `https://opencode.ai/inference/go/anthropic` |
-| `qwen4-max` | `anthropic-messages` | 1000000 | 16384 | no | `https://opencode.ai/inference/go/anthropic` |
-| `qwen3.8-max` | `anthropic-messages` | 1000000 | 16384 | no | `https://opencode.ai/inference/go/anthropic` |
-| `qwen3.8-flash` | `anthropic-messages` | 1000000 | 16384 | no | `https://opencode.ai/inference/go/anthropic` |
-| `qwen3.7-plus` | `anthropic-messages` | 1000000 | 16384 | no | `https://opencode.ai/inference/go/anthropic` |
-| `minimax-m3` | `anthropic-messages` | 1000000 | 16384 | no | `https://opencode.ai/inference/go/anthropic` |
+| Model | Wire API | Context window | Max tokens | Replays reasoning | Thinking off | Forced thinking | Base URL |
+|---|---|---|---|---|---|---|---|
+| `deepseek-v4.1-flash` (default) | `openai-completions` | 1000000 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
+| `deepseek-v4-pro` | `openai-completions` | 1000000 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
+| `glm-5.3-flash` | `openai-completions` | 1000000 | 16384 | yes |  | yes | `https://opencode.ai/inference/go/openai/v1` |
+| `glm-5.3` | `openai-completions` | 1000000 | 16384 | yes |  | yes | `https://opencode.ai/inference/go/openai/v1` |
+| `kimi-k3.1-pro` | `openai-completions` | 1048576 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
+| `kimi-k3` | `openai-completions` | 1048576 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
+| `kimi-k2.7-code` | `openai-completions` | 262144 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
+| `minimax-m3.1-flash` | `openai-completions` | 1000000 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
+| `mimo-v2.6-pro` | `openai-completions` | 1048576 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
+| `mimo-v2.6-flash` | `openai-completions` | 1048576 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
+| `beam-free` | `openai-completions` | 1048576 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
+| `hy4` | `openai-completions` | 1048576 | 16384 | no |  |  | `https://opencode.ai/inference/go/openai/v1` |
+| `step-5-preview` | `openai-completions` | 1000000 | 16384 | yes |  |  | `https://opencode.ai/inference/go/openai/v1` |
+| `claude-haiku-5-5` | `anthropic-messages` | 1000000 | 16384 | no |  |  | `https://opencode.ai/inference/go/anthropic` |
+| `qwen4-max` | `anthropic-messages` | 1000000 | 16384 | no |  |  | `https://opencode.ai/inference/go/anthropic` |
+| `qwen3.8-max` | `anthropic-messages` | 1000000 | 16384 | no |  |  | `https://opencode.ai/inference/go/anthropic` |
+| `qwen3.8-flash` | `anthropic-messages` | 1000000 | 16384 | no |  |  | `https://opencode.ai/inference/go/anthropic` |
+| `qwen3.7-plus` | `anthropic-messages` | 1000000 | 16384 | no |  |  | `https://opencode.ai/inference/go/anthropic` |
+| `minimax-m3` | `anthropic-messages` | 1000000 | 16384 | no |  |  | `https://opencode.ai/inference/go/anthropic` |
 
 ## openrouter
 
-| Model | Wire API | Context window | Max tokens | Replays reasoning | Base URL |
-|---|---|---|---|---|---|
-| `upstage/solar-mini-4-5` (default) | `openai-completions` | 524288 | 16384 | yes | `https://openrouter.ai/api/v1` |
+| Model | Wire API | Context window | Max tokens | Replays reasoning | Thinking off | Forced thinking | Base URL |
+|---|---|---|---|---|---|---|---|
+| `upstage/solar-mini-4-5` (default) | `openai-completions` | 524288 | 16384 | yes |  |  | `https://openrouter.ai/api/v1` |
 
 ## strata
 
-| Model | Wire API | Context window | Max tokens | Replays reasoning | Base URL |
-|---|---|---|---|---|---|
-| `qwen3.8-flash-next-iq3_s` (default) | `openai-completions` | 131072 | 16384 | turn | `http://127.0.0.1:8080/v1` |
+| Model | Wire API | Context window | Max tokens | Replays reasoning | Thinking off | Forced thinking | Base URL |
+|---|---|---|---|---|---|---|---|
+| `qwen3.8-flash-next-iq3_s` (default) | `openai-completions` | 131072 | 16384 | turn |  |  | `http://127.0.0.1:8080/v1` |

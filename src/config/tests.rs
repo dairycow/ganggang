@@ -1362,6 +1362,46 @@ thinking_off = "off"
     );
 }
 
+/// `forced_thinking` parses at provider level and per model, and a
+/// model's value beats its provider's.
+#[test]
+fn forced_thinking_parses_at_provider_and_model_level() {
+    let user = r#"
+[providers.deepseek]
+forced_thinking = true
+"#;
+    let cfg = merge(
+        Config::default(),
+        Some(user),
+        None,
+        &env(&[("GG_PROVIDER", "deepseek")]),
+    )
+    .unwrap();
+    assert!(cfg.forced_thinking);
+    assert!(cfg.active_endpoint().forced_thinking);
+
+    // A model entry beats its provider's value; an unlisted model on the
+    // same provider inherits the provider's.
+    let user = r#"
+[providers.deepseek]
+forced_thinking = true
+
+[[providers.deepseek.models]]
+id = "deepseek-flash"
+forced_thinking = false
+"#;
+    let mut cfg = merge(
+        Config::default(),
+        Some(user),
+        None,
+        &env(&[("GG_PROVIDER", "deepseek")]),
+    )
+    .unwrap();
+    assert!(!cfg.active_endpoint().forced_thinking);
+    cfg.apply_cli(None, Some("deepseek/other")).unwrap();
+    assert!(cfg.active_endpoint().forced_thinking);
+}
+
 #[test]
 fn env_overrides_survive_apply_cli_and_resolve_switch() {
     let mut cfg = merge(
