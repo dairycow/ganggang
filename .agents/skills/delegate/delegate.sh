@@ -18,6 +18,16 @@
 # Exit status: 0 with an answer, 124 on a timeout, 1 with no answer, and
 # otherwise the job's own. See scripts/test-delegate.py.
 #
+# The one-line summary says the status (ok, timed out, NO ANSWER or failed),
+# the detail, and the answer, progress and session files. A NO ANSWER detail
+# is the reason read from NAME.err: a response cut off by max_tokens, a turn
+# or time budget spent, or a pointer to NAME.err.
+#
+# When GG_JOB_LOG names a file whose directory exists, the script appends two
+# tab-separated records, one per line: `start NAME PID DIR` once the job
+# starts, and `done NAME EXIT NOTE` when it ends, NOTE holding the status and
+# the detail on one line. A log that cannot be written never fails the job.
+#
 # Runs from inside a gg session as well as from a plain shell: a top-level
 # run's bash tool sets GG_NEST_DEPTH=1 on its commands, and only a value past
 # that marks a nested run, which cannot delegate.
@@ -47,6 +57,38 @@ EOF
 die() {
   echo "delegate: $*" >&2
   exit 2
+}
+
+# One tab-separated record for GG_JOB_LOG, when it is set and its directory
+# exists. A bad path or a failed write is ignored: the log never fails the
+# job. NAME has no tab in it, and the caller keeps the other fields flat.
+job_log() {
+  [[ -n "${GG_JOB_LOG:-}" && -d "$(dirname "$GG_JOB_LOG")" ]] || return 0
+  printf '%s\t%s\t%s\t%s\n' "$1" "$job" "$2" "$3" >>"$GG_JOB_LOG" 2>/dev/null || true
+}
+
+# The summary line: status, detail, and the three files to read next.
+summarise() {
+  echo "job $job: $1 | $2 | answer: $job.out | progress: $job.err | session: $job.jsonl"
+}
+
+# The last record, then the script's exit status.
+finish() {
+  job_log done "$1" "$2"
+  exit "$1"
+}
+
+# Why the job ended without an answer, read from its progress file: gg says
+# when a final response was cut off by max_tokens, and names the budget that
+# spent the run. Anything else is in NAME.err.
+no_answer_reason() {
+  if grep -q "before producing visible output" "$err" 2>/dev/null; then
+    echo "cut off by max_tokens before any visible output"
+  elif grep -qE 'max_turns|max_seconds' "$err" 2>/dev/null; then
+    echo "reached its turn or time budget"
+  else
+    echo "read $job.err"
+  fi
 }
 
 job='' prompt='' dir='' model='' tools='' max_turns='' timeout=''
@@ -124,6 +166,7 @@ else
 fi
 pid=$!
 echo "$pid" > "$dir/$job.pid"
+job_log start "$pid" "$dir"
 watchdog=''
 if [[ -n "$timeout" ]]; then
   # The watchdog is self-contained: the script's main path stays parked
@@ -175,16 +218,18 @@ fi
 bytes=$(wc -c < "$out" | tr -d '[:space:]')
 echo "delegate dir: $dir"
 if (( timed_out )); then
-  echo "job $job: timed out after ${timeout}s | progress: $job.err | session: $job.jsonl"
-  exit 124
+  summarise "timed out" "after ${timeout}s"
+  finish 124 "timed out: after ${timeout}s"
 elif (( rc != 0 )); then
-  echo "job $job: exit $rc | progress: $job.err | session: $job.jsonl"
-  exit "$rc"
+  summarise "failed" "exit $rc"
+  finish "$rc" "failed: exit $rc"
 elif (( bytes == 0 )); then
   # gg stopped without an answer, usually a final response cut off by
   # max_tokens. The session holds the work; a follow-up prompt gets the
   # write-up without repeating it.
-  echo "job $job: NO ANSWER (exit 0, empty $job.out) | progress: $job.err | session: $job.jsonl"
-  exit 1
+  reason=$(no_answer_reason)
+  summarise "NO ANSWER" "$reason"
+  finish 1 "NO ANSWER: $reason"
 fi
-echo "job $job: exit 0 | answer: $job.out ($bytes bytes) | session: $job.jsonl"
+summarise "ok" "$bytes bytes"
+finish 0 "ok"
