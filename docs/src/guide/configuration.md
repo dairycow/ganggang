@@ -85,7 +85,9 @@ models = ["my-model", { id = "my-long-model", context_window = 262144 }]
 model = "deepseek-v4-pro"
 ```
 
-Provider keys: `base_url`, `api`, `auth`, `api_key`, `api_key_env`, `model`, `max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`, `models`, and `disabled`. Each `models` entry is a bare id or a table with `id` plus optional `api`, `base_url`, `max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`. A provider with `api_key_env` and no key set refuses to start, naming the variable to export.
+Provider keys: `base_url`, `api`, `auth`, `api_key`, `api_key_env`, `model`, `max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `thinking_off`, `compact_threshold_tokens`, `models`, and `disabled`. Each `models` entry is a bare id or a table with `id` plus optional `api`, `base_url`, `max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `thinking_off`, `compact_threshold_tokens`. A provider with `api_key_env` and no key set refuses to start, naming the variable to export.
+
+- `thinking_off` is the `thinking.type` value sent with a request that asks for no reasoning, beside `reasoning_effort: "none"`. Set it on providers that read this switch instead, such as z.ai's GLM models (`thinking_off = "disabled"`). See [Truncated responses](modes.md#truncated-responses).
 
 ### Removing a built-in provider
 
@@ -142,7 +144,7 @@ models = [
 | `HOME` | Locates `~/.gg` and `~/.agents`; must be an absolute path |
 | `VISUAL`, `EDITOR` | External editor for `Ctrl+G` (`nano` otherwise) |
 
-Model-scoped settings (`max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `compact_threshold_tokens`) are configured per provider or per model in `config.toml`. Use `--reasoning-effort`, `--thinking-budget`, and `/think` for one-off overrides.
+Model-scoped settings (`max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `thinking_off`, `compact_threshold_tokens`) are configured per provider or per model in `config.toml`. Use `--reasoning-effort`, `--thinking-budget`, and `/think` for one-off overrides.
 
 The `bash` tool sets `GG_NEST_DEPTH` and the five variables after it in every command it runs. They describe the run for a `gg -p` the command starts: see [What a nested run inherits](delegation.md#what-a-nested-run-inherits).
 

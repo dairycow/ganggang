@@ -1316,6 +1316,52 @@ fn replay_reasoning_compact_threshold_max_turns_and_explicit_ctx() {
     assert!(format!("{err:#}").contains("GG_MAX_SECONDS"));
 }
 
+/// `thinking_off` parses at provider level and per model, and a model's
+/// value beats its provider's.
+#[test]
+fn thinking_off_parses_at_provider_and_model_level() {
+    let user = r#"
+[providers.deepseek]
+thinking_off = "disabled"
+"#;
+    let cfg = merge(
+        Config::default(),
+        Some(user),
+        None,
+        &env(&[("GG_PROVIDER", "deepseek")]),
+    )
+    .unwrap();
+    assert_eq!(cfg.thinking_off.as_deref(), Some("disabled"));
+    assert_eq!(
+        cfg.active_endpoint().thinking_off.as_deref(),
+        Some("disabled")
+    );
+
+    // A model entry beats its provider's value; an unlisted model on the
+    // same provider inherits the provider's.
+    let user = r#"
+[providers.deepseek]
+thinking_off = "disabled"
+
+[[providers.deepseek.models]]
+id = "deepseek-flash"
+thinking_off = "off"
+"#;
+    let mut cfg = merge(
+        Config::default(),
+        Some(user),
+        None,
+        &env(&[("GG_PROVIDER", "deepseek")]),
+    )
+    .unwrap();
+    assert_eq!(cfg.active_endpoint().thinking_off.as_deref(), Some("off"));
+    cfg.apply_cli(None, Some("deepseek/other")).unwrap();
+    assert_eq!(
+        cfg.active_endpoint().thinking_off.as_deref(),
+        Some("disabled")
+    );
+}
+
 #[test]
 fn env_overrides_survive_apply_cli_and_resolve_switch() {
     let mut cfg = merge(

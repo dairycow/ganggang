@@ -19,6 +19,7 @@ use crate::agent::{Agent, hooks::Hooks};
 use crate::events::AgentEvent;
 use crate::llm::ApiKind;
 use crate::llm::client::LlmClient;
+use crate::llm::types::Thinking;
 
 /// The warning the first thought-only turn in a row earns. It names the
 /// field the retry carries, which asks the endpoint not to reason; whether
@@ -114,6 +115,38 @@ fn anthropic_thought_only_response(reasoning: &str) -> String {
         "usage": {"input_tokens": 10, "output_tokens": 512},
     })
     .to_string()
+}
+
+/// An endpoint with a `thinking_off` switch sends it only on the retry:
+/// the first request carries the endpoint's settings, the retry carries
+/// `"thinking": {"type": "disabled"}` beside `reasoning_effort: "none"`.
+#[tokio::test]
+async fn a_thinking_off_endpoints_retry_carries_the_switch() {
+    let server = FakeServer::spawn(vec![
+        thought_only_length_response("thinking"),
+        text_response("the answer"),
+    ]);
+    let client = LlmClient::new(&server.base_url)
+        .unwrap()
+        .with_thinking_off(Some(Thinking::of("disabled")));
+
+    let (result, _, events) = drive_with(Registry::new(), client, None).await;
+    assert!(result.is_ok(), "{result:?}");
+
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[0].get("thinking").is_none(),
+        "the first request carries the endpoint's settings: {}",
+        requests[0]
+    );
+    assert_eq!(requests[1]["reasoning_effort"], "none");
+    assert_eq!(requests[1]["thinking"], json!({"type": "disabled"}));
+    assert_eq!(warned(&event_values(&events)), vec![ASKED_AGAIN]);
+    assert_eq!(
+        event_values(&events).last().unwrap(),
+        &json!({"type": "run_ended", "turns": 2})
+    );
 }
 
 /// The turn is asked once more with `reasoning_effort: "none"`, over the

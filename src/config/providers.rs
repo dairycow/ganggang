@@ -17,6 +17,7 @@ pub struct ModelSpec {
     pub replay_reasoning: Option<ReplayReasoning>,
     pub reasoning_effort: Option<String>,
     pub reasoning_budget_tokens: Option<u32>,
+    pub thinking_off: Option<String>,
     pub compact_threshold_tokens: Option<u32>,
 }
 
@@ -31,6 +32,7 @@ impl ModelSpec {
             replay_reasoning: None,
             reasoning_effort: None,
             reasoning_budget_tokens: None,
+            thinking_off: None,
             compact_threshold_tokens: None,
         }
     }
@@ -51,6 +53,7 @@ pub struct ProviderConfig {
     pub replay_reasoning: ReplayReasoning,
     pub reasoning_effort: Option<String>,
     pub reasoning_budget_tokens: Option<u32>,
+    pub thinking_off: Option<String>,
     pub compact_threshold_tokens: Option<u32>,
     pub compact_threshold_explicit: bool,
     pub models: Vec<ModelSpec>,
@@ -93,6 +96,13 @@ impl ProviderConfig {
                 .and_then(|s| s.reasoning_budget_tokens)
                 .map(|v| (v > 0).then_some(v))
                 .unwrap_or(self.reasoning_budget_tokens),
+            thinking_off: spec
+                .and_then(|s| s.thinking_off.as_deref())
+                .map(|s| {
+                    let t = s.trim();
+                    (!t.is_empty()).then(|| t.to_string())
+                })
+                .unwrap_or_else(|| self.thinking_off.clone()),
             compact_threshold_tokens: spec
                 .and_then(|s| s.compact_threshold_tokens)
                 .map(|v| (v > 0).then_some(v))
@@ -119,6 +129,7 @@ pub struct Endpoint {
     pub replay_reasoning: ReplayReasoning,
     pub reasoning_effort: Option<String>,
     pub reasoning_budget_tokens: Option<u32>,
+    pub thinking_off: Option<String>,
     pub compact_threshold_tokens: Option<u32>,
     pub compact_threshold_explicit: bool,
 }
@@ -167,6 +178,7 @@ pub(super) struct FileProviderConfig {
     pub replay_reasoning: Option<ReplayReasoning>,
     pub reasoning_effort: Option<String>,
     pub reasoning_budget_tokens: Option<u32>,
+    pub thinking_off: Option<String>,
     pub compact_threshold_tokens: Option<u32>,
     pub models: Option<Vec<FileModelEntry>>,
     /// `disabled = true` removes the provider instead of patching it.
@@ -190,6 +202,7 @@ pub(super) struct FileModelSpec {
     pub replay_reasoning: Option<ReplayReasoning>,
     pub reasoning_effort: Option<String>,
     pub reasoning_budget_tokens: Option<u32>,
+    pub thinking_off: Option<String>,
     pub compact_threshold_tokens: Option<u32>,
 }
 
@@ -206,6 +219,7 @@ impl From<FileModelEntry> for ModelSpec {
                 replay_reasoning: s.replay_reasoning,
                 reasoning_effort: s.reasoning_effort,
                 reasoning_budget_tokens: s.reasoning_budget_tokens,
+                thinking_off: s.thinking_off,
                 compact_threshold_tokens: s.compact_threshold_tokens,
             },
         }
@@ -373,6 +387,9 @@ pub(super) fn apply_provider_layer(
             if let Some(v) = patch.reasoning_budget_tokens {
                 existing.reasoning_budget_tokens = (v > 0).then_some(v);
             }
+            if let Some(v) = patch.thinking_off {
+                existing.thinking_off = (!v.trim().is_empty()).then_some(v);
+            }
             if let Some(v) = patch.compact_threshold_tokens {
                 existing.compact_threshold_tokens = (v > 0).then_some(v);
                 existing.compact_threshold_explicit = true;
@@ -407,6 +424,7 @@ pub(super) fn apply_provider_layer(
                     replay_reasoning: patch.replay_reasoning.unwrap_or(ReplayReasoning::Never),
                     reasoning_effort: patch.reasoning_effort.filter(|s| !s.is_empty()),
                     reasoning_budget_tokens: patch.reasoning_budget_tokens.filter(|&v| v > 0),
+                    thinking_off: patch.thinking_off.filter(|s| !s.trim().is_empty()),
                     compact_threshold_tokens: patch.compact_threshold_tokens.filter(|&v| v > 0),
                     compact_threshold_explicit: patch.compact_threshold_tokens.is_some(),
                     models,

@@ -12,8 +12,33 @@ use super::stream::AnthropicAssembler;
 use super::{build_request, messages_url, parse_response};
 use crate::llm::client::LlmClient;
 use crate::llm::stream::Delta;
-use crate::llm::types::{ChatMessage, ToolCall};
+use crate::llm::types::{ChatMessage, Thinking, ToolCall};
 use crate::llm::{ApiKind, AuthStyle};
+
+/// A request without reasoning can carry the provider's own thinking
+/// switch ([`Thinking`]): it serialises as the top-level
+/// `"thinking": {"type": …}` object. Without it the request has no
+/// `thinking` key at all.
+#[test]
+fn build_request_sends_a_configured_thinking_switch_and_only_then() {
+    let messages = [ChatMessage {
+        role: "user".into(),
+        content: Some("hi".into()),
+        ..Default::default()
+    }];
+    let req = build_request(
+        "m",
+        &messages,
+        1024,
+        &[],
+        false,
+        Some(&Thinking::of("disabled")),
+    );
+    assert_eq!(req["thinking"], json!({ "type": "disabled" }));
+
+    let plain = build_request("m", &messages, 1024, &[], false, None);
+    assert!(plain.get("thinking").is_none());
+}
 
 #[test]
 fn messages_url_handles_with_and_without_v1() {
@@ -81,7 +106,7 @@ fn build_request_extracts_system_converts_tools_and_merges_user_turns() {
         }
     })];
 
-    let req = build_request("claude-haiku-5-5", &messages, 4096, &tools, true);
+    let req = build_request("claude-haiku-5-5", &messages, 4096, &tools, true, None);
     assert_eq!(req["model"], "claude-haiku-5-5");
     assert_eq!(req["max_tokens"], 4096);
     assert_eq!(
@@ -155,7 +180,14 @@ fn build_request_marks_three_cache_breakpoints() {
             "function": { "name": name, "parameters": { "type": "object" } }
         })
     };
-    let req = build_request("m", &messages, 1024, &[tool("read"), tool("grep")], false);
+    let req = build_request(
+        "m",
+        &messages,
+        1024,
+        &[tool("read"), tool("grep")],
+        false,
+        None,
+    );
     let marked = json!({ "type": "ephemeral" });
 
     assert_eq!(req["system"][0]["cache_control"], marked);
@@ -185,7 +217,7 @@ fn build_request_marks_three_cache_breakpoints() {
 
     // Nothing to mark: no system prompt, no tools, and a request that
     // ends on an assistant message.
-    let bare = build_request("m", &messages[2..3], 1024, &[], false);
+    let bare = build_request("m", &messages[2..3], 1024, &[], false, None);
     assert!(bare.get("system").is_none());
     assert!(bare.get("tools").is_none());
     assert_eq!(count(&bare), 0);

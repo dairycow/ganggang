@@ -19,6 +19,8 @@ mod tests;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use super::types::Thinking;
+
 use super::types::{ChatMessage, ChatResponse, Choice, ToolCall, Usage};
 
 pub(super) const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -39,13 +41,16 @@ pub(super) fn messages_url(base_url: &str) -> String {
     }
 }
 
-/// Build an Anthropic `/v1/messages` JSON request body.
+/// Build an Anthropic `/v1/messages` JSON request body. `thinking` is the
+/// provider's own thinking switch, sent only on a request without
+/// reasoning (`None` leaves the key out entirely).
 pub(super) fn build_request(
     model: &str,
     messages: &[ChatMessage],
     max_tokens: u32,
     tools: &[Value],
     stream: bool,
+    thinking: Option<&Thinking>,
 ) -> Value {
     let mut system_parts = Vec::new();
     let mut out_messages: Vec<Value> = Vec::new();
@@ -106,6 +111,9 @@ pub(super) fn build_request(
     let mut body = Map::new();
     body.insert("model".into(), json!(model));
     body.insert("max_tokens".into(), json!(max_tokens));
+    if let Some(thinking) = thinking {
+        body.insert("thinking".into(), json!({ "type": thinking.kind }));
+    }
     if !system_parts.is_empty() {
         body.insert(
             "system".into(),

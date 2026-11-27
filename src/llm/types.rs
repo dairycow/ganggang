@@ -259,6 +259,24 @@ impl Usage {
     }
 }
 
+/// The `thinking` switch some endpoints read instead of the reasoning
+/// fields: z.ai's GLM models take `"thinking": {"type": "disabled"}` and
+/// ignore `reasoning_effort`. Strictly opt-in: config `thinking_off`
+/// names the value, and only the two no-reasoning sends carry the object.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Thinking {
+    /// The switch's value, sent as the object's `type`.
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
+impl Thinking {
+    /// The switch with `type` set to `value`, e.g. `"disabled"`.
+    pub fn of(value: impl Into<String>) -> Self {
+        Self { kind: value.into() }
+    }
+}
+
 /// The outbound request. Built by LlmClient::send, not by callers.
 #[derive(Debug, Serialize)]
 pub struct ChatRequest<'a> {
@@ -284,6 +302,12 @@ pub struct ChatRequest<'a> {
     pub reasoning_effort: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_budget_tokens: Option<u32>,
+    /// The provider's own thinking switch ([`Thinking`]), sent beside
+    /// `reasoning_effort: "none"` on a request without reasoning when the
+    /// endpoint configured one. The ordinary sends never set it: unset,
+    /// the key is absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<&'a Thinking>,
 }
 
 /// The `stream_options` object of a streaming request.
@@ -360,6 +384,7 @@ mod tests {
             stream_options: None,
             reasoning_effort: None,
             reasoning_budget_tokens: None,
+            thinking: None,
         };
 
         // skip_serializing_if drops the empty tool_calls, None tool_call_id and
@@ -391,6 +416,7 @@ mod tests {
             }),
             reasoning_effort: None,
             reasoning_budget_tokens: None,
+            thinking: None,
         };
         assert_eq!(
             serde_json::to_string(&req).unwrap(),
@@ -428,6 +454,7 @@ mod tests {
             stream_options: None,
             reasoning_effort: None,
             reasoning_budget_tokens: None,
+            thinking: None,
         };
 
         let json = serde_json::to_string(&req).unwrap();
@@ -550,6 +577,7 @@ mod tests {
             stream_options: None,
             reasoning_effort: Some("low"),
             reasoning_budget_tokens: None,
+            thinking: None,
         };
         let v = serde_json::to_value(&req).unwrap();
         assert_eq!(v["reasoning_effort"], "low");
@@ -572,9 +600,42 @@ mod tests {
             stream_options: None,
             reasoning_effort: None,
             reasoning_budget_tokens: Some(4096),
+            thinking: None,
         };
         let v = serde_json::to_value(&req).unwrap();
         assert_eq!(v["reasoning_budget_tokens"], 4096);
+    }
+
+    /// The provider's own thinking switch serialises as the
+    /// `"thinking": {"type": …}` object, and None leaves the key out.
+    #[test]
+    fn request_omits_or_includes_thinking() {
+        let messages = [ChatMessage {
+            role: "user".to_string(),
+            content: Some("hi".to_string()),
+            ..Default::default()
+        }];
+        let switch = Thinking::of("disabled");
+        let req = ChatRequest {
+            model: "m",
+            messages: &messages,
+            max_tokens: 512,
+            tools: &[],
+            stream: None,
+            stream_options: None,
+            reasoning_effort: Some("none"),
+            reasoning_budget_tokens: None,
+            thinking: Some(&switch),
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["thinking"], serde_json::json!({"type": "disabled"}));
+
+        let req = ChatRequest {
+            thinking: None,
+            ..req
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert!(v.get("thinking").is_none());
     }
 
     #[test]
