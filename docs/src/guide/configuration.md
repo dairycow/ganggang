@@ -87,7 +87,7 @@ model = "deepseek-v4-pro"
 
 Provider keys: `base_url`, `api`, `auth`, `api_key`, `api_key_env`, `model`, `max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `thinking_off`, `forced_thinking`, `compact_threshold_tokens`, `models`, and `disabled`. Each `models` entry is a bare id or a table with `id` plus optional `api`, `base_url`, `max_tokens`, `context_window`, `replay_reasoning`, `reasoning_effort`, `reasoning_budget_tokens`, `thinking_off`, `forced_thinking`, `compact_threshold_tokens`. A provider with `api_key_env` and no key set refuses to start, naming the variable to export.
 
-- `thinking_off` is the `thinking.type` value sent with a request that asks for no reasoning, beside `reasoning_effort: "none"`. Set it on providers that read this switch instead, such as z.ai's GLM models (`thinking_off = "disabled"`). See [Truncated responses](modes.md#truncated-responses).
+- `thinking_off` is the `thinking.type` value sent with a request that asks for no reasoning, beside `reasoning_effort: "none"` (for example `"disabled"`). Set it on a provider that reads this switch. No shipped preset sets it: z.ai's Coding Plan endpoint accepts the object for `glm-5.4` and keeps reasoning. See [Truncated responses](modes.md#truncated-responses).
 - `forced_thinking` marks a model that cannot switch its thinking off (z.ai documents this for `glm-5.3` and `glm-5.3-flash`): when a turn spends the whole `max_tokens` on reasoning, `gg` stops the run at once instead of retrying, because the retry can only repeat the cut. See [Truncated responses](modes.md#truncated-responses).
 
 ### Removing a built-in provider

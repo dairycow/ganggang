@@ -260,9 +260,9 @@ impl Usage {
 }
 
 /// The `thinking` switch some endpoints read instead of the reasoning
-/// fields: z.ai's GLM models take `"thinking": {"type": "disabled"}` and
-/// ignore `reasoning_effort`. Strictly opt-in: config `thinking_off`
-/// names the value, and only the two no-reasoning sends carry the object.
+/// fields, an object such as `{"type": "disabled"}`. Strictly opt-in:
+/// config `thinking_off` names the value, and only the two no-reasoning
+/// sends carry the object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Thinking {
     /// The switch's value, sent as the object's `type`.
