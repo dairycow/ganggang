@@ -28,7 +28,7 @@ printf '%s' "${CARGO_TARGET_DIR-}" > "$STUB_DIR/target_dir"
 cat > "$STUB_DIR/stdin"
 case "${STUB_MODE:-ok}" in
   ok) echo "the answer" ;;
-  commit) echo "${STUB_MSG:-job}" >> job.txt && git add job.txt && git commit -q -m "${STUB_MSG:-job}" && echo "the answer" ;;
+  commit) echo "${STUB_MSG:-job}" >> "${STUB_FILE:-job.txt}" && git add "${STUB_FILE:-job.txt}" && git commit -q -m "${STUB_MSG:-job}" && echo "the answer" ;;
 esac
 """
 
@@ -108,11 +108,11 @@ class WorktreesTest(unittest.TestCase):
     def wt(self, name):
         return self.main / ".worktrees" / name
 
-    def work(self, name, msg="job"):
-        """A stub run: the job commits job.txt in its worktree."""
+    def work(self, name, msg="job", **extra):
+        """A stub run: the job commits its file in its worktree."""
         proc = self.sh(
             "run", name, "--prompt", str(self.prompt), "--dir", str(self.jobs),
-            env=self.env(STUB_MODE="commit", STUB_MSG=msg),
+            env=self.env(STUB_MODE="commit", STUB_MSG=msg, **extra),
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
@@ -278,6 +278,58 @@ class WorktreesTest(unittest.TestCase):
         self.assertEqual((self.stub_dir / "gate_target").read_text(), str(shared))
         self.assertEqual(self.gate("t", GG_DELEGATE_TARGET_DIR=str(override)).returncode, 0)
         self.assertEqual((self.stub_dir / "gate_target").read_text(), str(override))
+
+    def test_land_lands_several_jobs_in_order(self):
+        # Disjoint files: jobs that edit the same file land one after the
+        # other by hand, not in one queue.
+        for name, msg, file in (("a", "job a", "a.txt"), ("b", "job b", "b.txt")):
+            self.new(name)
+            self.work(name, msg, STUB_FILE=file)
+            self.assertEqual(self.gate(name).returncode, 0)
+        before = self.main_head()
+        proc = self.sh("land", "a", "b")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(
+            [line for line in proc.stdout.splitlines() if line.startswith("worktrees: landed")],
+            [
+                f"worktrees: landed a at {self.git('rev-parse', '--short', self.head('a'))}",
+                f"worktrees: landed b at {self.git('rev-parse', '--short', self.head('b'))}",
+            ],
+        )
+        self.assertEqual(self.main_head(), self.head("b"))
+        self.assertNotEqual(self.main_head(), before)
+        self.assertEqual((self.main / "a.txt").read_text(), "job a\n")
+        self.assertEqual((self.main / "b.txt").read_text(), "job b\n")
+        # a was gated at its tip and its branch held main, so only b is
+        # re-gated after its update: b's record covers the new tip.
+        self.assertIn("gate passed for b", proc.stderr)
+        self.assertNotIn("gating a ", proc.stderr)
+        self.assertEqual(self.recorded("feat/b"), self.head("b"))
+
+    def test_land_stops_at_a_conflict_and_names_the_rest(self):
+        self.new("c")
+        self.work("c", "job c")
+        self.new("d")
+        self.work("d", "job d")
+        self.assertEqual(self.gate("d").returncode, 0)
+        self.move_main(text="main", name="job.txt")
+        before = self.main_head()
+        proc = self.sh("land", "c", "d")
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("conflicts with main", proc.stderr)
+        self.assertIn("worktrees: not attempted: d", proc.stderr)
+        self.assertEqual(
+            [line for line in proc.stdout.splitlines() if line.startswith("worktrees: landed")], [],
+        )
+        self.assertEqual(self.main_head(), before)
+
+    def test_land_refusals(self):
+        self.refused(self.sh("land"), "land needs at least one NAME")
+        self.refused(self.sh("land", "nope"), "no worktree nope")
+        # A refusal stops the queue too, and the rest are named.
+        proc = self.sh("land", "nope", "other")
+        self.refused(proc, "no worktree nope")
+        self.assertIn("worktrees: not attempted: other", proc.stderr)
 
     def test_new_refusals(self):
         for args in (
