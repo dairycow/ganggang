@@ -8,13 +8,13 @@ If stdin is not a terminal and no prompt is given, `gg` exits with an error; use
 
 | Key | Action |
 |---|---|
-| `Enter` | Send the message; in an open list, act on the highlighted row: open the session or run its `copy path` or `info` row, switch to the model, or run the skill |
+| `Enter` | Send the message; while a run is in flight, queue a plain message (see [Queued messages](#queued-messages)); in an open list, act on the highlighted row: open the session or run its `copy path` or `info` row, switch to the model, or run the skill |
 | `Alt+Enter`, `Ctrl+J` | Newline (`Shift+Enter` too, where the terminal reports modified keys) |
 | `Backspace` | Delete before the cursor |
 | `Delete` | Delete at the cursor (at the end of a line, the next line joins on) |
 | `←` / `→` | Move the cursor |
 | `Ctrl+←` / `Ctrl+→` | Move the cursor by word |
-| `↑` / `↓` | Recall prompts while you are browsing history, even with the `/` suggestion list or the `/session`, `/model` or `/skill` list open over a recalled command; otherwise navigate that list while one is open, or recall prompts while the composer is empty or single-line, or move between its lines |
+| `↑` / `↓` | Recall prompts while you are browsing history, even with the `/` suggestion list or the `/session`, `/model` or `/skill` list open over a recalled command; otherwise navigate that list while one is open, or recall prompts while the composer is empty or single-line, or move between its lines; with queued messages and an empty composer, `↑` takes the newest one back |
 | `Ctrl+P` / `Ctrl+N` | Recall the previous / next prompt, whatever the composer holds, unless the suggestion list or the `/session`, `/model` or `/skill` list is open |
 | `Ctrl+A`, `Home` | Start of line |
 | `Ctrl+E`, `End` | End of line |
@@ -31,11 +31,21 @@ If stdin is not a terminal and no prompt is given, `gg` exits with an error; use
 | Mouse wheel | Scroll the transcript (3 rows a notch), or move an open list's highlight |
 | `Ctrl+C` | Cancel: stop a run in flight, close an open list and clear the line, clear a typed draft, or, with nothing left to cancel, quit. A second press while a run is stopping quits at once |
 
-When you stop a run, the footer shows `stopping…` while active streams close and running tools terminate. Partial output received before stopping stays in the transcript and session file ([Stopping a run](tools.md#stopping-a-run)). Use `/quit` to exit directly without cancelling a draft or run. `SIGTERM` shuts down cleanly.
+When you stop a run, the footer shows `stopping…` while active streams close and running tools terminate. Partial output received before stopping stays in the transcript and session file ([Stopping a run](tools.md#stopping-a-run)). Queued messages are held after a stop; nothing sends until you press `Enter` on an empty composer (see [Queued messages](#queued-messages)). Use `/quit` to exit directly without cancelling a draft or run. `SIGTERM` shuts down cleanly.
 
 ## Prompt history
 
 Submitted prompts, `!`/`!!` commands, and slash commands (except `/quit`) are stored in `~/.gg/history.jsonl` (one JSON string per line, mode `0600`, newest 500 entries). Use `↑`/`↓` to browse history when the composer is empty or single-line, or `Ctrl+P`/`Ctrl+N` at any time; once you are browsing, `↑`/`↓` keep walking history even when a recalled slash command opens the suggestion list or the `/session`, `/model` or `/skill` list. Pressing `↑` saves your current draft; pressing `↓` past the latest entry restores it. Recalled entries can be edited before sending. Without `HOME`, history is kept in memory for the current run only.
+
+## Queued messages
+
+While a run is in flight, `Enter` queues a plain message: the composer empties, the message is recorded in [prompt history](#prompt-history), and the transcript shows `queued N: …` for its place in line. A slash command or a `!`/`!!` line keeps its note and stays in the composer, and a press while the run is stopping does the same. The composer's hint follows the state: `Enter queue · Esc stop` while a run works, `Enter queue · ↑ take back · Esc stop` with messages waiting.
+
+When a run completes normally, the first queued message starts as the next run; one message goes per run, so `Esc` or `Ctrl+C` applies between messages. `@file` mentions in a queued message expand when it is sent, as they do for a message typed at rest.
+
+A stopped or failed run holds the queue: nothing sends until you ask. The transcript says how many are held, and pressing `Enter` on an empty composer sends the first one and lifts the hold; the rest follow at each run end. A failed run returns the first queued message to the composer so you can edit it. A message typed and sent while the queue is held goes out at once and leaves the hold in place.
+
+Press `↑` on an empty composer to take the newest queued message back into the composer, in any state. Quitting takes the queued messages with the session: they are already in history, so `↑` recalls them. `/new` clears the queue and the hold.
 
 ## Theme and layout
 

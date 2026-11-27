@@ -31,8 +31,21 @@ const PAD: u16 = 1;
 /// The composer's name, on its top border.
 const TITLE: &str = " compose ";
 
-/// The composer's right-hand hint, on the same border.
+/// The composer's right-hand hint at rest, on the same border as the name.
 const HINT: &str = " Enter send · Esc stop ";
+
+/// The hint for a view's state: what Enter, ↑ and Esc do right now. While
+/// a run works, Enter queues; with items queued, ↑ can take the newest
+/// back; while a stop or a failure holds a queue, the hint says how many
+/// wait and that Enter sends the next.
+pub fn hint(busy: bool, queued: usize, held: bool) -> String {
+    match (busy, queued, held) {
+        (true, 0, _) => " Enter queue · Esc stop ".to_string(),
+        (true, _, _) => " Enter queue · ↑ take back · Esc stop ".to_string(),
+        (false, _, true) if queued > 0 => format!(" {queued} queued · Enter sends the next "),
+        _ => HINT.to_string(),
+    }
+}
 
 /// What an empty composer says. One line, and the two things a reader is
 /// most likely to want: that `/` opens the commands, and that a long draft
@@ -128,7 +141,8 @@ fn scrolled_col(column: usize, width: usize) -> usize {
     column - width / 2
 }
 
-/// Draw the composer: box, title, draft window, cursor.
+/// Draw the composer: box, title, draft window, cursor. The hint on the
+/// title's border follows the view's queue state (see [`hint`]).
 pub fn draw(
     frame: &mut Frame,
     palette: &Palette,
@@ -136,6 +150,7 @@ pub fn draw(
     box_: Rect,
     busy: bool,
     stopping: bool,
+    hint: &str,
 ) {
     let (fill, border) = palette.composer(busy, stopping);
     let block = Block::default()
@@ -144,7 +159,7 @@ pub fn draw(
         .style(fill)
         .border_style(border)
         // The title's area is the border less its two corners.
-        .title_top(title(palette, box_.width.saturating_sub(2)));
+        .title_top(title(palette, box_.width.saturating_sub(2), hint));
     let window = Window::new(box_, editor.line_count(), editor.cursor_row_col());
     let lines = visible_lines(palette, editor, &window);
     frame.render_widget(block, box_);
@@ -176,22 +191,22 @@ pub fn cursor_position(box_: Rect, window: &Window) -> Option<(u16, u16)> {
 /// The composer's title row: what the box is, and how to drive it at the
 /// far right. It gives up the hint before it gives up the name, and gives
 /// up both before it overflows the border.
-fn title(palette: &Palette, width: u16) -> UiLine<'static> {
+fn title(palette: &Palette, width: u16, hint: &str) -> UiLine<'static> {
     // Char counts, not bytes: the middot in the hint is two bytes, and
     // counting them would leave a border one cell short.
     let width = width as usize;
-    let (name, hint) = (TITLE.chars().count(), HINT.chars().count());
-    if width < name + hint {
+    let (name, hint_chars) = (TITLE.chars().count(), hint.chars().count());
+    if width < name + hint_chars {
         return UiLine::from(Span::styled(
             TITLE.chars().take(width).collect::<String>(),
             Style::new().fg(palette.muted),
         ));
     }
-    let gap = " ".repeat(width - name - hint);
+    let gap = " ".repeat(width - name - hint_chars);
     UiLine::from(vec![
         Span::styled(TITLE, Style::new().fg(palette.muted)),
         Span::raw(gap),
-        Span::styled(HINT, Style::new().fg(palette.dim)),
+        Span::styled(hint.to_string(), Style::new().fg(palette.dim)),
     ])
 }
 

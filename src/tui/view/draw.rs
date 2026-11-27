@@ -70,6 +70,7 @@ pub fn render(frame: &mut Frame, state: &mut State) {
         areas.composer,
         state.busy,
         state.stopping(),
+        &composer::hint(state.busy, state.queued_count(), state.queue_held()),
     );
     frame.render_widget(
         Paragraph::new(state.footer.spans(&palette)).style(Style::new().bg(palette.surface)),

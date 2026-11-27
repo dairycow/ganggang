@@ -258,11 +258,24 @@ pub(super) async fn apply(
             state.footer.set_cache(cache_read, prompt);
             state.set_context_tokens(context_tokens);
             state.record_totals(tokens_in, tokens_out, entries);
+            let stopped = state.run_was_stopped();
             state.run_finished();
+            if stopped {
+                // A stopped run holds the queue: nothing sends until the
+                // user asks.
+                state.queue_hold_after_stop();
+                return true;
+            }
+            return send_next_queued(state, input).await;
         }
         UiEvent::RunFailed { error } => {
             state.push_failure(&error);
             state.run_finished();
+            if state.run_was_stopped() {
+                state.queue_hold_after_stop();
+            } else {
+                state.queue_run_failed();
+            }
         }
         UiEvent::SystemPrompt(prompt) => {
             state.push_info(&format!("— system prompt —\n{prompt}"));
@@ -274,6 +287,7 @@ pub(super) async fn apply(
             state.push_info(&message);
             state.set_context_tokens(context_tokens);
             state.run_finished();
+            return send_next_queued(state, input).await;
         }
         UiEvent::ModelSwitched {
             label,
@@ -313,7 +327,7 @@ pub(super) async fn apply(
             state.push_shell(&command, &output, exit_code, to_context);
             if !to_context {
                 state.run_finished();
-                return true;
+                return send_next_queued(state, input).await;
             }
             // The model sees the shell line and its output; the transcript
             // already shows it, so no user block is pushed for the same
@@ -327,6 +341,25 @@ pub(super) async fn apply(
             );
             return input.send(AgentInput::Prompt(message)).await.is_ok();
         }
+    }
+    true
+}
+
+/// The busy period ended without a stop or a failure: the queue's first
+/// item, when it may send, starts as a run of its own — one item per run
+/// end, so the decision to stop or quit applies between items.
+async fn send_next_queued(
+    state: &mut super::view::State,
+    input: &mut mpsc::Sender<AgentInput>,
+) -> bool {
+    if let Some(prompt) = state.queue_next_run() {
+        // `@path` mentions expand when the item is sent, as they do for a
+        // prompt typed at rest: the transcript keeps the readable line, the
+        // model gets the attachments.
+        let expanded = crate::tui::mentions::expand_mentions(&prompt, state.cwd());
+        state.push_user(&prompt);
+        state.begin_run();
+        return input.send(AgentInput::Prompt(expanded)).await.is_ok();
     }
     true
 }

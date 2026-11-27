@@ -801,3 +801,53 @@ fn degenerate_terminals_do_not_panic() {
         draw(&mut terminal, &mut state);
     }
 }
+
+/// The composer's hint follows the queue: what Enter queues while a run
+/// works, what ↑ takes back, and what a held queue says it waits for.
+#[test]
+fn the_composer_hint_follows_the_queue() {
+    // A run in flight, nothing queued.
+    let (mut terminal, mut state) = fresh(80, 24);
+    state.begin_run();
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(shows(&terminal, "Enter queue · Esc stop"), "{text}");
+
+    // A run in flight, items queued: ↑ can take one back.
+    state.queue_prompt("later");
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(
+        shows(&terminal, "Enter queue · ↑ take back · Esc stop"),
+        "{text}"
+    );
+
+    // Idle with items held by a stop: the count and the way out.
+    state.run_finished();
+    state.queue_hold_after_stop();
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(
+        shows(&terminal, "1 queued · Enter sends the next"),
+        "{text}"
+    );
+
+    // Idle with an empty queue: today's hint.
+    assert!(state.queue_send_first().is_some());
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(shows(&terminal, "Enter send · Esc stop"), "{text}");
+}
+
+/// A queued message names its place in line, first line only.
+#[test]
+fn a_queued_message_shows_its_place_in_the_transcript() {
+    let (mut terminal, mut state) = fresh(80, 24);
+    state.queue_prompt("first line\nsecond line");
+    state.queue_prompt("next");
+    draw(&mut terminal, &mut state);
+    let text = screen(&terminal);
+    assert!(shows(&terminal, "queued 1: first line"), "{text}");
+    assert!(shows(&terminal, "queued 2: next"), "{text}");
+    assert!(!shows(&terminal, "second line"), "{text}");
+}

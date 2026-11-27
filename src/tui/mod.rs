@@ -493,13 +493,34 @@ pub async fn run(
                                 _ => state.toggle_session_scope(),
                             }
                         }
-                        // Submissions land between runs: the text stays
-                        // in the editor for resubmission, with a line
-                        // saying why nothing happened.
+                        // Enter while a run works: a plain prompt joins
+                        // the queue and leaves the composer, while a slash
+                        // command, a shell line, an empty composer, or a
+                        // press while the run is stopping keeps today's
+                        // note and the text.
                         KeyAction::Send if state.busy => {
-                            state.push_info(busy_note(&state));
+                            let text = state.editor.text().to_string();
+                            if !state.busy_submit(&text, state.stopping()) {
+                                state.push_info(busy_note(&state));
+                            }
                         }
                         KeyAction::Send if !state.busy => {
+                            // Enter on an empty composer with a held queue:
+                            // the first item becomes the run and the rest
+                            // follow at each run end.
+                            if let Some(prompt) = state.queue_send_first() {
+                                let expanded = mentions::expand_mentions(&prompt, &cwd);
+                                state.push_user(&prompt);
+                                state.begin_run();
+                                if input_tx
+                                    .send(AgentInput::Prompt(expanded))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                continue;
+                            }
                             let Some(text) = state.editor.take_submission() else {
                                 continue;
                             };
@@ -576,6 +597,14 @@ pub async fn run(
                         // empty or single-line composer) or move between
                         // the composer's lines — the rule itself is
                         // [`history::history_for`].
+                        // ↑ with queued messages and an empty composer
+                        // takes the newest back, in every state; with an
+                        // empty queue it is history recall as usual.
+                        KeyAction::SuggestPrev
+                            if state.editor.text().is_empty() && state.queued_count() > 0 =>
+                        {
+                            state.queue_take_back();
+                        }
                         KeyAction::SuggestPrev => match state.arrow(true) {
                             Arrow::SuggestPrev => state.popup_prev(),
                             Arrow::Prev => state.recall_prev(),
