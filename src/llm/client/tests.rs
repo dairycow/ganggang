@@ -223,6 +223,8 @@ pub(super) fn openrouter_endpoint() -> crate::config::Endpoint {
         replay_reasoning: crate::agent::session::ReplayReasoning::Never,
         reasoning_effort: None,
         reasoning_budget_tokens: None,
+        thinking_off: None,
+        forced_thinking: false,
         compact_threshold_tokens: None,
         compact_threshold_explicit: true,
     }
@@ -459,6 +461,167 @@ async fn a_request_without_reasoning_sends_none_and_no_budget() {
     );
     assert_eq!(client.reasoning_effort.as_deref(), Some("medium"));
     assert_eq!(client.reasoning_budget_tokens, Some(4096));
+}
+
+/// `echo_request` for the streaming path: the whole request comes back and
+/// the answer is a complete SSE stream.
+fn sse_echo_request() -> (String, Arc<Mutex<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = Arc::new(Mutex::new(String::new()));
+    let sink = seen.clone();
+    std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let request = read_one_request(&mut s);
+        *sink.lock().unwrap() = request;
+        let stream = sse("ok");
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{stream}",
+            stream.len()
+        );
+        s.write_all(resp.as_bytes()).unwrap();
+    });
+    (format!("http://{addr}"), seen)
+}
+
+/// A configured `thinking_off` rides the no-reasoning send beside
+/// `reasoning_effort: "none"`, and only that send: even an endpoint
+/// configured `none` keeps its ordinary request free of the key.
+#[tokio::test]
+async fn a_thinking_switch_rides_the_no_reasoning_send_only() {
+    let (base_url, seen) = echo_request(OK);
+    let client = LlmClient::new(&base_url)
+        .unwrap()
+        .with_reasoning_effort(Some("medium".into()))
+        .with_thinking_off(Some(Thinking::of("disabled")));
+    client
+        .send_without_reasoning("m", &[], 16, &[])
+        .await
+        .unwrap();
+    let raw = seen.lock().unwrap().clone();
+    let body = raw.split("\r\n\r\n").nth(1).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(v["thinking"], serde_json::json!({"type": "disabled"}));
+    assert_eq!(v["reasoning_effort"], "none");
+    assert!(v.get("reasoning_budget_tokens").is_none(), "{v}");
+
+    // The ordinary send on an equally configured client stays without it.
+    let (base_url, seen) = echo_request(OK);
+    let client = LlmClient::new(&base_url)
+        .unwrap()
+        .with_reasoning_effort(Some("none".into()))
+        .with_thinking_off(Some(Thinking::of("disabled")));
+    client.send("m", &[], 16, &[]).await.unwrap();
+    let raw = seen.lock().unwrap().clone();
+    let body = raw.split("\r\n\r\n").nth(1).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert!(v.get("thinking").is_none(), "{v}");
+}
+
+/// The streamed no-reasoning send carries the switch too; the streamed
+/// ordinary send does not.
+#[tokio::test]
+async fn a_streamed_thinking_switch_rides_the_no_reasoning_send_only() {
+    let (base_url, seen) = sse_echo_request();
+    let client = LlmClient::new(&base_url)
+        .unwrap()
+        .with_thinking_off(Some(Thinking::of("disabled")));
+    client
+        .send_stream_without_reasoning("m", &[], 16, &[], &never_abort(), |_| Box::pin(async {}))
+        .await
+        .unwrap();
+    let raw = seen.lock().unwrap().clone();
+    assert!(
+        raw.contains(r#""reasoning_effort":"none""#)
+            && raw.contains(r#""thinking":{"type":"disabled"}"#),
+        "{raw}"
+    );
+
+    let (base_url, seen) = sse_echo_request();
+    let client = LlmClient::new(&base_url)
+        .unwrap()
+        .with_thinking_off(Some(Thinking::of("disabled")));
+    client
+        .send_stream("m", &[], 16, &[], &never_abort(), |_| Box::pin(async {}))
+        .await
+        .unwrap();
+    let raw = seen.lock().unwrap().clone();
+    assert!(!raw.contains("\"thinking\""), "{raw}");
+}
+
+/// Without the key no send carries a `thinking` key, whichever path it
+/// takes: unset, the request bytes are exactly what they were before.
+#[tokio::test]
+async fn a_client_without_a_thinking_switch_sends_no_thinking_key() {
+    let configured = |base_url: &str| {
+        LlmClient::new(base_url)
+            .unwrap()
+            .with_reasoning_effort(Some("medium".into()))
+            .with_reasoning_budget_tokens(Some(4096))
+    };
+    let body_has_no_thinking = |raw: String| {
+        let body = raw.split("\r\n\r\n").nth(1).unwrap();
+        let v: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert!(v.get("thinking").is_none(), "{v}");
+    };
+
+    let (base_url, seen) = echo_request(OK);
+    configured(&base_url).send("m", &[], 16, &[]).await.unwrap();
+    body_has_no_thinking(seen.lock().unwrap().clone());
+
+    let (base_url, seen) = echo_request(OK);
+    configured(&base_url)
+        .send_without_reasoning("m", &[], 16, &[])
+        .await
+        .unwrap();
+    body_has_no_thinking(seen.lock().unwrap().clone());
+
+    let (base_url, seen) = echo_request(OK);
+    configured(&base_url)
+        .send_summary("m", &[], 4096)
+        .await
+        .unwrap();
+    body_has_no_thinking(seen.lock().unwrap().clone());
+
+    let (base_url, seen) = sse_echo_request();
+    configured(&base_url)
+        .send_stream("m", &[], 16, &[], &never_abort(), |_| Box::pin(async {}))
+        .await
+        .unwrap();
+    let raw = seen.lock().unwrap().clone();
+    assert!(!raw.contains("\"thinking\""), "{raw}");
+}
+
+/// On the Anthropic Messages API the switch rides the no-reasoning send as
+/// the same `thinking` object; without the key that request is unchanged.
+#[tokio::test]
+async fn an_anthropic_no_reasoning_send_carries_a_configured_switch_only() {
+    const ANTHROPIC_OK: &str = r#"{"type":"message","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#;
+
+    let (base_url, seen) = echo_request(ANTHROPIC_OK);
+    LlmClient::new(&base_url)
+        .unwrap()
+        .with_api(ApiKind::AnthropicMessages)
+        .with_thinking_off(Some(Thinking::of("disabled")))
+        .send_without_reasoning("m", &[], 16, &[])
+        .await
+        .unwrap();
+    let raw = seen.lock().unwrap().clone();
+    let body = raw.split("\r\n\r\n").nth(1).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(v["thinking"], serde_json::json!({"type": "disabled"}));
+
+    let (base_url, seen) = echo_request(ANTHROPIC_OK);
+    LlmClient::new(&base_url)
+        .unwrap()
+        .with_api(ApiKind::AnthropicMessages)
+        .send_without_reasoning("m", &[], 16, &[])
+        .await
+        .unwrap();
+    let raw = seen.lock().unwrap().clone();
+    let body = raw.split("\r\n\r\n").nth(1).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert!(v.get("thinking").is_none(), "{v}");
 }
 
 /// The Anthropic Messages request has no reasoning field: there a request

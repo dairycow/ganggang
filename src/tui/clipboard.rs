@@ -117,16 +117,21 @@ fn write_to(program: &str, args: &[&str], text: &str) -> std::io::Result<()> {
         .stderr(Stdio::null())
         .spawn()?;
     // Dropping the pipe closes it: the helper reads that as the end of
-    // the text.
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(text.as_bytes())?;
-    }
+    // the text. A helper that exits before the write finishes breaks the
+    // pipe mid-write; its exit status is the error worth reporting, so
+    // the write's own failure only surfaces when the child came out
+    // clean.
+    let written = child
+        .stdin
+        .take()
+        .map(|mut stdin| stdin.write_all(text.as_bytes()));
     let status = child.wait()?;
     if !status.success() {
         return Err(std::io::Error::other(format!(
             "{program} exited with {status}"
         )));
     }
+    written.transpose()?;
     Ok(())
 }
 

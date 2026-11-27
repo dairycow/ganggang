@@ -19,6 +19,7 @@ use crate::agent::{Agent, hooks::Hooks};
 use crate::events::AgentEvent;
 use crate::llm::ApiKind;
 use crate::llm::client::LlmClient;
+use crate::llm::types::Thinking;
 
 /// The warning the first thought-only turn in a row earns. It names the
 /// field the retry carries, which asks the endpoint not to reason; whether
@@ -39,6 +40,9 @@ const RETRY_THOUGHT_ANYWAY: &str = "response truncated by max_tokens=512 with no
 const OFF_THOUGHT_ANYWAY: &str = "response truncated by max_tokens=512 with nothing but reasoning; the request went out with reasoning off and the endpoint thought anyway (512 reasoning tokens); stopping instead of continuing";
 /// [`RETRY_THOUGHT_ANYWAY`] when the provider reports no reasoning tokens.
 const RETRY_THOUGHT_ANYWAY_UNCOUNTED: &str = "response truncated by max_tokens=512 with nothing but reasoning; the retry went out with reasoning off and the endpoint thought anyway; stopping instead of continuing";
+/// The warning a forced-thinking model's thought-only turn earns: no
+/// request can switch its thinking off, so there is no retry.
+const FORCED_STOP: &str = "response truncated by max_tokens=512 with nothing but reasoning; this model cannot switch its thinking off, so there is no retry; stopping instead of continuing";
 
 fn warned(values: &[Value]) -> Vec<&str> {
     values
@@ -114,6 +118,66 @@ fn anthropic_thought_only_response(reasoning: &str) -> String {
         "usage": {"input_tokens": 10, "output_tokens": 512},
     })
     .to_string()
+}
+
+/// An endpoint with a `thinking_off` switch sends it only on the retry:
+/// the first request carries the endpoint's settings, the retry carries
+/// `"thinking": {"type": "disabled"}` beside `reasoning_effort: "none"`.
+#[tokio::test]
+async fn a_thinking_off_endpoints_retry_carries_the_switch() {
+    let server = FakeServer::spawn(vec![
+        thought_only_length_response("thinking"),
+        text_response("the answer"),
+    ]);
+    let client = LlmClient::new(&server.base_url)
+        .unwrap()
+        .with_thinking_off(Some(Thinking::of("disabled")));
+
+    let (result, _, events) = drive_with(Registry::new(), client, None).await;
+    assert!(result.is_ok(), "{result:?}");
+
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[0].get("thinking").is_none(),
+        "the first request carries the endpoint's settings: {}",
+        requests[0]
+    );
+    assert_eq!(requests[1]["reasoning_effort"], "none");
+    assert_eq!(requests[1]["thinking"], json!({"type": "disabled"}));
+    assert_eq!(warned(&event_values(&events)), vec![ASKED_AGAIN]);
+    assert_eq!(
+        event_values(&events).last().unwrap(),
+        &json!({"type": "run_ended", "turns": 2})
+    );
+}
+
+/// A forced-thinking model's thought-only cut is not retried: no request
+/// can switch its thinking off, so the run stops with the warning that
+/// says so, after exactly one request.
+#[tokio::test]
+async fn a_forced_thinking_model_stops_without_a_retry() {
+    let server = FakeServer::spawn(vec![thought_only_length_response("thinking, forced")]);
+    let client = LlmClient::new(&server.base_url)
+        .unwrap()
+        .with_forced_thinking(true);
+
+    let (result, entries, events) = drive_with(Registry::new(), client, None).await;
+    assert!(result.is_ok(), "{result:?}");
+
+    let values = event_values(&events);
+    assert_eq!(warned(&values), vec![FORCED_STOP], "{values:?}");
+    assert_eq!(
+        values.last().unwrap(),
+        &json!({"type": "run_ended", "turns": 1})
+    );
+    assert_eq!(
+        server.requests.lock().unwrap().len(),
+        1,
+        "no second request"
+    );
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    assert_eq!(messages_of(&entries[1]).role, Role::Assistant);
 }
 
 /// The turn is asked once more with `reasoning_effort: "none"`, over the

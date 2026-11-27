@@ -34,7 +34,10 @@
 //! first such turn in a row is retried on its own; the turn after it goes
 //! out as configured again. A second, back to back with it, switches
 //! reasoning off for the rest of the run. A server that refuses the retry
-//! ends the run the way the truncation alone would have.
+//! ends the run the way the truncation alone would have. A model that
+//! cannot switch its thinking off at all (config `forced_thinking`) gets
+//! no retry: the run stops at once, since the retry can only repeat the
+//! cut.
 //!
 //! Off is a statement about the request, not the endpoint. The warning
 //! names the field the retry carries, and a retry that is thought-only too
@@ -94,6 +97,10 @@ pub(super) struct Reasoning {
     pub off: bool,
     /// [`Self::off`], and the request was the retry of a thought-only turn.
     pub retrying: bool,
+    /// The endpoint is a forced-thinking model (config `forced_thinking`):
+    /// no request can switch its thinking off, so a thought-only cut is
+    /// not retried. The run stops at once.
+    pub forced: bool,
     /// What a request with reasoning off carries over the ordinary one, as
     /// the warning names it. `None` when the API's request has no reasoning
     /// field, and the retry is the same request again.
@@ -231,6 +238,7 @@ fn plan(
         again,
         off,
         retrying,
+        forced,
         off_field,
     } = turn.reasoning;
     let head = match cut {
@@ -248,6 +256,18 @@ fn plan(
         }
     };
     if !has_visible_output {
+        if thought_only && forced {
+            // No request can switch this model's thinking off, so the
+            // retry would repeat the cut; the run stops here.
+            return Plan {
+                warning: format!(
+                    "{head} with nothing but reasoning; this model cannot switch its \
+                     thinking off, so there is no retry; stopping instead of continuing"
+                ),
+                continue_turn: false,
+                without_reasoning: false,
+            };
+        }
         if retry && spent.is_none() {
             return Plan {
                 warning: if again {

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use super::LlmClient;
 use super::OpenRouterAttribution;
+use super::Thinking;
 use crate::llm::ApiKind;
 use crate::llm::AuthStyle;
 
@@ -34,6 +35,30 @@ impl LlmClient {
     pub fn with_reasoning_budget_tokens(mut self, budget: Option<u32>) -> Self {
         self.reasoning_budget_tokens = budget.filter(|&n| n > 0);
         self
+    }
+
+    /// Set the provider's own thinking switch, sent beside
+    /// `reasoning_effort: "none"` on the two no-reasoning sends
+    /// ([`Self::send_without_reasoning`],
+    /// [`Self::send_stream_without_reasoning`]). `None`, the default, sends
+    /// no `thinking` key on any request, whatever the API.
+    pub fn with_thinking_off(mut self, thinking_off: Option<Thinking>) -> Self {
+        self.thinking_off = thinking_off;
+        self
+    }
+
+    /// Mark the endpoint a forced-thinking model (config
+    /// `forced_thinking`): a thought-only cut cannot be retried, so the
+    /// loop stops instead of asking the same thinking turn again.
+    pub fn with_forced_thinking(mut self, forced_thinking: bool) -> Self {
+        self.forced_thinking = forced_thinking;
+        self
+    }
+
+    /// Whether this endpoint is a forced-thinking model
+    /// ([`Self::with_forced_thinking`]).
+    pub fn forced_thinking(&self) -> bool {
+        self.forced_thinking
     }
 
     pub fn with_session_id(mut self, session_id: String) -> Self {

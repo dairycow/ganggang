@@ -327,9 +327,13 @@ impl Agent {
             // way to the same cut. While reasoning was on for this request
             // and the turn budget is not spent, the turn is asked once more
             // without it: on its own the first time in a row, and for the
-            // rest of the run the second time back to back.
+            // rest of the run the second time back to back. A model whose
+            // thinking cannot be switched off (config `forced_thinking`)
+            // gets no retry at all: `plan` stops the run instead.
             let thought_only = truncated && !has_visible_output && !cut::is_blank(&message);
+            let forced_thinking = self.client.forced_thinking();
             let retry_without_reasoning = thought_only
+                && !forced_thinking
                 && !reasoning_off
                 && !self.client.reasoning_is_off()
                 && !self.at_turn_limit(turns)
@@ -399,6 +403,7 @@ impl Agent {
                         off: off_field.is_some()
                             && (reasoning_off || self.client.reasoning_is_off()),
                         retrying,
+                        forced: forced_thinking,
                         off_field,
                     },
                     at_time_limit: time_final_turn,

@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::anthropic;
 use super::retry::Backoff;
 use super::stream::{self, StreamOutcome};
-use super::types::{ChatMessage, ChatRequest, ChatResponse, StreamOptions};
+use super::types::{ChatMessage, ChatRequest, ChatResponse, StreamOptions, Thinking};
 use super::{ApiKind, AuthStyle};
 
 /// The calling app's identity for OpenRouter: the site it lives at and
@@ -55,6 +55,16 @@ pub struct LlmClient {
     api_key: Option<String>,
     reasoning_effort: Option<String>,
     reasoning_budget_tokens: Option<u32>,
+    /// The provider's own thinking switch ([`Thinking`]), sent on the two
+    /// no-reasoning sends only ([`Self::send_without_reasoning`],
+    /// [`Self::send_stream_without_reasoning`]). `None` sends no `thinking`
+    /// key on any request, whatever the API.
+    thinking_off: Option<Thinking>,
+    /// The endpoint is a forced-thinking model (config `forced_thinking`):
+    /// a thought-only cut cannot be retried, because no request can switch
+    /// its thinking off. The loop reads this through
+    /// [`Self::forced_thinking`]; the wire never changes with it.
+    forced_thinking: bool,
     session_id: String,
     session_header: Option<String>,
     /// OpenRouter attribution, applied to requests for OpenRouter only. The
@@ -94,6 +104,8 @@ impl LlmClient {
             api_key: None,
             reasoning_effort: None,
             reasoning_budget_tokens: None,
+            thinking_off: None,
+            forced_thinking: false,
             session_id: uuid::Uuid::new_v4().hyphenated().to_string(),
             session_header,
             openrouter_attribution: None,
@@ -110,6 +122,8 @@ impl LlmClient {
             .with_api_key(endpoint.api_key.clone())
             .with_reasoning_effort(endpoint.reasoning_effort.clone())
             .with_reasoning_budget_tokens(endpoint.reasoning_budget_tokens)
+            .with_thinking_off(endpoint.thinking_off.clone().map(Thinking::of))
+            .with_forced_thinking(endpoint.forced_thinking)
             .with_openrouter_attribution(OpenRouterAttribution::from_base_url(&endpoint.base_url)))
     }
 
@@ -159,6 +173,7 @@ impl LlmClient {
             tools,
             self.reasoning_effort.as_deref(),
             self.reasoning_budget_tokens,
+            None,
         )
         .await
     }
@@ -195,15 +210,18 @@ impl LlmClient {
             effort,
             self.reasoning_budget_tokens
                 .map(|budget| budget.min(SUMMARY_REASONING_BUDGET_TOKENS)),
+            None,
         )
         .await
     }
 
     /// [`send`](Self::send) with reasoning switched off for this one request:
     /// `reasoning_effort: "none"` and no budget, whatever the endpoint
-    /// configured. It is the retry a turn earns when reasoning used up the
-    /// whole `max_tokens`; every later request goes out as configured again
-    /// unless it goes through this method too.
+    /// configured. A configured `thinking_off` rides along: the provider's
+    /// own switch, for endpoints that read `thinking.type` instead. It is
+    /// the retry a turn earns when reasoning used up the whole `max_tokens`;
+    /// every later request goes out as configured again unless it goes
+    /// through this method too.
     pub async fn send_without_reasoning(
         &self,
         model: &str,
@@ -218,6 +236,7 @@ impl LlmClient {
             tools,
             Some(REASONING_OFF),
             None,
+            self.thinking_off.as_ref(),
         )
         .await
     }
@@ -250,6 +269,7 @@ impl LlmClient {
     /// the endpoint's API, send it, parse the response. [`LlmClient::send`]
     /// passes the client's own reasoning settings; [`LlmClient::send_summary`]
     /// passes the cheaper pair.
+    #[allow(clippy::too_many_arguments)]
     async fn send_with_reasoning(
         &self,
         model: &str,
@@ -258,6 +278,7 @@ impl LlmClient {
         tools: &[Value],
         reasoning_effort: Option<&str>,
         reasoning_budget_tokens: Option<u32>,
+        thinking: Option<&Thinking>,
     ) -> anyhow::Result<ChatResponse> {
         match self.api {
             ApiKind::OpenAiCompletions => {
@@ -270,6 +291,7 @@ impl LlmClient {
                     stream_options: None,
                     reasoning_effort,
                     reasoning_budget_tokens,
+                    thinking,
                 };
                 let (url, request) = build_request(
                     self.apply_auth(
@@ -285,7 +307,8 @@ impl LlmClient {
                     .context("response was not JSON matching ChatResponse")
             }
             ApiKind::AnthropicMessages => {
-                let body = anthropic::build_request(model, messages, max_tokens, tools, false);
+                let body =
+                    anthropic::build_request(model, messages, max_tokens, tools, false, thinking);
                 let (url, request) = build_request(
                     self.apply_auth(
                         self.http
@@ -345,13 +368,15 @@ impl LlmClient {
             tools,
             self.reasoning_effort.as_deref(),
             self.reasoning_budget_tokens,
+            None,
         )?;
         self.drain_stream(&url, request, abort, on_delta).await
     }
 
     /// [`send_stream`](Self::send_stream) with reasoning switched off for
     /// this one request, as [`send_without_reasoning`](Self::send_without_reasoning)
-    /// does for the plain one.
+    /// does for the plain one: the same pair, plus a configured
+    /// `thinking_off` switch.
     pub async fn send_stream_without_reasoning(
         &self,
         model: &str,
@@ -368,13 +393,15 @@ impl LlmClient {
             tools,
             Some(REASONING_OFF),
             None,
+            self.thinking_off.as_ref(),
         )?;
         self.drain_stream(&url, request, abort, on_delta).await
     }
 
     /// The streaming request for the endpoint's API, carrying the call's
     /// own reasoning pair: the endpoint's, or the pair a retry without
-    /// reasoning passes.
+    /// reasoning passes. `thinking` rides only with the retry.
+    #[allow(clippy::too_many_arguments)]
     fn stream_request(
         &self,
         model: &str,
@@ -383,6 +410,7 @@ impl LlmClient {
         tools: &[Value],
         reasoning_effort: Option<&str>,
         reasoning_budget_tokens: Option<u32>,
+        thinking: Option<&Thinking>,
     ) -> anyhow::Result<(String, reqwest::Request)> {
         match self.api {
             ApiKind::OpenAiCompletions => {
@@ -397,6 +425,7 @@ impl LlmClient {
                     }),
                     reasoning_effort,
                     reasoning_budget_tokens,
+                    thinking,
                 };
                 build_request(
                     self.apply_auth(
@@ -408,7 +437,8 @@ impl LlmClient {
                 )
             }
             ApiKind::AnthropicMessages => {
-                let body = anthropic::build_request(model, messages, max_tokens, tools, true);
+                let body =
+                    anthropic::build_request(model, messages, max_tokens, tools, true, thinking);
                 build_request(
                     self.apply_auth(
                         self.http
