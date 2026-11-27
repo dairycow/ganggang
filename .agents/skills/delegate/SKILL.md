@@ -55,7 +55,7 @@ Each job ends with one line: the exit status, the answer's size and the session 
 
 ## Limits
 
-- A job runs for minutes, so either `bash_timeout_secs` is at least the longest `--timeout` plus a margin, or the call that starts the jobs passes `background: true` and is collected with `wait_for`. Each `wait_for` waits at most the ceiling, 30 s by default, and reports a job still running.
+- A job runs for minutes: a wait is no longer capped at the ceiling. `wait_job` collects a job by name, waiting 600 s by default and up to 3600 s, and `wait_for` takes a `timeout_secs` past the ceiling; either reports a job still running, and a later call keeps waiting.
 - A job started with `--timeout` runs in a session of its own (`delegate.sh` uses `setsid`), so `stop: <id>` cannot reach it: `stop` kills the call's process group, which holds the job's watchdog but not the job, and so does a call killed at the deadline or the end of the session. Wait for every job to finish or time out before answering.
 - To end one job early, kill its process group by the pid `delegate.sh` wrote: `kill -TERM -- -$(cat <dir>/<job>.pid)`.
 - A subagent cannot delegate: subagents are one level deep.
@@ -76,7 +76,7 @@ Make a small change in this run, on a branch. This run writes the prompts, reads
 1. Plan one worktree per job. Jobs that edit the same file run one after the other: the second starts once the first has landed.
 2. Create each worktree from `main`: `"$S/worktrees.sh" new <name> -b feat/<name>`. The command refuses a name or a branch that exists and prints the path.
 3. Write each prompt to `$O/<name>.md`. The job starts empty, so give it the goal and the files, the rules under **Rules for the job**, and the shape of the answer: commit hashes, files changed, how it verified the work, what is unresolved.
-4. Start the jobs in one `bash` call with `background: true`, then collect the call with `wait_for`. `run` starts the job in the worktree with the options above. Check that `git -C <worktree> log --oneline main..HEAD` lists the commits each answer claims, and that `status --short` is empty:
+4. Start the jobs in one `bash` call with `background: true`, then collect the call with `wait_for`; a later call with `wait_job: <name>` waits for one delegate job by name and can outlast the ceiling. `run` starts the job in the worktree with the options above. Check that `git -C <worktree> log --oneline main..HEAD` lists the commits each answer claims, and that `status --short` is empty:
 
    ```sh
    O="$HOME/.gg/delegate/<task>"

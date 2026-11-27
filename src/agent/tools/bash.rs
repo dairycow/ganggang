@@ -7,7 +7,10 @@
 //! whole process group, the same kill the timeout uses.
 //!
 //! Every command also carries the run's nest ([`crate::nested`]): the
-//! limits and lineage of a `gg -p` the command starts.
+//! limits and lineage of a `gg -p` the command starts. And every command
+//! carries `GG_JOB_LOG`, the run's job log ([`joblog`]): a detached job
+//! the command starts registers there, and `wait_job` waits for it by
+//! name, past the per-call ceiling.
 //!
 //! A command longer than the deadline can be kept as a background job
 //! instead of being killed ([`jobs`]); every call still ends in time, and
@@ -25,12 +28,14 @@ use super::{BoxFuture, Cancel, Tool, ToolResult, parse_args};
 use crate::nested::{self, ParentEnv, SharedParentEnv};
 
 mod hint;
+mod joblog;
 mod jobs;
 mod output;
 mod process;
 
 pub(crate) use jobs::kill_jobs_at_exit;
 
+use joblog::JobLog;
 use output::{OUTPUT_CAP, render_capture};
 use process::{Stop, drain_and_wait, settle, spawn};
 
@@ -43,6 +48,9 @@ pub struct BashTool {
     /// Commands kept past their deadline by `background: true`, numbered
     /// for `wait_for` and `stop`.
     jobs: jobs::Jobs,
+    /// The run's job log: `$GG_JOB_LOG` on every command, where a
+    /// detached job a command starts registers itself for `wait_job`.
+    joblog: JobLog,
 }
 
 impl BashTool {
@@ -52,6 +60,7 @@ impl BashTool {
             max_timeout_secs,
             nest,
             jobs: jobs::Jobs::default(),
+            joblog: JobLog::create(),
         }
     }
 }
@@ -65,6 +74,9 @@ struct BashArgs {
     background: Option<bool>,
     /// Collect this background job instead of running a command.
     wait_for: Option<u64>,
+    /// Wait for the detached job registered under this name in the run's
+    /// job log (`$GG_JOB_LOG`), instead of running a command.
+    wait_job: Option<String>,
     /// Kill this background job instead of running a command.
     stop: Option<u64>,
 }
@@ -103,7 +115,35 @@ pub(crate) async fn run_bash(
     cancel: &Cancel,
     nest: Option<&ParentEnv>,
 ) -> BashOutcome {
-    let spawned = match spawn(command, cwd, nest) {
+    run_logged(command, cwd, timeout, cap, cancel, nest, None).await
+}
+
+/// [`run_bash`] for the tool's own commands: the command also carries the
+/// run's job log, so a detached job it starts can register in it.
+pub(crate) async fn run_bash_logged(
+    command: &str,
+    cwd: &Path,
+    timeout: Duration,
+    cap: usize,
+    cancel: &Cancel,
+    nest: Option<&ParentEnv>,
+    job_log: &Path,
+) -> BashOutcome {
+    run_logged(command, cwd, timeout, cap, cancel, nest, Some(job_log)).await
+}
+
+/// The one spawn path behind both: `job_log` is the run's log when the
+/// command is the bash tool's own, `None` for a caller that has none.
+async fn run_logged(
+    command: &str,
+    cwd: &Path,
+    timeout: Duration,
+    cap: usize,
+    cancel: &Cancel,
+    nest: Option<&ParentEnv>,
+    job_log: Option<&Path>,
+) -> BashOutcome {
+    let spawned = match spawn(command, cwd, nest, job_log) {
         Ok(spawned) => spawned,
         Err(e) => return BashOutcome::Failed(format!("failed to spawn bash: {e}")),
     };
@@ -138,7 +178,8 @@ impl Tool for BashTool {
  include the output; a timeout or abort reports any partial output. A command that may \
  outlive the timeout takes background: true: it keeps running as a job and the result \
  names it; wait_for: <id> waits for that job and returns its output; stop: <id> kills \
- it. A `gg -p` started \
+ it. wait_job: <name> waits for a detached job the command registered in the run's job \
+ log ($GG_JOB_LOG), with a wait budget of its own. A `gg -p` started \
  here is a nested run: it keeps this run's tools, hooks, model and limits."
     }
 
@@ -146,14 +187,18 @@ impl Tool for BashTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "Shell command to run (required unless wait_for or stop is set)"},
+                "command": {"type": "string", "description": "Shell command to run (required unless wait_for, wait_job or stop is set)"},
                 "timeout_secs": {"type": "integer", "description": format!(
                     "Kill the command after this many seconds; the most this session allows is {}. \
-                     wait_for waits this long for a job",
-                    self.max_timeout_secs
+                      A command always keeps that ceiling, and wait_for waits it by default. A wait \
+                      (wait_for or wait_job) may pass a budget past the ceiling: wait_job defaults \
+                      to 600 s, both clamp to {} s",
+                    self.max_timeout_secs,
+                    joblog::WAIT_BUDGET_MAX_SECS
                 )},
                 "background": {"type": "boolean", "description": "For a command that may still be running at the deadline: keep it running as a job and name it in the result instead of killing it. Collect the job later with wait_for"},
-                "wait_for": {"type": "integer", "description": "Wait for background job <id> and return its output and exit code. A job still running when timeout_secs pass is reported with its output so far. Takes no command"},
+                "wait_for": {"type": "integer", "description": "Wait for background job <id> and return its output and exit code. A job still running when the budget passes is reported with its output so far. Takes no command"},
+                "wait_job": {"type": "string", "description": "Wait for the detached job a command registered under this name in the run's job log ($GG_JOB_LOG): a start record (name, pid, directory) when it started, a done record (name, exit, note) when it ended. Waits until the done record lands or the pid is gone; a job still running when the budget passes is reported with its progress so far. Takes no command"},
                 "stop": {"type": "integer", "description": "Kill background job <id>, whole process group included. Takes no command"}
             }
         })
@@ -165,19 +210,21 @@ impl Tool for BashTool {
                 Ok(a) => a,
                 Err(e) => return ToolResult::err(e),
             };
-            let timeout = Duration::from_secs(
-                args.timeout_secs
-                    .unwrap_or(self.max_timeout_secs)
-                    .min(self.max_timeout_secs),
-            );
             let nest = nested::current(&self.nest);
-            let jobs_only = args.wait_for.is_some() || args.stop.is_some();
-            if args.wait_for.is_some() && args.stop.is_some() || jobs_only && args.command.is_some()
-            {
+            let job_args = args.wait_for.is_some() as u8
+                + args.stop.is_some() as u8
+                + args.wait_job.is_some() as u8;
+            if job_args > 1 || job_args == 1 && args.command.is_some() {
                 return ToolResult::err(jobs::JOB_TAKES_NO_COMMAND.to_string());
             }
             if let Some(id) = args.wait_for {
-                return self.jobs.collect(id, timeout, cancel).await;
+                // A wait may outlast the bash ceiling; a command cannot.
+                let budget = joblog::wait_budget(args.timeout_secs, self.max_timeout_secs);
+                return self.jobs.collect(id, budget, cancel).await;
+            }
+            if let Some(name) = args.wait_job.as_deref() {
+                let budget = joblog::wait_budget(args.timeout_secs, joblog::WAIT_JOB_DEFAULT_SECS);
+                return joblog::wait(&self.joblog, name, budget, cancel).await;
             }
             if let Some(id) = args.stop {
                 return self.jobs.stop(id, cancel).await;
@@ -185,10 +232,22 @@ impl Tool for BashTool {
             let Some(command) = args.command else {
                 return ToolResult::err(jobs::NO_COMMAND.to_string());
             };
+            let timeout = Duration::from_secs(
+                args.timeout_secs
+                    .unwrap_or(self.max_timeout_secs)
+                    .min(self.max_timeout_secs),
+            );
             let outcome = if args.background == Some(true) {
                 match self
                     .jobs
-                    .start(&command, &self.cwd, timeout, cancel, Some(&nest))
+                    .start(
+                        &command,
+                        &self.cwd,
+                        timeout,
+                        cancel,
+                        Some(&nest),
+                        Some(self.joblog.path()),
+                    )
                     .await
                 {
                     jobs::Start::Settled(outcome) => outcome,
@@ -197,13 +256,14 @@ impl Tool for BashTool {
                     }
                 }
             } else {
-                run_bash(
+                run_bash_logged(
                     &command,
                     &self.cwd,
                     timeout,
                     OUTPUT_CAP,
                     cancel,
                     Some(&nest),
+                    self.joblog.path(),
                 )
                 .await
             };

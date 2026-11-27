@@ -7,7 +7,13 @@ use super::output::{prefix_string, suffix_string};
 use super::*;
 use crate::nested::{DEPTH, MAX_TURNS_CAP, PARENT_MODEL, PARENT_SESSION, TOOL_CAP};
 
+mod joblog;
 mod jobs;
+
+/// Tests that keep background jobs or touch the run's job log hold this
+/// slot: the log file is named with the process id, so every tool in this
+/// test binary shares one, and creating or dropping a tool rewrites it.
+pub(super) static ONE_TOOL_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// A nest with nothing in it: these tests are about commands, not nesting.
 fn no_nest() -> SharedParentEnv {

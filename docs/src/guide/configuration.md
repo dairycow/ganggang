@@ -129,6 +129,7 @@ models = [
 | `GG_MAX_RETRIES` | Extra attempts per transient LLM failure (`0` disables) |
 | `GG_REQUEST_TIMEOUT` | Whole-request timeout in seconds, stream included |
 | `GG_DEBUG_PROMPT` | Set to `1` to dump the assembled system prompt to stderr |
+| `GG_JOB_LOG` | Path of the job log the `bash` tool hands every command, where the command registers a detached job for `wait_job`. Set on every command; not one of the nest variables below |
 | `GG_NEST_DEPTH` | Marks a nested run: how many runs sit above it. A headless boot that finds it clamps to its parent; any value other than `1` is an error |
 | `GG_PARENT_SESSION` | The parent run's session id, recorded in the nested run's session header |
 | `GG_PARENT_MODEL` | The parent run's current model, the nested run's default |

@@ -9,13 +9,13 @@ use std::time::{Duration, Instant};
 use super::*;
 
 /// Kept-job tests run one at a time: the exit kill below fires
-/// process-wide, so a parallel test's job must not be in the registry
-/// when it does.
-static KEPT_JOB_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// process-wide, and every tool in the binary shares the run's one job
+/// log file. The slot lives beside the tool tests that also create tools.
+use super::ONE_TOOL_AT_A_TIME;
 
 /// Hold the kept-job slot for the duration of one test.
 async fn one_job_test() -> tokio::sync::MutexGuard<'static, ()> {
-    KEPT_JOB_TESTS.lock().await
+    ONE_TOOL_AT_A_TIME.lock().await
 }
 
 /// Start `command` as a job whose first wait ends after `timeout_secs`.
@@ -187,7 +187,14 @@ async fn a_command_that_times_out_is_told_about_jobs() {
 fn the_schema_offers_jobs_and_names_the_ceiling() {
     let tool = BashTool::new(std::env::temp_dir(), 45, no_nest());
     let schema = tool.schema();
-    for name in ["command", "timeout_secs", "background", "wait_for", "stop"] {
+    for name in [
+        "command",
+        "timeout_secs",
+        "background",
+        "wait_for",
+        "wait_job",
+        "stop",
+    ] {
         assert!(schema["properties"].get(name).is_some(), "{name}");
     }
     let timeout = schema["properties"]["timeout_secs"]["description"]

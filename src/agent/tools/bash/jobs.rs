@@ -27,11 +27,12 @@ use super::{BashOutcome, Cancel, done_result, with_partial};
 use crate::agent::tools::ToolResult;
 use crate::nested::ParentEnv;
 
-/// What a call with `wait_for` or `stop` and a `command` is told.
+/// What a call with `wait_for`, `wait_job` or `stop` and a `command` is told.
 pub(super) const JOB_TAKES_NO_COMMAND: &str =
-    "wait_for and stop take a job's number and no command, and not each other";
+    "wait_for, wait_job and stop take a job and no command, and not each other";
 /// What a call with neither is told.
-pub(super) const NO_COMMAND: &str = "bash needs a command, or wait_for or stop with a job's number";
+pub(super) const NO_COMMAND: &str =
+    "bash needs a command, or wait_for or stop with a job's number, or wait_job with a job's name";
 /// Appended to a timeout: the one place a model that did not read the schema
 /// learns that the deadline is final, and what to do about it.
 pub(super) const NEEDS_BACKGROUND: &str = "; a longer command needs background: true";
@@ -74,7 +75,8 @@ pub(super) enum Start {
 impl Jobs {
     /// Run `command` as a job: wait for it up to `timeout`, as for any
     /// command, and keep it when the deadline passes. A stop request inside
-    /// that first wait kills it as it would any command.
+    /// that first wait kills it as it would any command. `job_log` is the
+    /// run's job log, set on the command like the nest.
     pub(super) async fn start(
         &self,
         command: &str,
@@ -82,8 +84,9 @@ impl Jobs {
         timeout: Duration,
         cancel: &Cancel,
         nest: Option<&ParentEnv>,
+        job_log: Option<&Path>,
     ) -> Start {
-        let spawned = match spawn(command, cwd, nest) {
+        let spawned = match spawn(command, cwd, nest, job_log) {
             Ok(spawned) => spawned,
             Err(e) => {
                 return Start::Settled(BashOutcome::Failed(format!("failed to spawn bash: {e}")));

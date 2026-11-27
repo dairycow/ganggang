@@ -61,10 +61,13 @@ pub(super) struct Spawned {
 /// Start `bash -c command` in `cwd` as the leader of its own process
 /// group, with its output piped. `nest` is the run's, for the nested runs
 /// the command may start; `None` leaves the command's environment alone.
+/// `job_log` is the run's job log, set as `GG_JOB_LOG` on the command so a
+/// detached job it starts can register itself; `None` leaves it unset.
 pub(super) fn spawn(
     command: &str,
     cwd: &Path,
     nest: Option<&ParentEnv>,
+    job_log: Option<&Path>,
 ) -> std::io::Result<Spawned> {
     // `exec 2>&1` merges the streams inside the shell, so ordering is the
     // real arrival order and no pipe plumbing is needed to interleave.
@@ -84,6 +87,9 @@ pub(super) fn spawn(
         .kill_on_drop(true);
     if let Some(nest) = nest {
         super::apply_env(&mut spawning, nest.exports());
+    }
+    if let Some(log) = job_log {
+        spawning.env(super::joblog::JOB_LOG, log);
     }
     let child = spawning.spawn()?;
     let pgid = child.id();
