@@ -14,22 +14,22 @@ use ratatui::text::{Line as UiLine, Span};
 
 use super::theme::Palette;
 
-/// The mark's frames, one per [`crate::tui::tick::PERIOD`] tick: a filled
-/// dot `●` leading a ring `○`, in the same two cells the name takes up at
-/// rest. The dot beats while the ring holds the trailing cell: `●○`,
-/// `○○`, `●○` — the dot's cell goes hollow on the middle beat and the dot
-/// is back to close the turn. Two glyphs in two cells keep the name's
-/// width, so nothing behind the mark moves while the turn turns.
+/// The mark's frames, one per [`crate::tui::tick::PERIOD`] tick: a dot
+/// `●` in the first of the two cells the name takes up at rest, the
+/// second cell blank. The dot beats: on, off, on (`● `, `  `, `● `). Two
+/// cells in every frame keep the name's width, so nothing behind the
+/// mark moves while the turn turns.
 ///
-/// The glyphs are geometric shapes, not the block halves: `▁▂▃` draw as
-/// shading in a proportional cell, where `●○` is a shape, and a dot and a
-/// ring that read as shapes is the whole point of this mark.
+/// The glyph is a geometric shape, not a block half: `▁▂▃` draw as
+/// shading in a proportional cell, where `●` is a shape, and a dot that
+/// reads as a shape is the whole point of this mark.
 ///
 /// Not the name: `gg` sits in the same two cells when nothing is running,
 /// and the mark is the only thing that moves while the turn does.
-pub const MARK_FRAMES: [(&str, &str); 3] = [("●", "○"), ("○", "○"), ("●", "○")];
-/// The frame where the dot is up: the gang-gang's crest, raised. Once a
-/// turn the mark flashes scarlet.
+pub const MARK_FRAMES: [(&str, &str); 3] = [("●", " "), (" ", " "), ("●", " ")];
+/// The frame where the dot comes up first: the gang-gang's crest, raised.
+/// The mark is scarlet on this one frame of a turn and warm on the other
+/// two, whether the dot is up or off.
 pub const CREST_FRAME: usize = 0;
 
 /// The context percentage at which the footer's number turns gold, and
@@ -65,7 +65,8 @@ pub struct Footer {
     watch: Option<String>,
     busy: bool,
     /// Ctrl+C asked a running task to stop: still busy, but on the way out
-    /// (gap §5). The footer says so instead of the plain working mark.
+    /// (gap §5). The footer's mark turns scarlet and the row adds its one
+    /// status field, `stopping…`.
     stopping: bool,
     /// Spinner frame, advanced by the event loop only while a run is live.
     frame: usize,
@@ -230,18 +231,14 @@ impl Footer {
             .join("")
     }
 
-    /// e.g. `gg …/projects/ganggang qwen3.8 medium ↑305 ↓81 ctx 4% ○ ready`,
-    /// and with the last turn's cache hit rate, `… ctx 4% cache 87% …`;
-    /// with the throughput figures the backend reports,
-    /// `… ↑305 ↓81 ctx 4% 62.4 t/s think 45% ○ ready`. While a run works the
-    /// mark leads and the status is the word alone:
-    /// `●○ …/projects/ganggang qwen3.8 medium ↑305 ↓81 ctx 4% working`.
-    ///
     /// The two cells at the start of the footer: the name when idle, the
-    /// dot and ring of the run's frame while a run works.
+    /// run's frame while a run works, so the row reads
+    /// `gg …/projects/ganggang qwen3.8 medium ↑305 ↓81` at rest and
+    /// `●  …/projects/ganggang qwen3.8 medium ↑305 ↓81` at work, the dot
+    /// up or off with the frame.
     ///
     /// The same width both ways, so nothing behind the mark moves while
-    /// the turn turns — the name gives way to the dot and the fields
+    /// the turn turns: the name gives way to the dot and the fields
     /// after them stay put.
     pub fn mark(&self) -> String {
         if self.spinning() {
@@ -251,7 +248,7 @@ impl Footer {
         }
     }
 
-    /// The two cells of the frame the run is on, crest first.
+    /// The two cells of the frame the run is on, dot first.
     fn mark_cells(frame: usize) -> String {
         let (left, right) = MARK_FRAMES[frame % MARK_FRAMES.len()];
         format!("{left}{right}")
@@ -264,9 +261,11 @@ impl Footer {
     /// the mark in the crest, the location in pale grey, the model in body
     /// text, the thinking level in muted, the totals in muted, the context
     /// number in muted (going gold then red as the window fills), the
-    /// throughput figures in muted, the watch state in gold, and the status
-    /// word: `○ ready`, `working`, or `stopping…`. The mark at the left is
-    /// the row's only spinner; the status carries no mark of its own.
+    /// throughput figures in muted, the watch state in gold, and, only
+    /// while a run is stopping, the word `stopping…` in a field of its
+    /// own. The mark at the left is the row's only spinner, and at rest
+    /// and at work it is all the row says about the run: no status word,
+    /// and no separator after the last field.
     pub fn spans(&self, palette: &Palette) -> UiLine<'static> {
         let muted = Style::new().fg(palette.muted);
         // The mark is its own two cells, the same two the name takes up
@@ -322,27 +321,26 @@ impl Footer {
             spans.push(field(muted));
             spans.push(Span::styled(watch.clone(), Style::new().fg(palette.warn)));
         }
-        spans.push(field(muted));
-        spans.push(self.status_span(palette));
+        if let Some(status) = self.status_span(palette) {
+            spans.push(field(muted));
+            spans.push(status);
+        }
         UiLine::from(spans)
     }
 
-    /// The status word in the span its state needs: `ready` muted behind
-    /// its ring, `working` warm while the run goes, `stopping…` scarlet and
-    /// bold on the way out. The word comes alone: the mark at the left of
-    /// the row is the footer's only spinner, and it keeps beating and turns
-    /// scarlet for the whole of a stop ([`mark_colour`](Self::mark_colour)).
-    fn status_span(&self, palette: &Palette) -> Span<'static> {
-        if !self.busy {
-            return Span::styled("○ ready", Style::new().fg(palette.muted));
-        }
-        if self.stopping {
-            return Span::styled(
-                " stopping…",
+    /// The footer's one status word, and only while there is one:
+    /// `stopping…` scarlet and bold, because a stop says something the
+    /// mark cannot. At rest and while a run works the mark at the left of
+    /// the row says it ([`mark`](Self::mark)) and the row ends at its last
+    /// field; through a stop the mark is scarlet on every frame
+    /// ([`mark_colour`](Self::mark_colour)) and keeps beating.
+    fn status_span(&self, palette: &Palette) -> Option<Span<'static>> {
+        self.stopping().then(|| {
+            Span::styled(
+                "stopping…",
                 Style::new().fg(palette.accent).add_modifier(Modifier::BOLD),
-            );
-        }
-        Span::styled(" working", Style::new().fg(palette.accent_soft))
+            )
+        })
     }
 
     /// The colour of the context percentage: a fact, then a warning, then

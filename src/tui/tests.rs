@@ -860,7 +860,11 @@ fn scrolling_stays_within_the_transcript() {
 fn footer_start_values_render_sensibly() {
     let f = Footer::new(std::path::Path::new("/tmp/x"), "m");
     assert!(f.render().contains("↑0 ↓0"));
-    assert!(f.render().contains("○ ready"));
+    assert_eq!(
+        f.render(),
+        "gg │ …/tmp/x │ m │ ↑0 ↓0",
+        "the name leads, and no status word closes the row"
+    );
 }
 
 // ------------------------------------------------------- recall & Ctrl+C --
@@ -1487,7 +1491,7 @@ fn ctrl_c_cancels_a_run_clears_a_draft_and_only_then_quits() {
     // Any run ending clears the mark — completed, failed, or aborted.
     state.run_finished();
     assert!(!state.stopping());
-    assert!(state.footer.render().contains("○ ready"));
+    assert!(!state.footer.render().contains("stopping"));
     // And a new run does not inherit one.
     state.begin_run();
     state.set_stopping(true);
@@ -1519,7 +1523,7 @@ fn stopping_only_means_something_while_busy() {
     let mut state = state_with_history(&[]);
     state.set_stopping(true);
     assert!(!state.stopping());
-    assert!(state.footer.render().contains("○ ready"));
+    assert!(!state.footer.render().contains("stopping"));
     state.begin_run();
     state.set_stopping(true);
     assert!(state.stopping());

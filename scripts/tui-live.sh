@@ -78,6 +78,8 @@ wait_nvim() { # nvim's empty-buffer tildes: the editor has the screen
   return 1
 }
 wait_footer() { # until the footer — the pane's last row — shows $1 (up to $2 s)
+  # The footer has no status word. At rest its row opens with `gg │`; while a run works the
+  # name's two cells hold a dot that beats (up two frames in three, so a poll catches it).
   local deadline=$((SECONDS + $2))
   while ((SECONDS < deadline)); do
     if pane | tail -1 | grep -qF -- "$1"; then return 0; fi
@@ -168,7 +170,7 @@ start() { # start <EDITOR value> <FAKE_MODE> [FAKE_SLEEP]
   t new-session -d -s "$S" -x 150 -y 40 "bash -c '$WORK/launch.sh $WORK $GG \"$1\" ${2:-ok} ${3:-}'"
   t set-window-option -t "$S" extended-keys "$EXT_KEYS"
   t kill-session -t boot
-  wait_footer "○ ready" 15 || { echo "gg did not start:"; show; exit 1; }
+  wait_footer "gg │" 15 || { echo "gg did not start:"; show; exit 1; }
   CASE_GGPID=$(gg_pid)
 }
 no_leak() { # no_leak <label>  (while gg runs: nothing left from an earlier session)
@@ -254,7 +256,7 @@ elif ! grep -qE '(^|[[:space:]])isig[[:space:]]' "$WORK/fake.log"; then bad A4 "
 else ok A4 "the editor started on a cooked, signal-capable tty"; fi
 no_leak A5
 keys Enter; wait_for '> hello + editedQR' 5 || bad A6 "the edited draft did not submit" "$(show)"
-wait_footer "○ ready" 90 && ok A6 "the edited draft submits like typed text" || bad A6 "run did not finish" "$(show)"
+wait_footer "gg │" 90 && ok A6 "the edited draft submits like typed text" || bad A6 "run did not finish" "$(show)"
 finish A7
 
 if command -v nvim >/dev/null; then
@@ -312,13 +314,13 @@ no_leak F3; finish F4
 
 echo "== G: Ctrl+G while a run is in flight — the run continues behind the editor"
 start "$FAKE" slow 10
-keys -l 'Count from 1 up to 25, one number per line, no other text.'; keys Enter; wait_footer ' working' 10
+keys -l 'Count from 1 up to 25, one number per line, no other text.'; keys Enter; wait_footer '●' 10
 keys -l 'draft text'; wait_for 'draft text' 3; keys C-g
 wait_log 'draft='
 grep -qF 'draft=[draft text]' "$WORK/fake.log" && ok G1 "the editor got the composer's text while busy" || bad G1 "editor log" "$(grep -E '^(draft=|start)' "$WORK/fake.log")"
 wait_for 'draft while busy' 25 || show
 [[ "$(line)" == "draft while busy" ]] && ok G2 "composer is the saved draft" || bad G2 "composer" "$(composer)"
-wait_footer "○ ready" 120 && ok G3 "the run finished, the footer is back to ready" || bad G3 "run did not finish" "$(show)"
+wait_footer "gg │" 120 && ok G3 "the run finished, the footer is back to ready" || bad G3 "run did not finish" "$(show)"
 numbers=$(pane | grep -cE '^ *[0-9]{1,2} *$')
 ((numbers >= 20)) && ok G4 "the answer's $numbers number lines streamed in behind the editor" || bad G4 "expected the answer's number lines" "$(show)"
 pane | grep -q 'run failed' && bad G5 "the run failed" "$(show)" || ok G5 "no run failure"
@@ -328,10 +330,10 @@ echo "== H: the ! shell lines still fold back into the view"
 start "$FAKE" instant
 keys -l "!!printf 'SHELL-%s\n' LOCAL"; keys Enter
 wait_for 'SHELL-LOCAL' 10 && ok H1 "a !! line shows its output locally" || bad H1 "transcript" "$(show)"
-wait_footer "○ ready" 5 && ok H2 "back to ready" || bad H2 "still busy" "$(show)"
+wait_footer "gg │" 5 && ok H2 "back to ready" || bad H2 "still busy" "$(show)"
 keys -l "!printf 'SHELL-%s\n' CONTEXT"; keys Enter
 wait_for 'SHELL-CONTEXT' 10 && ok H3 "a ! line shows its output" || bad H3 "transcript" "$(show)"
-wait_footer "○ ready" 90 && ok H4 "the run it starts finishes" || bad H4 "run did not finish" "$(show)"
+wait_footer "gg │" 90 && ok H4 "the run it starts finishes" || bad H4 "run did not finish" "$(show)"
 finish H5
 
 echo "== I: editor returns at once (a GUI editor without a wait flag) — a hint, composer intact"

@@ -106,7 +106,14 @@ fn an_80_by_24_frame_is_the_theme_not_the_terminal() {
     assert_eq!(colour_of("h"), Some(TRUECOLOR.text));
     assert!(shows(&terminal, "hi there"), "{text}");
     assert!(shows(&terminal, " compose "), "the composer's box: {text}");
-    assert!(shows(&terminal, "○ ready"), "the footer's status: {text}");
+    // The footer at rest: the name leads the row, and the row has no
+    // status word.
+    let footer = row(&terminal, 23);
+    assert!(footer.starts_with("gg │ "), "the footer's mark: {footer:?}");
+    assert!(
+        !footer.contains("ready"),
+        "no status word at rest: {footer:?}"
+    );
 
     // The theme owns the screen: every cell carries a palette colour, and
     // the ground is the charcoal, never the terminal's own default.
@@ -146,10 +153,11 @@ fn an_80_by_24_frame_is_the_theme_not_the_terminal() {
 }
 
 /// `gg` sits at the left edge of the footer, and while a run is live the
-/// cell where the name is gives way to the run's dot and ring — so the
-/// start of the row says `working` without a whole extra field appearing.
-/// When it ends, the name is back. The mark is also the row's only one:
-/// the status at the right is the word alone, frame after frame.
+/// two cells the name takes give way to the run's dot, beating: so the
+/// start of the row says a run is working without a status word, and the
+/// rest of the row keeps its cells. When it ends, the name is back. The
+/// dot is also the row's only one, frame after frame, and there is no
+/// ring.
 #[test]
 fn the_mark_is_gg_at_rest_and_a_dot_while_a_run_works() {
     use crate::tui::footer::MARK_FRAMES as FRAMES;
@@ -157,15 +165,14 @@ fn the_mark_is_gg_at_rest_and_a_dot_while_a_run_works() {
     // Idle: the mark is the name, at the left edge of the footer's row.
     let (mut terminal, mut state) = fresh(80, 24);
     draw(&mut terminal, &mut state);
-    let footer = row(&terminal, 23);
+    let rest = row(&terminal, 23);
     assert!(
-        footer.starts_with("gg"),
-        "the mark sits at the left of the footer: {footer:?}"
+        rest.starts_with("gg │ "),
+        "the mark sits at the left of the footer: {rest:?}"
     );
-    assert!(footer.contains("○ ready"), "it is not working: {footer:?}");
 
-    // A run is live: the name's two cells become the mark, and the
-    // word `gg` is gone from the row — the only thing the name gave up.
+    // A run is live: the name's two cells become the mark, and the word
+    // `gg` is gone from the row — the only thing the name gave up.
     state.begin_run();
     for frame in 0..FRAMES.len() as u16 {
         state.tick_spinner();
@@ -184,14 +191,24 @@ fn the_mark_is_gg_at_rest_and_a_dot_while_a_run_works() {
             footer.starts_with(expected.as_str()),
             "frame {frame} leads the footer: {footer:?}, expected {expected:?}"
         );
-        assert!(
-            footer.ends_with("working"),
-            "frame {frame} closes with the word alone: {footer:?}"
-        );
         assert_eq!(
-            footer.matches(expected.as_str()).count(),
-            1,
-            "frame {frame} draws the mark once: {footer:?}"
+            footer.matches('●').count(),
+            usize::from(expected.contains('●')),
+            "frame {frame} draws the dot once, on the frames it is up: {footer:?}"
+        );
+        assert!(
+            !footer.contains('○'),
+            "frame {frame} shows no ring: {footer:?}"
+        );
+        assert!(
+            !footer.contains("working") && !footer.contains("ready"),
+            "frame {frame} carries no status word: {footer:?}"
+        );
+        // What follows the mark is what followed the name, to the cell.
+        assert_eq!(
+            footer.strip_prefix(expected.as_str()),
+            rest.strip_prefix("gg"),
+            "frame {frame} moves nothing behind the mark: {footer:?}"
         );
         assert!(
             !footer.contains("gg"),
@@ -203,8 +220,10 @@ fn the_mark_is_gg_at_rest_and_a_dot_while_a_run_works() {
     state.run_finished();
     draw(&mut terminal, &mut state);
     let footer = row(&terminal, 23);
-    assert!(footer.starts_with("gg"), "the mark comes back: {footer:?}");
-    assert!(footer.contains("○ ready"), "{footer:?}");
+    assert!(
+        footer.starts_with("gg │ "),
+        "the mark comes back: {footer:?}"
+    );
 }
 
 /// A 24×8 terminal is a real thing (a narrow split, a phone terminal): the
@@ -694,17 +713,17 @@ fn an_indexed_session_draws_only_indexed_colours() {
         shows(&terminal, "fn a() {}"),
         "the code band still reads: {text}"
     );
-    // The footer is the last row: the mark leads it, the word alone
-    // closes it, and the mark is drawn once.
+    // The footer is the last row: the dot leads it, the row has no status
+    // word, and the dot is drawn once.
     let footer = row(&terminal, 15);
-    assert!(
-        footer.starts_with("●○") && footer.ends_with("working"),
-        "the mark leads the footer and the status word closes it: {footer:?}"
+    assert_eq!(
+        footer, "●  │ …/tmp/x │ m │ ↑0 ↓0",
+        "the dot leads the footer in the name's two cells: {footer:?}"
     );
     assert_eq!(
-        footer.matches("●○").count(),
+        footer.matches('●').count(),
         1,
-        "one mark in the footer: {footer:?}"
+        "one dot in the footer: {footer:?}"
     );
 }
 
