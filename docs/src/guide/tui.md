@@ -16,8 +16,10 @@ If stdin is not a terminal and no prompt is given, `gg` exits with an error; use
 | `Ctrl+←` / `Ctrl+→` | Move the cursor by word |
 | `↑` / `↓` | Recall prompts while you are browsing history, even with the `/` suggestion list or the `/session`, `/model` or `/skill` list open over a recalled command; otherwise navigate that list while one is open, or recall prompts while the composer is empty or single-line, or move between its lines; with queued messages and an empty composer, `↑` takes the newest one back |
 | `Ctrl+P` / `Ctrl+N` | Recall the previous / next prompt, whatever the composer holds, unless the suggestion list or the `/session`, `/model` or `/skill` list is open |
-| `Ctrl+A`, `Home` | Start of line |
-| `Ctrl+E`, `End` | End of line |
+| `Ctrl+A` | Start of line |
+| `Ctrl+E` | End of line |
+| `Home` | Scroll the transcript to its first row |
+| `End` | Scroll the transcript to its newest row |
 | `Ctrl+K` | Kill to end of line |
 | `Ctrl+U` | Kill to start of line |
 | `Tab` | Complete the highlighted `/` suggestion; in the `/session` list, switch between every directory's sessions and the current directory's; in the `/model` and `/skill` lists, complete the highlighted row's command |

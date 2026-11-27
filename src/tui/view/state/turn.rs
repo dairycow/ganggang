@@ -92,6 +92,19 @@ impl crate::tui::view::State {
     }
 
     pub fn scroll_up(&mut self, by: u16) {
+        self.offset_from_bottom = (self.offset_from_bottom + by).min(self.scroll_clamp());
+    }
+
+    pub fn scroll_down(&mut self, by: u16) {
+        self.offset_from_bottom = self.offset_from_bottom.saturating_sub(by);
+    }
+
+    /// How far up the transcript may go: the first row reaching the top of
+    /// the view — one row short of the count, the old rule, until a render
+    /// has said how tall the view is. Past it the text would sit still
+    /// while the offset kept growing, and leave a gap above the composer.
+    /// Shared by paging and Home, so the two cannot drift apart.
+    fn scroll_clamp(&self) -> u16 {
         // Rows, not logical lines: wrapping only adds rows, so the line
         // count is the pre-render lower bound and the render pass
         // publishes the exact figure each frame.
@@ -100,17 +113,19 @@ impl crate::tui::view::State {
         } else {
             self.transcript.render().len() as u16
         };
-        // The far end is the first row reaching the top of the view — one
-        // row short of the count, the old rule, until a render has said
-        // how tall the view is. Past it the text would sit still while
-        // the offset kept growing, and leave a gap above the composer.
         let view = self.last_view_rows.max(1);
-        let max = rows.saturating_sub(view);
-        self.offset_from_bottom = (self.offset_from_bottom + by).min(max);
+        rows.saturating_sub(view)
     }
 
-    pub fn scroll_down(&mut self, by: u16) {
-        self.offset_from_bottom = self.offset_from_bottom.saturating_sub(by);
+    /// Home: the transcript's first row — the same far end paging up ends
+    /// at.
+    pub fn scroll_to_top(&mut self) {
+        self.offset_from_bottom = self.scroll_clamp();
+    }
+
+    /// End: the newest row again, auto-follow with it.
+    pub fn scroll_to_end(&mut self) {
+        self.offset_from_bottom = 0;
     }
 
     /// Whether the session has nothing to show yet — the transcript empty

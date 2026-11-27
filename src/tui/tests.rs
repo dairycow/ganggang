@@ -69,14 +69,6 @@ fn readline_keys_edit_the_composer_and_arrows_move_the_cursor() {
         KeyAction::KillToStart
     );
     assert_eq!(
-        classify(key(KeyCode::Home, KeyModifiers::NONE)),
-        KeyAction::LineStart
-    );
-    assert_eq!(
-        classify(key(KeyCode::End, KeyModifiers::NONE)),
-        KeyAction::LineEnd
-    );
-    assert_eq!(
         classify(key(KeyCode::Left, KeyModifiers::NONE)),
         KeyAction::CursorLeft
     );
@@ -91,6 +83,26 @@ fn readline_keys_edit_the_composer_and_arrows_move_the_cursor() {
         classify(key(KeyCode::Char('k'), KeyModifiers::NONE)),
         KeyAction::Insert('k')
     );
+}
+
+/// Home and End scroll the transcript to its ends; the line moves they
+/// used to share stay on Ctrl+A and Ctrl+E.
+#[test]
+fn home_and_end_scroll_the_transcript_and_ctrl_a_e_keep_the_line_moves() {
+    assert_eq!(
+        classify(key(KeyCode::Home, KeyModifiers::NONE)),
+        KeyAction::ScrollTop
+    );
+    assert_eq!(
+        classify(key(KeyCode::End, KeyModifiers::NONE)),
+        KeyAction::ScrollEnd
+    );
+    let ctrl = KeyModifiers::CONTROL;
+    assert_eq!(
+        classify(key(KeyCode::Char('a'), ctrl)),
+        KeyAction::LineStart
+    );
+    assert_eq!(classify(key(KeyCode::Char('e'), ctrl)), KeyAction::LineEnd);
 }
 
 /// Delete and Backspace each delete on their own side of the cursor,
@@ -854,6 +866,49 @@ fn scrolling_stays_within_the_transcript() {
     assert_eq!(state.offset_for_test(), 94);
     state.scroll_down(1000); // reaching the bottom re-pins
     assert_eq!(state.offset_for_test(), 0);
+}
+
+/// Home lands where paging past the clamp lands, End re-pins to the
+/// newest, and a transcript that fits the view has no ends to reach.
+#[test]
+fn home_and_end_take_the_transcript_to_its_ends() {
+    let mut state = State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        std::sync::Arc::new(vec![]),
+        History::default(),
+    );
+    for i in 0..100 {
+        // One text per turn: TurnStarted closes the previous assistant
+        // line (consecutive deltas append — that is the streaming shape).
+        state.apply(&AgentEvent::TurnStarted);
+        state.apply(&AgentEvent::AssistantText {
+            delta: format!("line {i}"),
+        });
+    }
+    state.scroll_up(1000); // paging up past the clamp: the far end
+    let far = state.offset_for_test();
+    assert_eq!(far, 99, "pre-render the view is one row, so 99 is the end");
+    state.scroll_to_end();
+    assert_eq!(state.offset_for_test(), 0, "End re-pins to the newest");
+    state.scroll_to_top();
+    assert_eq!(
+        state.offset_for_test(),
+        far,
+        "Home lands on the clamp paging up ends at"
+    );
+
+    // One row fits every view: nothing to scroll, either way.
+    let mut short = state_with_history(&[]);
+    short.apply(&AgentEvent::TurnStarted);
+    short.apply(&AgentEvent::AssistantText {
+        delta: "only line".into(),
+    });
+    short.scroll_to_top();
+    assert_eq!(short.offset_for_test(), 0, "the first row is all there is");
+    short.scroll_to_end();
+    assert_eq!(short.offset_for_test(), 0, "the newest row is it too");
 }
 
 #[test]

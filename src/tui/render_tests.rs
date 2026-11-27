@@ -376,6 +376,51 @@ fn a_transcript_that_overflows_shows_a_scrollbar_and_one_that_fits_does_not() {
     );
 }
 
+/// Home puts the session's first row at the top of the transcript; End
+/// puts the newest row back, where new output can follow it.
+#[test]
+fn home_scrolls_to_the_first_row_and_end_back_to_the_newest() {
+    let (mut terminal, mut state) = fresh(80, 24);
+    for i in 0..25 {
+        state.apply(&AgentEvent::TurnStarted);
+        state.apply(&AgentEvent::AssistantText {
+            delta: format!("line {i}"),
+        });
+    }
+    draw(&mut terminal, &mut state);
+    assert!(
+        row(&terminal, 19).contains("line 24"),
+        "at rest the newest row is the transcript's last: {}",
+        screen(&terminal)
+    );
+
+    state.scroll_to_top();
+    draw(&mut terminal, &mut state);
+    assert!(
+        row(&terminal, 0).contains("line 0"),
+        "Home: the session's first row is the transcript's first: {}",
+        screen(&terminal)
+    );
+    assert!(
+        !shows(&terminal, "line 24"),
+        "Home leaves the newest row below the fold: {}",
+        screen(&terminal)
+    );
+
+    state.scroll_to_end();
+    draw(&mut terminal, &mut state);
+    assert!(
+        row(&terminal, 19).contains("line 24"),
+        "End: the newest row is the transcript's last again: {}",
+        screen(&terminal)
+    );
+    assert!(
+        !shows(&terminal, "line 0"),
+        "End scrolls the first row away: {}",
+        screen(&terminal)
+    );
+}
+
 /// The popup: a floating panel on `surface_alt`, its selected row marked
 /// with a scarlet marker rather than a terminal inversion.
 #[test]

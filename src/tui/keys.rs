@@ -25,9 +25,13 @@ pub enum KeyAction {
     CopyAnswer,
     ScrollUp,
     ScrollDown,
-    /// Ctrl+A / Home: the start of the current line.
+    /// Home: the transcript's first row.
+    ScrollTop,
+    /// End: the transcript's newest row, and new output after it.
+    ScrollEnd,
+    /// Ctrl+A: the start of the current line.
     LineStart,
-    /// Ctrl+E / End: the end of the current line.
+    /// Ctrl+E: the end of the current line.
     LineEnd,
     /// Ctrl+K: delete from the cursor to the end of the line (readline:
     /// at the end, the newline itself goes and the next line joins on).
@@ -128,8 +132,10 @@ pub fn classify(key: KeyEvent) -> KeyAction {
         // claims those chords.
         KeyCode::Backspace => KeyAction::Backspace,
         KeyCode::Delete => KeyAction::Delete,
-        KeyCode::Home => KeyAction::LineStart,
-        KeyCode::End => KeyAction::LineEnd,
+        // Home and End scroll the transcript to its ends; the line moves
+        // they used to share stay on Ctrl+A and Ctrl+E above.
+        KeyCode::Home => KeyAction::ScrollTop,
+        KeyCode::End => KeyAction::ScrollEnd,
         KeyCode::Left if ctrl => KeyAction::WordLeft,
         KeyCode::Right if ctrl => KeyAction::WordRight,
         KeyCode::Left => KeyAction::CursorLeft,
