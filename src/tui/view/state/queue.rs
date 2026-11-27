@@ -90,7 +90,7 @@ impl crate::tui::view::State {
     }
 
     /// Queue one plain prompt: the transcript names its place in line,
-    /// the queue takes the text. (History is the submitter's business —
+    /// the queue takes the text. (History is the submitter's business:
     /// [`busy_submit`](Self::busy_submit) records before calling here.)
     pub fn queue_prompt(&mut self, prompt: &str) {
         self.queue.push(prompt.to_string());
@@ -119,15 +119,21 @@ impl crate::tui::view::State {
     }
 
     /// Enter on an empty composer while the queue is held: the first
-    /// item becomes the run and the hold lifts.
+    /// item becomes the run and the hold lifts. A typed draft comes
+    /// first, though: with text in the composer this does nothing, so
+    /// the submit path sends the draft as an ordinary run and the hold
+    /// stays in place.
     pub fn queue_send_first(&mut self) -> Option<String> {
+        if !self.queue.held() || !self.editor.text().trim().is_empty() {
+            return None;
+        }
         let item = self.queue.pop_first()?;
         self.queue.set_held(false);
         Some(item)
     }
 
     /// A run has just ended normally: the prompt to start next, when the
-    /// queue may send. One item per run end — the decision to stop or
+    /// queue may send. One item per run end, so the decision to stop or
     /// quit applies between items.
     pub fn queue_next_run(&mut self) -> Option<String> {
         if self.queue.held() {
@@ -169,11 +175,10 @@ impl crate::tui::view::State {
     }
 
     /// Whether the run that has just reported its end was stopped by the
-    /// user: the transcript's newest block is the abort mark
-    /// (`■ run aborted`), folded from `AgentEvent::RunAborted` — which
-    /// the stream forwards before the run's outcome arrives.
+    /// user: the run's own `RunAborted` event sets the flag, and the
+    /// stream forwards it before the run's outcome arrives.
     pub fn run_was_stopped(&self) -> bool {
-        self.transcript.last_block_is_abort()
+        self.run_stopped
     }
 }
 

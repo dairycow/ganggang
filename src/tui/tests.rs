@@ -1937,6 +1937,31 @@ fn queued_prompts_keep_order_and_up_takes_the_newest_back() {
     assert_eq!(state.editor.text(), "a draft");
 }
 
+/// Enter with a draft must not drain a held queue under the draft: the
+/// guard on `queue_send_first` is held plus an empty composer.
+#[test]
+fn queue_send_first_needs_a_held_queue_and_an_empty_composer() {
+    let mut state = state_with_history(&[]);
+    state.queue_prompt("first");
+    state.queue_prompt("second");
+    state.queue_hold_after_stop();
+    assert!(state.queue_held());
+
+    // A typed draft comes first: nothing is taken, nothing changes, and
+    // the ordinary send that follows leaves the hold in place.
+    state.editor.set_text("a typed draft");
+    assert_eq!(state.queue_send_first(), None);
+    assert_eq!(state.editor.text(), "a typed draft");
+    assert!(state.queue_held(), "the hold stays with the draft");
+    assert_eq!(state.queued_count(), 2);
+
+    // Whitespace only is still an empty composer.
+    state.editor.set_text("   ");
+    assert_eq!(state.queue_send_first().as_deref(), Some("first"));
+    assert!(!state.queue_held(), "the hold lifts with the first item");
+    assert_eq!(state.queued_count(), 1);
+}
+
 /// A stopped run holds the queue: nothing sends until Enter on an empty
 /// composer sends the first item, and the rest follow at each run end.
 #[tokio::test]
@@ -1986,8 +2011,8 @@ async fn a_stopped_run_holds_the_queue_until_enter_sends_the_first() {
         state_line_texts(&state)
     );
 
-    // Enter on an empty composer — what the loop's Send arm does — sends
-    // the first item and lifts the hold.
+    // Enter on an empty composer: what the loop's Send arm does. It
+    // sends the first item and lifts the hold.
     let prompt = state
         .queue_send_first()
         .expect("the held queue has a first item");
@@ -2112,4 +2137,60 @@ async fn a_failed_run_returns_the_first_queued_item_and_holds_the_rest() {
         state_line_texts(&state)
     );
     assert!(input_rx.try_recv().is_err(), "a failed run sends nothing");
+}
+
+/// The stop is a flag on the run, not a read of the transcript: a block
+/// that lands between the abort mark and the outcome cannot hide it.
+#[tokio::test]
+async fn a_stop_survives_blocks_folded_in_after_the_abort_mark() {
+    use std::sync::Arc;
+
+    let mut state = State::new(
+        std::path::Path::new("/tmp/x"),
+        "m",
+        131_072,
+        Arc::new(vec![]),
+        History::default(),
+    );
+    let (mut input_tx, mut input_rx) = tokio::sync::mpsc::channel(4);
+    state.queue_prompt("first");
+    state.queue_prompt("second");
+    state.begin_run();
+
+    apply(
+        UiEvent::Agent(AgentEvent::RunAborted),
+        &mut state,
+        &mut input_tx,
+    )
+    .await;
+    // A late warning folds in after the mark, before the outcome.
+    apply(
+        UiEvent::Agent(AgentEvent::Warned {
+            message: "late".into(),
+        }),
+        &mut state,
+        &mut input_tx,
+    )
+    .await;
+    apply(
+        UiEvent::RunComplete {
+            tokens_in: 0,
+            tokens_out: 0,
+            cache_read_tokens: 0,
+            cache_tokens: (0, 0),
+            context_tokens: 0,
+            entries: 0,
+        },
+        &mut state,
+        &mut input_tx,
+    )
+    .await;
+    assert!(!state.busy);
+    assert!(state.queue_held(), "the stop is still a stop");
+    assert!(input_rx.try_recv().is_err(), "nothing sends after a stop");
+    assert!(
+        state_line_texts(&state).contains(&"2 queued: Enter sends the next".to_string()),
+        "{:#?}",
+        state_line_texts(&state)
+    );
 }

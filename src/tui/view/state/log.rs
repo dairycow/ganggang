@@ -149,6 +149,11 @@ impl super::super::State {
     }
 
     pub fn apply(&mut self, event: &AgentEvent) {
+        // The run's own word that it was stopped: read with the run's
+        // outcome, however many blocks fold in between.
+        if matches!(event, AgentEvent::RunAborted) {
+            self.run_stopped = true;
+        }
         // A turn's end is where the backend's figures arrive: the context
         // the next request will carry, and how fast this one decoded.
         if let AgentEvent::TurnEnded {

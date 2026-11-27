@@ -598,10 +598,13 @@ pub async fn run(
                         // the composer's lines — the rule itself is
                         // [`history::history_for`].
                         // ↑ with queued messages and an empty composer
-                        // takes the newest back, in every state; with an
+                        // takes the newest back, in every state; an open
+                        // list keeps ↑ for its own highlight, and with an
                         // empty queue it is history recall as usual.
                         KeyAction::SuggestPrev
-                            if state.editor.text().is_empty() && state.queued_count() > 0 =>
+                            if state.editor.text().is_empty()
+                                && !state.popup_open()
+                                && state.queued_count() > 0 =>
                         {
                             state.queue_take_back();
                         }

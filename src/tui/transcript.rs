@@ -115,13 +115,6 @@ impl Transcript {
         });
     }
 
-    /// Whether the newest block is the abort mark (`■ run aborted`). A
-    /// stopped run's outcome arrives after every event the run sent, so
-    /// this is how the outcome tells a stopped run from a completed one.
-    pub fn last_block_is_abort(&self) -> bool {
-        matches!(self.blocks.last(), Some(Block::Aborted))
-    }
-
     /// One `!`/`!!` shell execution for the human to read.
     pub fn push_shell(
         &mut self,

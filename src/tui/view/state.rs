@@ -71,6 +71,11 @@ pub struct State {
     /// Prompts Enter held back while a run worked, and whether a stop or
     /// a failure is holding them. The behaviour is [`queue`]'s.
     queue: queue::Queue,
+    /// The run in flight says it was stopped: `RunAborted` sets this, and
+    /// the run's outcome reads and clears it (in `run_finished`). A flag
+    /// rather than a read of the transcript, so a block that lands between
+    /// the abort mark and the outcome cannot hide the stop.
+    run_stopped: bool,
     /// The directory the session runs in: where `@mentions` in a queued
     /// prompt resolve when its turn comes (they expand at send time, as
     /// they do for a prompt typed at rest).
@@ -152,6 +157,7 @@ impl State {
             sessions: crate::tui::picker::SessionListing::new(cwd),
             picker: None,
             queue: queue::Queue::default(),
+            run_stopped: false,
             cwd: cwd.to_path_buf(),
             context_window: context_window as u64,
             last_context_tokens: 0,

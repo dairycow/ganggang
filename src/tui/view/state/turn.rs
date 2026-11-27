@@ -10,6 +10,7 @@ impl crate::tui::view::State {
     pub fn run_finished(&mut self) {
         self.busy = false;
         self.interrupt_armed = false;
+        self.run_stopped = false;
         self.footer.set_busy(false);
         self.footer.set_stopping(false);
     }

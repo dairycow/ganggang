@@ -270,8 +270,9 @@ pub(super) async fn apply(
         }
         UiEvent::RunFailed { error } => {
             state.push_failure(&error);
+            let stopped = state.run_was_stopped();
             state.run_finished();
-            if state.run_was_stopped() {
+            if stopped {
                 state.queue_hold_after_stop();
             } else {
                 state.queue_run_failed();
@@ -346,7 +347,7 @@ pub(super) async fn apply(
 }
 
 /// The busy period ended without a stop or a failure: the queue's first
-/// item, when it may send, starts as a run of its own — one item per run
+/// item, when it may send, starts as a run of its own. One item per run
 /// end, so the decision to stop or quit applies between items.
 async fn send_next_queued(
     state: &mut super::view::State,
