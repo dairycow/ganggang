@@ -590,8 +590,8 @@ pub async fn run(
                         KeyAction::ScrollUp => state.scroll_up(SCROLL_STEP),
                         KeyAction::ScrollDown => state.scroll_down(SCROLL_STEP),
                         // Home and End go wherever PageUp/PageDown go: no
-                        // gate — an open list or a live run is no reason to
-                        // refuse a scroll.
+                        // gate, since an open list or a live run is no
+                        // reason to refuse a scroll.
                         KeyAction::ScrollTop => state.scroll_to_top(),
                         KeyAction::ScrollEnd => state.scroll_to_end(),
                         // ↑/↓ recall history while a browse is in progress,

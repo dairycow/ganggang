@@ -100,7 +100,7 @@ impl crate::tui::view::State {
     }
 
     /// How far up the transcript may go: the first row reaching the top of
-    /// the view — one row short of the count, the old rule, until a render
+    /// the view, one row short of the count (the old rule) until a render
     /// has said how tall the view is. Past it the text would sit still
     /// while the offset kept growing, and leave a gap above the composer.
     /// Shared by paging and Home, so the two cannot drift apart.
@@ -117,7 +117,7 @@ impl crate::tui::view::State {
         rows.saturating_sub(view)
     }
 
-    /// Home: the transcript's first row — the same far end paging up ends
+    /// Home: the transcript's first row, the same far end paging up ends
     /// at.
     pub fn scroll_to_top(&mut self) {
         self.offset_from_bottom = self.scroll_clamp();
