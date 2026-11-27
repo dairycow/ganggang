@@ -72,8 +72,8 @@ fn streamed_deltas_overwrite_in_place_and_close_once() {
     assert_eq!(lines[0], "── turn 1 ──");
     assert_eq!(lines[1], "\rgg streaming… 4 chars");
     assert_eq!(
-        lines[2], "\r   streaming… 7 chars",
-        "the second frame is the blank one, and the word keeps its column"
+        lines[2], "\rgg streaming… 7 chars",
+        "every frame spells the name, and the word keeps its column"
     );
     assert_eq!(lines[3], "\r\u{1b}[2K\n");
     assert_eq!(lines[4], "▸ read Cargo.toml");
@@ -262,11 +262,12 @@ fn thinking_renders_nothing_and_keeps_the_spinner_alive() {
     assert_eq!(p.answer(), "ans");
 }
 
-/// Print mode spins the footer's frames, so the two surfaces say the same
-/// thing while a run works: the name flashes on, off, on, one frame per
-/// text delta, and the word after it keeps its column on the blank frame.
+/// Print mode takes the footer's frames, so the two surfaces take the
+/// same beat. Print mode's stderr has no colour, so its beat is gone:
+/// the line reads `gg streaming… N chars` on every frame, and the
+/// character count is what ticks.
 #[test]
-fn the_spinner_flashes_the_footer_s_mark() {
+fn the_spinner_takes_the_footer_s_frames() {
     let delta = |text: &str| AgentEvent::AssistantText { delta: text.into() };
     let mut p = Printer::new();
     let lines = render(&mut p, vec![delta("a"), delta("b"), delta("c"), delta("d")]);
@@ -274,7 +275,7 @@ fn the_spinner_flashes_the_footer_s_mark() {
         lines,
         vec![
             "\rgg streaming… 1 chars",
-            "\r   streaming… 2 chars",
+            "\rgg streaming… 2 chars",
             "\rgg streaming… 3 chars",
             "\rgg streaming… 4 chars",
         ]
