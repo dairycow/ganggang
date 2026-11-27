@@ -9,6 +9,7 @@
 //! - tools: a subset of the parent's allowlist;
 //! - turns: at most the parent's `max_turns`;
 //! - time: at most the parent's `max_seconds`;
+//! - bash: its own `nested_bash_timeout_secs` ceiling, not the person's;
 //! - hooks: the parent's, on or off; `--no-hooks` is ignored;
 //! - model: the parent's current model unless `-m` or `-P` names one;
 //! - depth: one level, so a nested run cannot start a nested run;

@@ -718,6 +718,42 @@ fn zero_numeric_settings_are_errors() {
     assert!(format!("{err:#}").contains("bash_timeout_secs"));
 }
 
+/// The nested `bash` ceiling merges like any other number: default 600
+/// (the person-sized 30 s kills a nested compile), file under env, and
+/// zero refused. A nested run is not watched, so it always has a ceiling.
+#[test]
+fn nested_bash_timeout_secs_merges_like_other_numbers() {
+    let default = merge(Config::default(), None, None, &[]).unwrap();
+    assert_eq!(default.nested_bash_timeout_secs, 600);
+    let cfg = merge(
+        Config::default(),
+        Some("nested_bash_timeout_secs = 900\n"),
+        Some("nested_bash_timeout_secs = 1200\n"),
+        &env(&[("GG_NESTED_BASH_TIMEOUT", "120")]),
+    )
+    .unwrap();
+    assert_eq!(
+        cfg.nested_bash_timeout_secs, 120,
+        "env wins over both files"
+    );
+    let cfg = merge(
+        Config::default(),
+        Some("nested_bash_timeout_secs = 900\n"),
+        None,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(cfg.nested_bash_timeout_secs, 900);
+    let err = merge(
+        Config::default(),
+        Some("nested_bash_timeout_secs = 0\n"),
+        None,
+        &[],
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("nested_bash_timeout_secs"));
+}
+
 #[test]
 fn parse_env_direct_tests() {
     assert_eq!(parse_env(None, "X", 7).unwrap(), 7);

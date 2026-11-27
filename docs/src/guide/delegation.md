@@ -25,6 +25,7 @@ The `bash` tool describes the run in a few environment variables (see [Configura
 | Tools | A subset of the parent's allowlist. `--tools` may only name tools the parent has; a name outside it is an error |
 | Turns | At most the parent's `max_turns`, when it has one |
 | Time | At most the parent's `max_seconds`, when it has one |
+| Bash ceiling | The nested run's own `bash` calls are bounded by `nested_bash_timeout_secs` (default 600) from its own [configuration](configuration.md#config-file), not the parent's `bash_timeout_secs` |
 | Hooks | The parent's, on or off. `--no-hooks` is ignored, with a warning |
 | Model | The parent's current model, unless `-m` or `-P` is given |
 | Depth | One level: a nested run cannot start a nested run |
@@ -36,7 +37,7 @@ A TUI boot ignores the variables, and so does a `!` command: both are yours to r
 
 ## The bash timeout
 
-A nested run lives inside the `bash` call that started it, so `bash_timeout_secs` (default 30) bounds it, and so does the call's `timeout_secs`. A job that runs for minutes needs both raised: set `timeout_secs` on the call, and `bash_timeout_secs` in [configuration](configuration.md#config-file) to at least as much. Or pass `background: true` and leave the ceiling alone: the call returns at the limit, the nested run is kept as a [background job](tools.md#bash), and `wait_for` returns its output and exit code once it exits. Each `wait_for` waits at most the ceiling, 30 s by default, and reports a run still going with its output so far.
+A nested run lives inside the `bash` call that started it, so the call's `timeout_secs` still bounds the nested run as a whole. Its own `bash` commands are bounded by the longer `nested_bash_timeout_secs` (default 600) from its own [configuration](configuration.md#config-file) instead of the parent's `bash_timeout_secs`: nobody watches a nested run, so a nested `cargo test` or commit gate is not killed at 30 s. The call still needs room for the whole job: set `timeout_secs` on the call to at least as much, or pass `background: true`. With `background: true` the call returns at the limit, the nested run is kept as a [background job](tools.md#bash), and `wait_for` returns its output and exit code once it exits. Each `wait_for` waits at most the ceiling, 30 s by default, and reports a run still going with its output so far.
 
 Without `background: true`, when the limit is reached the whole process group is killed. The nested run's session file keeps the work it finished. A job kept with `background: true` ends when it finishes, when `stop` kills it, or when the session ends.
 
