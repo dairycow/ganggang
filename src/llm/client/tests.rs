@@ -1,7 +1,8 @@
 //! Client tests against a scripted server: one canned raw response per
-//! connection, connections counted — the attempt count asserted rather
-//! than assumed. `Connection: close` on every response keeps connections
-//! and responses in step, retries included.
+//! connection, connections counted (the attempt count asserted rather than
+//! assumed) and each connection's raw request head recorded for the tests
+//! that read the wire. `Connection: close` on every response keeps
+//! connections and responses in step, retries included.
 
 use super::attempt::replay;
 use super::*;
@@ -10,14 +11,17 @@ use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// A scripted server that answers one raw response per connection and
-/// counts the connections it accepted — the attempt count, asserted
-/// rather than assumed. `Connection: close` on every response keeps
-/// connections and responses in step, retries included. Shared with
-/// [`super::stream_tests`], which scripts the same harness against SSE.
+/// A scripted server that answers one raw response per connection, counts
+/// the connections it accepted (the attempt count, asserted rather than
+/// assumed) and records each connection's raw request head. `Connection:
+/// close` on every response keeps connections and responses in step,
+/// retries included. Shared with [`super::stream_tests`], which scripts
+/// the same harness against SSE.
 pub(super) struct Scripted {
     pub(super) base_url: String,
     pub(super) attempts: Arc<AtomicUsize>,
+    /// Each connection's raw request head, in the order they arrived.
+    heads: Arc<Mutex<Vec<String>>>,
 }
 
 impl Scripted {
@@ -26,11 +30,14 @@ impl Scripted {
         let addr = listener.local_addr().unwrap();
         let attempts = Arc::new(AtomicUsize::new(0));
         let counted = attempts.clone();
+        let heads = Arc::new(Mutex::new(Vec::new()));
+        let recorded = heads.clone();
         std::thread::spawn(move || {
             for response in responses {
                 let (mut stream, _) = listener.accept().unwrap();
                 counted.fetch_add(1, Ordering::SeqCst);
-                read_request_head(&mut stream);
+                let head = read_request_head(&mut stream);
+                recorded.lock().unwrap().push(head);
                 stream.write_all(response.as_bytes()).unwrap();
                 drop(stream);
             }
@@ -38,6 +45,7 @@ impl Scripted {
         Self {
             base_url: format!("http://{addr}"),
             attempts,
+            heads,
         }
     }
 
@@ -48,9 +56,33 @@ impl Scripted {
             .unwrap()
             .with_retry_delay(Duration::ZERO)
     }
+
+    /// A client built the way production builds one, for `endpoint`, then
+    /// re-pointed at this server. What the endpoint's own URL settled when
+    /// the client was built (the attribution, the session header) stands
+    /// after the re-point: only the address changes.
+    pub(super) fn client_for(&self, endpoint: &crate::config::Endpoint) -> LlmClient {
+        LlmClient::from_endpoint(endpoint)
+            .unwrap()
+            .with_base_url(self.base_url.clone())
+    }
+
+    /// The raw request head of connection `nth`, counting from zero.
+    pub(super) fn head(&self, nth: usize) -> String {
+        let heads = self.heads.lock().unwrap();
+        heads.get(nth).cloned().unwrap_or_else(|| {
+            panic!(
+                "connection {nth} was never made: {} head(s) recorded",
+                heads.len()
+            )
+        })
+    }
 }
 
-pub(super) fn read_request_head(stream: &mut std::net::TcpStream) {
+/// Read up to the end of the request head and return what was read: the
+/// head, plus any of the body that arrived with it. A test reading the wire
+/// looks for whole head lines, which either form carries.
+pub(super) fn read_request_head(stream: &mut std::net::TcpStream) -> String {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
@@ -58,6 +90,7 @@ pub(super) fn read_request_head(stream: &mut std::net::TcpStream) {
         assert!(n > 0, "connection closed before headers finished");
         buf.extend_from_slice(&chunk[..n]);
     }
+    String::from_utf8_lossy(&buf).to_string()
 }
 
 /// The flag for a call nobody stopped. `send_stream` takes the run's stop
@@ -99,47 +132,53 @@ fn opencode_url_detection() {
     assert!(!is_opencode_url("https://notopencode.ai/v1"));
 }
 
-/// Build a client for `endpoint`, point it at the loopback server bound here,
-/// and return the raw request head. Nothing leaves the loopback: the only
-/// address the client is ever told to call is the server this function made.
+/// Build a client for `endpoint` the way production does, point it at a
+/// loopback server bound here, make one non-streaming send, and return the
+/// raw request head. Nothing leaves the loopback: the only address the
+/// client is ever told to call is the server this function made.
 pub(super) async fn capture_head(endpoint: &crate::config::Endpoint) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let seen = Arc::new(Mutex::new(String::new()));
-    let seen_clone = seen.clone();
-    std::thread::spawn(move || {
-        let (mut s, _) = listener.accept().unwrap();
-        let mut buf = [0u8; 4096];
-        let n = s.read(&mut buf).unwrap();
-        *seen_clone.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).to_string();
-        let body = ok_body("gg");
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        s.write_all(resp.as_bytes()).unwrap();
-    });
-    // The endpoint's own URL is what decides attribution: `from_base_url`
-    // runs on the endpoint's URL, and the base URL is then re-pointed at the
-    // test server without changing the decision.
-    let client = LlmClient::from_endpoint(endpoint)
-        .unwrap()
-        .with_base_url(format!("http://{addr}"));
-    let result = client.send("m", &[], 16, &[]).await;
-    let raw = seen.lock().unwrap().to_string();
+    let server = Scripted::spawn(vec![http("200 OK", "", &ok_body("gg"))]);
+    let result = server.client_for(endpoint).send("m", &[], 16, &[]).await;
+    let raw = server.head(0);
     if let Err(err) = result {
         panic!("the request failed, so the headers could not be read: {err:#}\nraw head: {raw}");
     }
     raw
 }
 
-/// The attribution headers reach the wire, on the path the agent loop takes.
+/// Assert both attribution lines as they stand on the wire, name and value
+/// each on a line of its own: a dropped header fails this, and so does a
+/// changed value.
+pub(super) fn assert_openrouter_attribution(raw: &str) {
+    assert!(
+        raw.contains("\r\nhttp-referer: https://ganggang.io\r\n"),
+        "no referer to ganggang.io: {raw}"
+    );
+    assert!(raw.contains("\r\nx-title: ganggang\r\n"), "no title: {raw}");
+}
+
+/// The attribution headers reach the wire on the non-streaming path, with
+/// the values OpenRouter credits the app by: its site and its name.
 #[tokio::test]
 async fn openrouter_attribution_headers_are_sent() {
     let raw = capture_head(&openrouter_endpoint()).await;
-    assert!(raw.contains("http-referer"), "no referer: {raw}");
-    assert!(raw.contains("x-title: ganggang"), "{raw}");
+    assert_openrouter_attribution(&raw);
     assert!(raw.contains("user-agent: ganggang/"), "{raw}");
+}
+
+/// An OpenRouter endpoint is attributed to the app's own site and name, with
+/// neither `GG_OPENROUTER_*` variable exported, and any other endpoint gets
+/// no attribution at all: the gate the wire tests read from the other side.
+#[test]
+fn openrouter_attribution_defaults_to_the_app_and_stays_off_elsewhere() {
+    let attribution = OpenRouterAttribution::from_base_url("https://openrouter.ai/api/v1")
+        .expect("an OpenRouter endpoint is attributed");
+    assert_eq!(attribution.referer, "https://ganggang.io");
+    assert_eq!(attribution.title, "ganggang");
+    assert!(
+        OpenRouterAttribution::from_base_url("https://api.deepseek.com").is_none(),
+        "another provider's endpoint is not attributed"
+    );
 }
 
 /// The host gate is the same check production runs, and it is what keeps the
@@ -166,9 +205,9 @@ async fn openrouter_attribution_is_omitted_for_other_hosts() {
 }
 
 /// A minimally-built OpenRouter endpoint: enough for `from_endpoint` and one
-/// send. Its URL is never contacted — `capture_head` re-points the client at
-/// the loopback test server for the one send.
-fn openrouter_endpoint() -> crate::config::Endpoint {
+/// send. Its URL is never contacted: `Scripted::client_for` re-points the
+/// client at the loopback test server.
+pub(super) fn openrouter_endpoint() -> crate::config::Endpoint {
     crate::config::Endpoint {
         provider: "openrouter".to_string(),
         model: "upstage/solar-mini-4-5".to_string(),
@@ -197,6 +236,63 @@ fn deepseek_endpoint() -> crate::config::Endpoint {
     endpoint.base_url = "https://api.deepseek.com".to_string();
     endpoint.model = "deepseek-flash".to_string();
     endpoint
+}
+
+/// A minimally-built opencode endpoint, so the client is built with the
+/// session header opencode expects. Never contacted either.
+fn opencode_endpoint() -> crate::config::Endpoint {
+    let mut endpoint = openrouter_endpoint();
+    endpoint.provider = "opencode".to_string();
+    endpoint.base_url = "https://opencode.ai/inference/go/openai/v1".to_string();
+    endpoint
+}
+
+/// An opencode endpoint sends the session headers opencode reads: the run's
+/// session id, and the client's name beside it. Both are settled from the
+/// endpoint's URL when the client is built, like the attribution.
+#[tokio::test]
+async fn opencode_session_headers_are_sent() {
+    let server = Scripted::spawn(vec![http("200 OK", "", &ok_body("gg"))]);
+    server
+        .client_for(&opencode_endpoint())
+        .with_session_id("sess-123".to_string())
+        .send("m", &[], 16, &[])
+        .await
+        .unwrap();
+    let raw = server.head(0);
+    assert!(
+        raw.contains("\r\nx-opencode-session: sess-123\r\n"),
+        "no session id: {raw}"
+    );
+    assert!(
+        raw.contains("\r\nx-opencode-client: ganggang\r\n"),
+        "no client name: {raw}"
+    );
+}
+
+/// The same attribution on a non-streaming send that takes the Anthropic
+/// path: the client adds it before the API key whichever API the endpoint
+/// speaks, so an OpenRouter endpoint configured for Anthropic Messages is
+/// credited like a chat-completions one.
+#[tokio::test]
+async fn openrouter_attribution_headers_are_sent_on_an_anthropic_send() {
+    const ANSWER: &str = r#"{"content":[{"type":"text","text":"ok"}]}"#;
+    let server = Scripted::spawn(vec![http("200 OK", "", ANSWER)]);
+    let mut endpoint = openrouter_endpoint();
+    endpoint.api = ApiKind::AnthropicMessages;
+    let response = server
+        .client_for(&endpoint)
+        .send("m", &[], 16, &[])
+        .await
+        .unwrap();
+    assert_eq!(
+        response.choices[0].message.content.as_deref(),
+        Some("ok"),
+        "the Anthropic path answered"
+    );
+    let raw = server.head(0);
+    assert!(raw.starts_with("POST /v1/messages "), "{raw}");
+    assert_openrouter_attribution(&raw);
 }
 
 /// A provider having a bad minute (500) is retried, and the retry

@@ -10,9 +10,13 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use super::ApiKind;
 use super::LlmClient;
 use super::stream;
-use super::tests::{Scripted, http, never_abort, read_request_head, sse};
+use super::tests::{
+    Scripted, assert_openrouter_attribution, http, never_abort, openrouter_endpoint,
+    read_request_head, sse,
+};
 
 /// Streaming retries the initial request too: a 500 before any SSE is the
 /// same transient failure it always was.
@@ -490,4 +494,60 @@ async fn a_stop_request_ends_the_wait_before_a_stream_retry() {
         1,
         "no retry was made"
     );
+}
+
+// --------------------------------------------------------- request headers
+
+/// A complete Anthropic stream, as one raw response: one text delta, then
+/// `message_stop`.
+fn anthropic_sse_response(text: &str) -> String {
+    format!(
+        "{SSE_HEAD}event: content_block_delta\n\
+         data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{text}\"}}}}\n\n\
+         event: message_stop\n\
+         data: {{\"type\":\"message_stop\"}}\n\n"
+    )
+}
+
+/// The attribution headers reach the wire on the streaming path too, with
+/// the values OpenRouter credits the app by. The client is built the way
+/// production builds one, from an OpenRouter endpoint, and re-pointed at the
+/// loopback server: the endpoint's URL settled the attribution before the
+/// re-point.
+#[tokio::test]
+async fn openrouter_attribution_headers_are_sent_on_a_stream() {
+    let server = Scripted::spawn(vec![sse_response("streamed")]);
+    let outcome = server
+        .client_for(&openrouter_endpoint())
+        .send_stream("m", &[], 64, &[], &never_abort(), |_| Box::pin(async {}))
+        .await
+        .unwrap();
+    assert!(outcome.complete, "[DONE] makes it a complete stream");
+    assert_eq!(
+        outcome.response.choices[0].message.content.as_deref(),
+        Some("streamed")
+    );
+    assert_openrouter_attribution(&server.head(0));
+}
+
+/// The same attribution on the streaming Anthropic path: the client adds it
+/// before the API key whichever API the endpoint speaks.
+#[tokio::test]
+async fn openrouter_attribution_headers_are_sent_on_an_anthropic_stream() {
+    let server = Scripted::spawn(vec![anthropic_sse_response("ok")]);
+    let mut endpoint = openrouter_endpoint();
+    endpoint.api = ApiKind::AnthropicMessages;
+    let outcome = server
+        .client_for(&endpoint)
+        .send_stream("m", &[], 64, &[], &never_abort(), |_| Box::pin(async {}))
+        .await
+        .unwrap();
+    assert!(outcome.complete, "message_stop was seen");
+    assert_eq!(
+        outcome.response.choices[0].message.content.as_deref(),
+        Some("ok")
+    );
+    let raw = server.head(0);
+    assert!(raw.starts_with("POST /v1/messages "), "{raw}");
+    assert_openrouter_attribution(&raw);
 }
