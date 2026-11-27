@@ -30,7 +30,7 @@ Source of truth: `src/tui/theme.rs` (`TRUECOLOR`) and `src/tui/theme/fallback.rs
 | `dim` | `#6B7379` | `107, 115, 121` | `243` | Shadow grey | Hints, placeholders, info lines, thinking, expanded output |
 | `code` | `#C7D0C0` | `199, 208, 192` | `251` | Sage-tinted grey | Code block text on `surface_alt` |
 | `accent` | `#D94B4B` | `217, 75, 75` | `167` | Scarlet crest | `gg` mark, `> ` user mark, popup `▸`, scrollbar thumb, stopping border, abort line, primary actions |
-| `accent_soft` | `#E07A4F` | `224, 122, 79` | `173` | Orange-red cheek | Live states: tool calls, active spinner and `working`, busy composer border |
+| `accent_soft` | `#E07A4F` | `224, 122, 79` | `173` | Orange-red cheek | Live states: tool calls, the working mark and `working`, busy composer border |
 | `accent_deep` | `#8E3030` | `142, 48, 48` | `95` | Deep crest red | High-emphasis borders, active or pressed red accents |
 | `ok` | `#A7B38F` | `167, 179, 143` | `144` | Grey-green wing wash | Success (`✓`), approved states, positive deltas |
 | `warn` | `#D9A441` | `217, 164, 65` | `179` | Wattle gold | Warnings (`⚠`), watch-mode badge, context usage 61% to 85% |
@@ -82,7 +82,7 @@ Exact characters and rules from `src/tui/`:
 
 - **Separators:** ` │ ` (U+2502) for footer fields; ` · ` (U+00B7) for inline hints and metadata.
 - **Markers:** `> ` (`accent` bold: opens a user message once; the rows after it indent two columns), `▸` and `▾` (collapsed and expanded tool calls; `▸ ` in `accent` on `selection` for active popup rows), `$ ` (shell command), `✓` (`ok`), `✗` (`error`), `⚠ ` (`warn`), `~ ` (`dim` italic for thinking), `■ run aborted` (`accent` bold), `○ ready` (`muted`), `↑in ↓out` (token totals), `• ` (list bullets), `…` (ellipsis), `[truncated: N lines]`.
-- **Mark:** two cells, `gg` bold in `accent` at rest. While a run is live the same two cells are the gang-gang's mark — a dot `●` leading a ring `○`, cycling `●○`, `○○`, `●○`, one frame per 600 ms (`crate::tui::tick::PERIOD`), `accent` on the crest frame (`●○`) and `accent_soft` the rest. The mark fills exactly the cells `gg` does, so nothing behind the mark moves while a run turns. `accent` throughout when stopping.
+- **Mark:** two cells, `gg` bold in `accent` at rest. While a run is live the same two cells are the gang-gang's mark — a dot `●` leading a ring `○`, cycling `●○`, `○○`, `●○`, one frame per 600 ms (`crate::tui::tick::PERIOD`), `accent` on the crest frame (`●○`) and `accent_soft` the rest. The mark fills exactly the cells `gg` does, so nothing behind the mark moves while a run turns. `accent` throughout when stopping. The footer draws the mark once, in those cells, and its status field carries the word alone (`working`, `stopping…`). Print mode's `streaming…` line (`src/printers.rs`) draws the same frames, advancing once per text delta.
 - **Borders and surfaces:** rounded borders (`BorderType::Rounded`) for boxes; full-frame `bg` fill; edge-to-edge padded bands on `surface_alt` for code and expanded output; edge-to-edge `selection` band for highlighted popup rows.
 - **State signalling:**
   - Composer border: `border` when idle, `accent_soft` when busy, `accent` when stopping.

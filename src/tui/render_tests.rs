@@ -148,7 +148,8 @@ fn an_80_by_24_frame_is_the_theme_not_the_terminal() {
 /// `gg` sits at the left edge of the footer, and while a run is live the
 /// cell where the name is gives way to the run's dot and ring — so the
 /// start of the row says `working` without a whole extra field appearing.
-/// When it ends, the name is back.
+/// When it ends, the name is back. The mark is also the row's only one:
+/// the status at the right is the word alone, frame after frame.
 #[test]
 fn the_mark_is_gg_at_rest_and_a_dot_while_a_run_works() {
     use crate::tui::footer::MARK_FRAMES as FRAMES;
@@ -184,8 +185,13 @@ fn the_mark_is_gg_at_rest_and_a_dot_while_a_run_works() {
             "frame {frame} leads the footer: {footer:?}, expected {expected:?}"
         );
         assert!(
-            footer.contains("working"),
-            "frame {frame} is still a run: {footer:?}"
+            footer.ends_with("working"),
+            "frame {frame} closes with the word alone: {footer:?}"
+        );
+        assert_eq!(
+            footer.matches(expected.as_str()).count(),
+            1,
+            "frame {frame} draws the mark once: {footer:?}"
         );
         assert!(
             !footer.contains("gg"),
@@ -688,9 +694,17 @@ fn an_indexed_session_draws_only_indexed_colours() {
         shows(&terminal, "fn a() {}"),
         "the code band still reads: {text}"
     );
+    // The footer is the last row: the mark leads it, the word alone
+    // closes it, and the mark is drawn once.
+    let footer = row(&terminal, 15);
     assert!(
-        shows(&terminal, "working") && shows(&terminal, "●"),
-        "the mark shows: {text}"
+        footer.starts_with("●○") && footer.ends_with("working"),
+        "the mark leads the footer and the status word closes it: {footer:?}"
+    );
+    assert_eq!(
+        footer.matches("●○").count(),
+        1,
+        "one mark in the footer: {footer:?}"
     );
 }
 

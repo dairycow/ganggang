@@ -37,7 +37,7 @@ fn footer_shows_location_model_tokens_and_state() {
     assert!(rendered.contains("…/Projects/ganggang"), "{rendered}");
     assert!(rendered.contains("qwen3.8"));
     assert!(rendered.contains("↑305 ↓81"));
-    assert!(rendered.contains("working"), "{rendered}");
+    assert!(rendered.ends_with(" working"), "{rendered}");
     f.set_busy(false);
     assert!(text(&f).contains("○ ready"));
 }
@@ -122,6 +122,55 @@ fn the_mark_is_gg_at_rest_and_a_dot_while_a_run_works() {
     assert_eq!(f.mark(), "gg");
     f.set_busy(true);
     assert_eq!(f.mark(), "●○", "a new run starts on the crest");
+}
+
+/// The row draws the mark once, in the name's two cells at the left, and
+/// the status at the right is the word alone: a working row carries one
+/// dot and one ring, not a second copy of the mark beside `working`. A
+/// stopping row is the same, with the mark scarlet on every frame.
+#[test]
+fn the_row_draws_the_mark_once_in_every_frame() {
+    use crate::tui::theme::TRUECOLOR as T;
+    let dots_and_rings = |row: &str| row.matches('●').count() + row.matches('○').count();
+    let mut f = footer();
+    f.set_busy(true);
+    for _ in 0..MARK_FRAMES.len() {
+        let row = text(&f);
+        assert_eq!(
+            row.matches(f.mark().as_str()).count(),
+            1,
+            "one mark per row: {row:?}"
+        );
+        assert_eq!(
+            dots_and_rings(&row),
+            2,
+            "the mark's two glyphs and no more: {row:?}"
+        );
+        assert!(row.ends_with(" working"), "the word alone: {row:?}");
+        f.tick();
+    }
+    // A stop keeps the beat, and the mark is scarlet throughout it.
+    f.set_stopping(true);
+    for _ in 0..MARK_FRAMES.len() {
+        let row = text(&f);
+        assert_eq!(
+            row.matches(f.mark().as_str()).count(),
+            1,
+            "one mark per row: {row:?}"
+        );
+        assert_eq!(
+            dots_and_rings(&row),
+            2,
+            "the mark's two glyphs and no more: {row:?}"
+        );
+        assert!(row.ends_with(" stopping…"), "the word alone: {row:?}");
+        assert_eq!(
+            f.spans(&T).spans[0].style.fg,
+            Some(T.accent),
+            "scarlet on every frame of a stop: {row:?}"
+        );
+        f.tick();
+    }
 }
 
 #[test]

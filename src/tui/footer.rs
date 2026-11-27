@@ -175,10 +175,11 @@ impl Footer {
         self.frame = (self.frame + 1) % MARK_FRAMES.len();
     }
 
-    /// The colour the mark takes while a run works: the crest on
-    /// the first frame, the cheek's orange-red the rest of the turn.
+    /// The colour the mark takes while a run is live: scarlet throughout
+    /// a stop and, while the run works, the crest on the first frame, the
+    /// cheek's orange-red the rest of the turn.
     pub fn mark_colour(&self, palette: &Palette) -> ratatui::style::Color {
-        if self.frame % MARK_FRAMES.len() == CREST_FRAME {
+        if self.stopping || self.frame % MARK_FRAMES.len() == CREST_FRAME {
             palette.accent
         } else {
             palette.accent_soft
@@ -229,10 +230,12 @@ impl Footer {
             .join("")
     }
 
-    /// e.g. `gg …/projects/ganggang qwen3.8 medium ↑305 ↓81 ctx 4% ●○ working`,
+    /// e.g. `gg …/projects/ganggang qwen3.8 medium ↑305 ↓81 ctx 4% ○ ready`,
     /// and with the last turn's cache hit rate, `… ctx 4% cache 87% …`;
     /// with the throughput figures the backend reports,
-    /// `… ↑305 ↓81 ctx 4% 62.4 t/s think 45% ●○ working`.
+    /// `… ↑305 ↓81 ctx 4% 62.4 t/s think 45% ○ ready`. While a run works the
+    /// mark leads and the status is the word alone:
+    /// `●○ …/projects/ganggang qwen3.8 medium ↑305 ↓81 ctx 4% working`.
     ///
     /// The two cells at the start of the footer: the name when idle, the
     /// dot and ring of the run's frame while a run works.
@@ -262,7 +265,8 @@ impl Footer {
     /// text, the thinking level in muted, the totals in muted, the context
     /// number in muted (going gold then red as the window fills), the
     /// throughput figures in muted, the watch state in gold, and the status
-    /// — ready, a turning spinner and `working`, or `stopping…`.
+    /// word: `○ ready`, `working`, or `stopping…`. The mark at the left is
+    /// the row's only spinner; the status carries no mark of its own.
     pub fn spans(&self, palette: &Palette) -> UiLine<'static> {
         let muted = Style::new().fg(palette.muted);
         // The mark is its own two cells, the same two the name takes up
@@ -319,35 +323,26 @@ impl Footer {
             spans.push(Span::styled(watch.clone(), Style::new().fg(palette.warn)));
         }
         spans.push(field(muted));
-        spans.extend(self.status_spans(palette));
+        spans.push(self.status_span(palette));
         UiLine::from(spans)
     }
 
-    /// The status in the spans its state needs: one for the word, so a
-    /// stopping run is scarlet and bold while the spinner stays warm.
-    fn status_spans(&self, palette: &Palette) -> Vec<Span<'static>> {
+    /// The status word in the span its state needs: `ready` muted behind
+    /// its ring, `working` warm while the run goes, `stopping…` scarlet and
+    /// bold on the way out. The word comes alone: the mark at the left of
+    /// the row is the footer's only spinner, and it keeps beating and turns
+    /// scarlet for the whole of a stop ([`mark_colour`](Self::mark_colour)).
+    fn status_span(&self, palette: &Palette) -> Span<'static> {
         if !self.busy {
-            return vec![Span::styled("○ ready", Style::new().fg(palette.muted))];
+            return Span::styled("○ ready", Style::new().fg(palette.muted));
         }
         if self.stopping {
-            return vec![
-                Span::styled(
-                    Self::mark_cells(CREST_FRAME),
-                    Style::new().fg(palette.accent),
-                ),
-                Span::styled(
-                    " stopping…",
-                    Style::new().fg(palette.accent).add_modifier(Modifier::BOLD),
-                ),
-            ];
+            return Span::styled(
+                " stopping…",
+                Style::new().fg(palette.accent).add_modifier(Modifier::BOLD),
+            );
         }
-        vec![
-            Span::styled(
-                Self::mark_cells(self.frame),
-                Style::new().fg(self.mark_colour(palette)),
-            ),
-            Span::styled(" working", Style::new().fg(palette.accent_soft)),
-        ]
+        Span::styled(" working", Style::new().fg(palette.accent_soft))
     }
 
     /// The colour of the context percentage: a fact, then a warning, then
